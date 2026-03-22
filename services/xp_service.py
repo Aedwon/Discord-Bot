@@ -215,6 +215,33 @@ class XpService:
                 tokens = tokens + VALUES(tokens),
                 event_points = event_points + VALUES(event_points)
         ''', (user_id, xp, tokens, ep))
+        
+    async def set_currency(self, user_id: int, xp: int = None, tokens: int = None, ep: int = None):
+        """Force set arbitrary currency for a user. None means unchanged."""
+        updates = []
+        params = []
+        if xp is not None:
+            updates.append("xp = %s")
+            params.append(xp)
+        if tokens is not None:
+            updates.append("tokens = %s")
+            params.append(tokens)
+        if ep is not None:
+            updates.append("event_points = %s")
+            params.append(ep)
+            
+        if not updates:
+            return
+            
+        # Ensure row exists first
+        await db.execute('''
+            INSERT IGNORE INTO users (user_id) VALUES (%s)
+        ''', (user_id,))
+        
+        query = f"UPDATE users SET {', '.join(updates)} WHERE user_id = %s"
+        params.append(user_id)
+        
+        await db.execute(query, tuple(params))
 
 
 # Singleton instance

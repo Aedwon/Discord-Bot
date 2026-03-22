@@ -266,6 +266,32 @@ class XpCog(commands.Cog, name="Leveling"):
             color=discord.Color.orange()
         )
         await inter.response.send_message(embed=embed)
+
+    @app_commands.command(name="xp-add", description="Add XP to a specific user (Admin only)")
+    @app_commands.describe(user="The user to grant XP to", amount="Amount of XP to add")
+    @app_commands.default_permissions(administrator=True)
+    async def xp_add(self, inter: discord.Interaction, user: discord.Member, amount: int):
+        from services.xp_service import xp_service
+        new_total = await xp_service.add_xp(user.id, amount)
+        embed = discord.Embed(
+            title="✨ XP Granted",
+            description=f"Successfully added {amount} XP to {user.mention}.\nNew Total: **{new_total} XP**",
+            color=discord.Color.green()
+        )
+        await inter.response.send_message(embed=embed)
+        
+    @app_commands.command(name="xp-set", description="Set a specific user's XP (Admin only)")
+    @app_commands.describe(user="The user to modify", amount="Exact XP amount to set")
+    @app_commands.default_permissions(administrator=True)
+    async def xp_set(self, inter: discord.Interaction, user: discord.Member, amount: int):
+        from services.xp_service import xp_service
+        await xp_service.set_currency(user.id, xp=amount)
+        embed = discord.Embed(
+            title="⚙️ XP Overridden",
+            description=f"Successfully set {user.mention}'s XP to **{amount}**.",
+            color=discord.Color.orange()
+        )
+        await inter.response.send_message(embed=embed)
     
     @app_commands.command(name="xp-reset", description="Reset all user XP to zero")
     @app_commands.default_permissions(administrator=True)
