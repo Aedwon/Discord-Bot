@@ -128,26 +128,26 @@ async def on_interaction(interaction: discord.Interaction):
 
 async def check_missing_settings():
     """Log warnings for settings that haven't been configured."""
-    settings_to_check = {
-        # Boost Channels (most important)
-        "boost_public_channel_id": "Boost Public (/setup channel boost_public #channel)",
-        "boost_admin_channel_id": "Boost Admin (/setup channel boost_admin #channel)",
-        # Mod Channels
-        "mod_log_channel_id": "Mod Log (/setup channel modlog #channel)",
-        # Roles
-        "server_booster_role_id": "Server Booster Role (/setup role server @role)",
-        "muted_role_id": "Muted Role (/setup role muted @role)",
-        "restricted_role_id": "Restricted Role (/setup role restricted @role)",
-    }
+    from utils.constants import SETUP_SCHEMA
     
     missing = []
-    for key, label in settings_to_check.items():
-        value = await settings_service.get_int(key)
-        if value == 0:
-            missing.append(label)
+    for category, items in SETUP_SCHEMA.items():
+        for item in items:
+            value = await settings_service.get_int(item["key"])
+            if value == 0:
+                missing.append(f"{item['name']} ({item['cmd'].replace('`', '')})")
+                
+    # Also check cosmetics
+    color_roles = await settings_service.get_color_roles()
+    if not color_roles:
+        missing.append("Color Roles (/setup color-add)")
+        
+    emblem_roles = await settings_service.get_emblem_roles()
+    if not emblem_roles:
+        missing.append("Emblem Roles (/setup emblem-add)")
     
     if missing:
-        logger.warning("⚠️ Missing settings (use /setup to configure):")
+        logger.warning("⚠️ Missing setup configurations:")
         for item in missing:
             logger.warning(f"   - {item}")
 

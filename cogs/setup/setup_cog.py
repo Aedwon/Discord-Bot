@@ -23,83 +23,49 @@ class SetupCog(commands.Cog, name="Setup"):
     # View Settings
     # ─────────────────────────────────────────────────────────────────────
     
-    @setup_group.command(name="view", description="View all current bot settings")
+    @setup_group.command(name="view", description="View all current bot settings & setup checklist")
     async def setup_view(self, inter: discord.Interaction):
-        """View current bot settings."""
+        """View current bot settings and setup checklist."""
         settings = await settings_service.get_all()
+        from utils.constants import SETUP_SCHEMA
         
-        embed = discord.Embed(title="⚙️ Bot Settings", color=discord.Color.blue())
+        embed = discord.Embed(
+            title="⚙️ Bot Setup Checklist", 
+            description="A dynamic tracker of all configured features.",
+            color=discord.Color.blue()
+        )
         
-        # Log Channels (with feature status)
-        log_channels = [
-            ("Message Logs", settings.get("message_log_channel_id", "0"), False),  # Not implemented
-            ("Ticket Logs", settings.get("ticket_log_channel_id", "0"), False),    # Not implemented
-            ("Voice Logs", settings.get("voice_log_channel_id", "0"), False),      # Not implemented
-            ("Giveaway Logs", settings.get("giveaway_log_channel_id", "0"), False), # Not implemented
-        ]
-        log_lines = []
-        for name, cid, implemented in log_channels:
-            status = "" if implemented else " 🔜"
-            if cid != "0":
-                log_lines.append(f"**{name}:** <#{cid}>{status}")
-            else:
-                log_lines.append(f"**{name}:** Not set{status}")
-        embed.add_field(name="📋 Log Channels", value="\n".join(log_lines) + "\n*🔜 = Coming soon*", inline=False)
-        
-        # Boost Channels (fully implemented)
-        boost_channels = [
-            ("Boost Public", settings.get("boost_public_channel_id", "0")),
-            ("Boost Admin", settings.get("boost_admin_channel_id", "0")),
-        ]
-        boost_text = "\n".join([
-            f"**{name}:** <#{cid}>" if cid != "0" else f"**{name}:** Not set"
-            for name, cid in boost_channels
-        ])
-        embed.add_field(name="🚀 Boost Channels", value=boost_text, inline=False)
-        
-        # Mod Channels (fully implemented)
-        mod_channels = [
-            ("Mod Log", settings.get("mod_log_channel_id", "0")),
-            ("Command Log", settings.get("command_log_channel_id", "0")),
-        ]
-        mod_text = "\n".join([
-            f"**{name}:** <#{cid}>" if cid != "0" else f"**{name}:** Not set"
-            for name, cid in mod_channels
-        ])
-        embed.add_field(name="🛡️ Mod Channels", value=mod_text, inline=False)
-        
-        # Booster Roles
-        roles = [
-            ("Server Booster", settings.get("server_booster_role_id", "0")),
-            ("Veteran Booster", settings.get("veteran_booster_role_id", "0")),
-            ("Mythic Booster", settings.get("mythic_booster_role_id", "0")),
-            ("Spotlight", settings.get("booster_spotlight_role_id", "0")),
-        ]
-        role_text = "\n".join([
-            f"**{name}:** <@&{rid}>" if rid != "0" else f"**{name}:** Not set"
-            for name, rid in roles
-        ])
-        embed.add_field(name="🚀 Booster Roles", value=role_text, inline=False)
-        
-        # Moderation Roles
-        mod_roles = [
-            ("Muted", settings.get("muted_role_id", "0")),
-            ("Restricted", settings.get("restricted_role_id", "0")),
-        ]
-        mod_role_text = "\n".join([
-            f"**{name}:** <@&{rid}>" if rid != "0" else f"**{name}:** Not set"
-            for name, rid in mod_roles
-        ])
-        embed.add_field(name="🛡️ Moderation Roles", value=mod_role_text, inline=False)
-        
-        # Cosmetics count
+        # Iterate over categories from schema
+        for category, items in SETUP_SCHEMA.items():
+            lines = []
+            for item in items:
+                val = settings.get(item["key"], "0")
+                if val != "0":
+                    mapped = f"<#{val}>" if item["type"] == "channel" else f"<@&{val}>"
+                    lines.append(f"✅ **{item['name']}:** {mapped}")
+                else:
+                    lines.append(f"❌ **{item['name']}:** Missing! → Use {item['cmd']}")
+            
+            embed.add_field(name=category, value="\n".join(lines), inline=False)
+            
+        # Handle Cosmetics
         color_roles = await settings_service.get_color_roles()
         emblem_roles = await settings_service.get_emblem_roles()
-        embed.add_field(
-            name="🎨 Cosmetics",
-            value=f"**Color Roles:** {len(color_roles)}\n**Emblem Roles:** {len(emblem_roles)}",
-            inline=False
-        )
+        
+        cosmetics_lines = []
+        if color_roles:
+            c_list = ", ".join([f"<@&{rid}>" for rid in color_roles.values() if rid])
+            cosmetics_lines.append(f"✅ **Colors ({len(color_roles)}):** {c_list}")
+        else:
+            cosmetics_lines.append("❌ **Colors:** None configured → Use `/setup color-add`")
+            
+        if emblem_roles:
+            e_list = ", ".join([f"{emoji} <@&{rid}>" for emoji, rid in emblem_roles.items() if rid])
+            cosmetics_lines.append(f"✅ **Emblems ({len(emblem_roles)}):** {e_list}")
+        else:
+            cosmetics_lines.append("❌ **Emblems:** None configured → Use `/setup emblem-add`")
+            
+        embed.add_field(name="🎨 Cosmetics", value="\n".join(cosmetics_lines), inline=False)
         
         await inter.response.send_message(embed=embed, ephemeral=True)
     
