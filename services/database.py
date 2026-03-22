@@ -142,6 +142,25 @@ class Database:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Event kiosks table (Stores the config for active buttons)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_kiosks (
+                message_id BIGINT PRIMARY KEY,
+                ep_amount INT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event points claiming table (Anti-cheat)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_claims (
+                message_id BIGINT,
+                user_id BIGINT,
+                claimed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (message_id, user_id)
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""
