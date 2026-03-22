@@ -888,10 +888,10 @@ class TicketCog(commands.Cog, name="Tickets"):
     async def setup_ticket_roles(
         self,
         interaction: discord.Interaction,
-        category: app_commands.Choice[str],
+        category: str,
         role: discord.Role,
     ):
-        cat_data = TICKET_CATEGORIES.get(category.value)
+        cat_data = TICKET_CATEGORIES.get(category)
         if not cat_data:
             return await interaction.response.send_message("❌ Invalid category.", ephemeral=True)
         await settings_service.set(cat_data["role_key"], str(role.id))
