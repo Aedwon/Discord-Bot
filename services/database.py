@@ -45,7 +45,8 @@ class Database:
                 shop_discount FLOAT DEFAULT 0.0,
                 boost_start_date DATETIME DEFAULT NULL,
                 xp_locked BOOLEAN DEFAULT FALSE,
-                xp_lock_until DATETIME DEFAULT NULL,
+                xp_lock_until DATETIME DEFAULT NULL
+            )
         ''')
         
         await self.execute('''

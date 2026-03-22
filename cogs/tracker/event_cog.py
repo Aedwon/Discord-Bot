@@ -65,7 +65,8 @@ class EventCog(commands.GroupCog, name="event"):
         
     async def cog_load(self):
         self.bot.add_view(PersistentEventView())
-        self.bot.loop.create_task(self._initialize_peak_tracking())
+        import asyncio
+        asyncio.create_task(self._initialize_peak_tracking())
         
     async def _initialize_peak_tracking(self):
         """Builds the ultra-optimized RAM Cache mapping channel joins to events."""

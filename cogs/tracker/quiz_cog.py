@@ -59,7 +59,7 @@ class QuizCog(commands.Cog, name="quiz"):
         self._load_questions()
         self.quiz_scheduler.start()
         # Crash recovery: re-lock the quiz channel on startup in case bot died mid-session
-        self.bot.loop.create_task(self._startup_cleanup())
+        asyncio.create_task(self._startup_cleanup())
 
     def cog_unload(self):
         self.quiz_scheduler.cancel()
@@ -69,7 +69,9 @@ class QuizCog(commands.Cog, name="quiz"):
         self.questions = []
         try:
             import os
-            csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), CSV_PATH)
+            # Resolve path: cogs/tracker/ -> cogs/ -> project root
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            csv_path = os.path.join(project_root, CSV_PATH)
             with open(csv_path, 'r', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
@@ -522,7 +524,7 @@ class QuizCog(commands.Cog, name="quiz"):
             return await interaction.response.send_message("❌ Quiz channel not found.", ephemeral=True)
 
         await interaction.response.send_message("✅ Quiz session starting now!", ephemeral=True)
-        self.bot.loop.create_task(self.run_session(channel, interaction.guild))
+        asyncio.create_task(self.run_session(channel, interaction.guild))
 
     @quiz_group.command(name="stop", description="Force-stop a running quiz session.")
     async def quiz_stop(self, interaction: discord.Interaction):

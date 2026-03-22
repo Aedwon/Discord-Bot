@@ -76,12 +76,13 @@ class AnalyticsCog(commands.Cog, name="analytics"):
 
     async def cog_load(self):
         """Initialize caches and start background loops."""
+        import asyncio
         self.flush_buffer.start()
         self.midnight_jobs.start()
-        self.bot.loop.create_task(self._init_invite_cache())
-        self.bot.loop.create_task(self._init_keywords())
-        self.bot.loop.create_task(self._cleanup_orphaned_voice())
-        self.bot.loop.create_task(self._register_tracked_link_views())
+        asyncio.create_task(self._init_invite_cache())
+        asyncio.create_task(self._init_keywords())
+        asyncio.create_task(self._cleanup_orphaned_voice())
+        asyncio.create_task(self._register_tracked_link_views())
 
     def cog_unload(self):
         self.flush_buffer.cancel()
