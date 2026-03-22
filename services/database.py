@@ -143,22 +143,53 @@ class Database:
             )
         ''')
         
-        # Event kiosks table (Stores the config for active buttons)
+        # Event Kiosks (Linked to Native Discord Events)
         await self.execute('''
-            CREATE TABLE IF NOT EXISTS event_kiosks (
+            CREATE TABLE IF NOT EXISTS guild_event_kiosks (
                 message_id BIGINT PRIMARY KEY,
+                event_id BIGINT NOT NULL,
                 ep_amount INT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Event points claiming table (Anti-cheat)
+        # Event Rewards Tracker (Anti-cheat & No-Stacking)
         await self.execute('''
-            CREATE TABLE IF NOT EXISTS event_claims (
-                message_id BIGINT,
+            CREATE TABLE IF NOT EXISTS guild_event_rewards (
+                event_id BIGINT,
                 user_id BIGINT,
-                claimed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (message_id, user_id)
+                reward_type VARCHAR(50),
+                ep_awarded INT,
+                awarded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (event_id, user_id, reward_type)
+            )
+        ''')
+        
+        # Event Placement Manager Caps
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS guild_event_caps (
+                event_id BIGINT PRIMARY KEY,
+                total_budget INT NOT NULL,
+                set_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event Analytics Tracking (Peak VC)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS guild_event_stats (
+                event_id BIGINT PRIMARY KEY,
+                peak_concurrent INT DEFAULT 0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event Overflow Channel Links
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS guild_event_overflows (
+                event_id BIGINT,
+                channel_id BIGINT,
+                PRIMARY KEY (event_id, channel_id)
             )
         ''')
     

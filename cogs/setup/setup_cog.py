@@ -84,7 +84,7 @@ class SetupCog(commands.Cog, name="Setup"):
         setting: Literal[
             "message_log", "ticket_log", "voice_log", "giveaway_log",
             "boost_public", "boost_admin",
-            "modlog", "cmdlog"
+            "modlog", "cmdlog", "event_log"
         ],
         channel: discord.TextChannel
     ):
@@ -100,6 +100,7 @@ class SetupCog(commands.Cog, name="Setup"):
             # Mod channels
             "modlog": "mod_log_channel_id",
             "cmdlog": "command_log_channel_id",
+            "event_log": "event_log_channel_id",
         }
         await settings_service.set(key_map[setting], str(channel.id))
         await inter.response.send_message(f"✅ **{setting}** channel set to {channel.mention}", ephemeral=True)

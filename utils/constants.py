@@ -24,6 +24,7 @@ SETUP_SCHEMA = {
         {"key": "message_log_channel_id", "name": "Message Logs", "type": "channel", "cmd": "`/setup channel message_log <#channel>`"},
         {"key": "ticket_log_channel_id", "name": "Ticket Logs", "type": "channel", "cmd": "`/setup channel ticket_log <#channel>`"},
         {"key": "voice_log_channel_id", "name": "Voice Logs", "type": "channel", "cmd": "`/setup channel voice_log <#channel>`"},
+        {"key": "event_log_channel_id", "name": "Event Logs", "type": "channel", "cmd": "`/setup channel event_log <#channel>`"},
         {"key": "giveaway_log_channel_id", "name": "Giveaway Logs", "type": "channel", "cmd": "`/setup channel giveaway_log <#channel>`"},
         {"key": "boost_public_channel_id", "name": "Boost Public", "type": "channel", "cmd": "`/setup channel boost_public <#channel>`"},
         {"key": "boost_admin_channel_id", "name": "Boost Admin", "type": "channel", "cmd": "`/setup channel boost_admin <#channel>`"},
