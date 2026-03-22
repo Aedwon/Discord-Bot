@@ -10,6 +10,36 @@ from services.database import db
 class XpService:
     """Handles XP-related business logic."""
     
+    def get_level(self, xp: int) -> int:
+        """Calculate mathematical level using the custom exponential curve 150 * (Lvl^1.9)."""
+        if xp <= 0: return 1
+        return int((xp / 150) ** (1 / 1.9)) + 1
+        
+    def get_tier_name(self, level: int) -> str | None:
+        """Mathematical Mapping: Level 1-100 to 22 distinctly named Role Tiers."""
+        if level <= 0: return None
+        if level >= 101: return "Monarch"
+        
+        ranks = ["Commoner", "Vassal", "Noble", "High Noble"]
+        rank_idx = min((level - 1) // 25, 3)
+        tier = ((level - 1) % 25) // 5 
+        numerals = ["V", "IV", "III", "II", "I"]
+        
+        return f"{ranks[rank_idx]} {numerals[tier]}"
+        
+    def get_tier_name(self, level: int) -> str | None:
+        """Mathematical Mapping: Level 1-100 to 22 distinctly named Role Tiers."""
+        if level <= 0: return None
+        if level >= 101: return "Monarch"
+        
+        ranks = ["Commoner", "Vassal", "Noble", "High Noble"]
+        rank_idx = min((level - 1) // 25, 3)
+        tier = ((level - 1) % 25) // 5 
+        numerals = ["V", "IV", "III", "II", "I"]
+        
+        return f"{ranks[rank_idx]} {numerals[tier]}"
+
+    
     async def get_multiplier(self, user_id: int) -> float:
         """Get a user's current XP multiplier."""
         result = await db.fetch_one(
@@ -81,17 +111,25 @@ class XpService:
         )
         return [(row['user_id'], row['xp']) for row in rows]
     
-    async def batch_update(self, pending_xp: dict) -> None:
+    async def batch_update(self, pending_xp: dict) -> dict:
         """
         Batch update XP for multiple users (with multipliers applied).
+        Returns dictionary of user_id -> {'old_xp': int, 'new_xp': int} for role assignment UI hook.
         """
+        results = {}
         for user_id, xp in pending_xp.items():
+            old_xp = await self.get_xp(user_id)
             multiplier = await self.get_multiplier(user_id)
             final_xp = int(xp * multiplier)
+            
             await db.execute('''
                 INSERT INTO users (user_id, xp) VALUES (%s, %s)
                 ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp)
             ''', (user_id, final_xp))
+            
+            new_xp = await self.get_xp(user_id)
+            results[user_id] = {"old_xp": old_xp, "new_xp": new_xp}
+        return results
     
     async def get_rank(self, user_id: int) -> tuple:
         """Get a user's rank and XP."""

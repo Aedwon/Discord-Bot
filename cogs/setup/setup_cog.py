@@ -191,5 +191,32 @@ class SetupCog(commands.Cog, name="Setup"):
         await inter.response.send_message(embed=embed, ephemeral=True)
 
 
+    @setup_group.command(name="xp_roles", description="Auto-discover and explicitly map the 22 EXP Role Tiers dynamically.")
+    async def setup_xp_roles(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True)
+        
+        expected = []
+        ranks = ["Commoner", "Vassal", "Noble", "High Noble"]
+        numerals = ["V", "IV", "III", "II", "I"]
+        for r in ranks:
+            for n in numerals:
+                expected.append(f"{r} {n}")
+        expected.append("Monarch")
+        
+        found = 0
+        log = []
+        for name in expected:
+            role = discord.utils.get(inter.guild.roles, name=name)
+            if role:
+                await settings_service.set(f"xp_role_{name.replace(' ', '_')}", str(role.id))
+                found += 1
+                log.append(f"✅ Extracted: **{name}**")
+            else:
+                log.append(f"❌ Missing: **{name}**")
+                
+        embed = discord.Embed(title="⚙️ Auto-Map XP Roles", description="\n".join(log), color=discord.Color.brand_green())
+        embed.set_footer(text=f"Total Successfully Hard-Linked: {found}/21 Roles")
+        await inter.followup.send(embed=embed)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))

@@ -142,6 +142,9 @@ class Database:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # Create indices for the Universal Leaderboard engine to optimize memory
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_users_xp ON users (xp)')
+        await self.execute('CREATE INDEX IF NOT EXISTS idx_users_ep ON users (event_points)')
         
         # Event Kiosks (Linked to Native Discord Events)
         await self.execute('''
