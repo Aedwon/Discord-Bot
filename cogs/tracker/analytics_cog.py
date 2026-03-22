@@ -75,24 +75,30 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         self.tracked_keywords: list[str] = []
 
     async def cog_load(self):
-        """Initialize caches and start background loops."""
-        import asyncio
-        self.flush_buffer.start()
-        self.midnight_jobs.start()
-        asyncio.create_task(self._init_invite_cache())
-        asyncio.create_task(self._init_keywords())
-        asyncio.create_task(self._cleanup_orphaned_voice())
-        asyncio.create_task(self._register_tracked_link_views())
+        """Register persistent views on load (no bot readiness needed)."""
+        pass
 
     def cog_unload(self):
         self.flush_buffer.cancel()
         self.midnight_jobs.cancel()
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start background loops and init tasks after bot is fully connected."""
+        if not self.flush_buffer.is_running():
+            self.flush_buffer.start()
+        if not self.midnight_jobs.is_running():
+            self.midnight_jobs.start()
+        import asyncio
+        asyncio.create_task(self._init_invite_cache())
+        asyncio.create_task(self._init_keywords())
+        asyncio.create_task(self._cleanup_orphaned_voice())
+        asyncio.create_task(self._register_tracked_link_views())
+
     # ─── INITIALIZATION ─────────────────────────────────────────────
 
     async def _init_invite_cache(self):
         """Cache all guild invites for source attribution diffing."""
-        await self.bot.wait_until_ready()
         for guild in self.bot.guilds:
             try:
                 invites = await guild.invites()
@@ -105,14 +111,12 @@ class AnalyticsCog(commands.Cog, name="analytics"):
 
     async def _init_keywords(self):
         """Load tracked keywords from settings."""
-        await self.bot.wait_until_ready()
         kw_str = await settings_service.get("analytics_tracked_keywords")
         if kw_str:
             self.tracked_keywords = [k.strip().lower() for k in kw_str.split(",") if k.strip()]
 
     async def _cleanup_orphaned_voice(self):
         """Close voice sessions that were never properly ended (bot crash recovery)."""
-        await self.bot.wait_until_ready()
         await db.execute('''
             UPDATE analytics_voice_sessions
             SET left_at = NOW()
@@ -122,7 +126,6 @@ class AnalyticsCog(commands.Cog, name="analytics"):
 
     async def _register_tracked_link_views(self):
         """Re-register persistent views for existing tracked link buttons."""
-        await self.bot.wait_until_ready()
         links = await db.fetch_all("SELECT id, label FROM analytics_tracked_links")
         for link in links:
             view = TrackedLinkView()

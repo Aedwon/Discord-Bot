@@ -55,14 +55,18 @@ class QuizCog(commands.Cog, name="quiz"):
         self._used_questions_date: str = ""  # YYYY-MM-DD in PHT
 
     async def cog_load(self):
-        """Load questions from CSV and start the scheduler."""
+        """Load questions from CSV on extension load."""
         self._load_questions()
-        self.quiz_scheduler.start()
-        # Crash recovery: re-lock the quiz channel on startup in case bot died mid-session
-        asyncio.create_task(self._startup_cleanup())
 
     def cog_unload(self):
         self.quiz_scheduler.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start scheduler and run crash recovery after bot is fully connected."""
+        if not self.quiz_scheduler.is_running():
+            self.quiz_scheduler.start()
+        asyncio.create_task(self._startup_cleanup())
 
     def _load_questions(self):
         """Parse the MLBB Quiz CSV into memory."""
@@ -91,7 +95,6 @@ class QuizCog(commands.Cog, name="quiz"):
 
     async def _startup_cleanup(self):
         """Re-lock the quiz channel on bot startup (crash recovery)."""
-        await self.bot.wait_until_ready()
         try:
             channel_id = await settings_service.get_int("quiz_channel_id")
             if channel_id:

@@ -15,15 +15,18 @@ logger = logging.getLogger("mlbb_bot.ep_core")
 class EPCog(commands.Cog, name="event_points_core"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.eos_loop.start()
 
     def cog_unload(self):
         self.eos_loop.cancel()
-        
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.eos_loop.is_running():
+            self.eos_loop.start()
+
     @tasks.loop(hours=24)
     async def eos_loop(self):
         """End Of Season background checker. Purges mathematically if 90-days struck natively or manually induced."""
-        await self.bot.wait_until_ready()
         
         eos_flag = await settings_service.get_int("eos_reset_triggered")
         if eos_flag == 1:

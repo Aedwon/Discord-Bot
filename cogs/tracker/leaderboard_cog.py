@@ -16,15 +16,18 @@ logger = logging.getLogger("mlbb_bot.leaderboard")
 class LeaderboardCog(commands.Cog, name="leaderboards"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.update_leaderboards.start()
 
     def cog_unload(self):
         self.update_leaderboards.cancel()
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.update_leaderboards.is_running():
+            self.update_leaderboards.start()
+
     @tasks.loop(minutes=5)
     async def update_leaderboards(self):
         """Standard industry 5-minute background loop to continually overwrite the static leaderboard UX."""
-        await self.bot.wait_until_ready()
         
         try:
             for guild in self.bot.guilds:
