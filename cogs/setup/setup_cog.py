@@ -291,13 +291,13 @@ class SetupCog(commands.Cog, name="Setup"):
         found, log = 0, []
 
         for name in expected:
-            role = discord.utils.get(inter.guild.roles, name=f"Peak {name}")
+            role = discord.utils.get(inter.guild.roles, name=f"Peak: {name}")
             if role:
                 await settings_service.set(f"peak_role_{name.replace(' ', '_')}", str(role.id))
                 found += 1
-                log.append(f"✅ **Peak {name}**")
+                log.append(f"✅ **Peak: {name}**")
             else:
-                log.append(f"❌ **Peak {name}** — role not found")
+                log.append(f"❌ **Peak: {name}** — role not found")
 
         total = len(expected)
         embed = discord.Embed(
