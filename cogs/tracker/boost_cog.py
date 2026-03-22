@@ -26,13 +26,20 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
         self.cooldown_seconds = 60
     
     async def cog_load(self):
-        """Start background tasks when cog is loaded."""
-        self.check_tier_promotions.start()
-        self.weekly_spotlight.start()
+        """Cog loaded — tasks start in on_ready."""
+        pass
     
     def cog_unload(self):
         self.check_tier_promotions.cancel()
         self.weekly_spotlight.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start background tasks after bot is fully connected."""
+        if not self.check_tier_promotions.is_running():
+            self.check_tier_promotions.start()
+        if not self.weekly_spotlight.is_running():
+            self.weekly_spotlight.start()
     
     # ─────────────────────────────────────────────────────────────────────
     # Settings Helpers (load from database)
@@ -54,6 +61,9 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
     
     async def _get_boost_admin_channel_id(self) -> int:
         return await settings_service.get_int("boost_admin_channel_id")
+    
+    async def _get_announce_channel_id(self) -> int:
+        return await settings_service.get_int("boost_public_channel_id")
     
     # ─────────────────────────────────────────────────────────────────────
     # Helper Methods

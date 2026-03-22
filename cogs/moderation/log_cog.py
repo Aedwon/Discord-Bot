@@ -16,10 +16,14 @@ class LogCog(commands.Cog, name="Logging"):
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.cleanup_message_cache.start()
         
     def cog_unload(self):
         self.cleanup_message_cache.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.cleanup_message_cache.is_running():
+            self.cleanup_message_cache.start()
 
     @tasks.loop(hours=24)
     async def cleanup_message_cache(self):

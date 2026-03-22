@@ -84,7 +84,8 @@ class SetupCog(commands.Cog, name="Setup"):
         setting: Literal[
             "message_log", "ticket_log", "voice_log", "giveaway_log",
             "boost_public", "boost_admin",
-            "modlog", "cmdlog", "event_log"
+            "modlog", "cmdlog", "event_log",
+            "leaderboard", "bot", "announce", "booster_chat"
         ],
         channel: discord.TextChannel
     ):
@@ -101,6 +102,11 @@ class SetupCog(commands.Cog, name="Setup"):
             "modlog": "mod_log_channel_id",
             "cmdlog": "command_log_channel_id",
             "event_log": "event_log_channel_id",
+            # System channels
+            "leaderboard": "leaderboard_channel_id",
+            "bot": "bot_channel_id",
+            "announce": "boost_announce_channel_id",
+            "booster_chat": "booster_chat_channel_id",
         }
         await settings_service.set(key_map[setting], str(channel.id))
         await inter.response.send_message(f"✅ **{setting}** channel set to {channel.mention}", ephemeral=True)
@@ -130,6 +136,27 @@ class SetupCog(commands.Cog, name="Setup"):
         }
         await settings_service.set(key_map[setting], str(role.id))
         await inter.response.send_message(f"✅ **{setting}** role set to {role.mention}", ephemeral=True)
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # Voice Channel Setup
+    # ─────────────────────────────────────────────────────────────────────
+    
+    @setup_group.command(name="vc", description="Set a voice channel")
+    @app_commands.describe(
+        setting="Which voice channel setting to configure",
+        channel="The voice channel to set"
+    )
+    async def setup_vc(
+        self,
+        inter: discord.Interaction,
+        setting: Literal["booster_lounge"],
+        channel: discord.VoiceChannel
+    ):
+        key_map = {
+            "booster_lounge": "booster_lounge_vc_id",
+        }
+        await settings_service.set(key_map[setting], str(channel.id))
+        await inter.response.send_message(f"✅ **{setting}** VC set to {channel.mention}", ephemeral=True)
     
     # ─────────────────────────────────────────────────────────────────────
     # Color Role Setup
