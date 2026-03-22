@@ -123,7 +123,7 @@ class SetupCog(commands.Cog, name="Setup"):
     async def setup_role(
         self, 
         inter: discord.Interaction, 
-        setting: Literal["server", "veteran", "mythic", "spotlight", "muted", "restricted", "verified"],
+        setting: Literal["server", "veteran", "mythic", "spotlight", "muted", "restricted", "verified", "support"],
         role: discord.Role
     ):
         key_map = {
@@ -134,6 +134,7 @@ class SetupCog(commands.Cog, name="Setup"):
             "muted": "muted_role_id",
             "restricted": "restricted_role_id",
             "verified": "verified_role_id",
+            "support": "support_role_id",
         }
         await settings_service.set(key_map[setting], str(role.id))
         await inter.response.send_message(f"✅ **{setting}** role set to {role.mention}", ephemeral=True)

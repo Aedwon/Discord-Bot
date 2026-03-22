@@ -171,6 +171,7 @@ async def load_extensions():
         "cogs.embed_cog",
         "cogs.voice_cog",
         "cogs.verification_cog",
+        "cogs.ticket_cog",
     ]
     
     for cog in cog_modules:

@@ -331,6 +331,46 @@ class Database:
                 PRIMARY KEY (user_id, payout_date)
             )
         ''')
+        
+        # Ticket system tables
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS active_tickets (
+                channel_id BIGINT PRIMARY KEY,
+                creator_id BIGINT NOT NULL,
+                category_key VARCHAR(10) NOT NULL,
+                subject VARCHAR(255),
+                claimed BOOLEAN DEFAULT FALSE,
+                claimed_by BIGINT DEFAULT NULL,
+                added_users TEXT DEFAULT '[]',
+                is_test BOOLEAN DEFAULT FALSE,
+                reminded_24h BOOLEAN DEFAULT FALSE,
+                escalated_48h BOOLEAN DEFAULT FALSE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS ticket_ratings (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                ticket_name VARCHAR(255),
+                user_id BIGINT NOT NULL,
+                handler_id BIGINT,
+                stars INT NOT NULL,
+                remarks TEXT,
+                rated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS pending_ratings (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                ticket_name VARCHAR(255),
+                handler_id BIGINT,
+                handler_mention VARCHAR(255),
+                is_test BOOLEAN DEFAULT FALSE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""
@@ -349,6 +389,14 @@ class Database:
                 if query.strip().upper().startswith("INSERT"):
                     return cur
                 return cur
+    
+    async def insert_get_id(self, query: str, params: tuple = ()) -> int:
+        """Execute an INSERT and return the AUTO_INCREMENT id."""
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(query, params)
+                return cur.lastrowid
     
     async def fetch_one(self, query: str, params: tuple = ()):
         """Fetch a single row."""
