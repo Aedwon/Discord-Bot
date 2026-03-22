@@ -50,6 +50,9 @@ class QuizCog(commands.Cog, name="quiz"):
         self.session_active = False
         self.session_lock = asyncio.Lock()
         self._quiz_channel_id: int | None = None  # Cached for startup cleanup
+        # Track which question IDs were used today (noon + evening don't repeat)
+        self._used_question_ids: set[str] = set()
+        self._used_questions_date: str = ""  # YYYY-MM-DD in PHT
 
     async def cog_load(self):
         """Load questions from CSV and start the scheduler."""
@@ -176,8 +179,24 @@ class QuizCog(commands.Cog, name="quiz"):
             await self._safe_send(channel, content="❌ Not enough questions loaded. Quiz cancelled.")
             return
 
-        # Select 10 random questions (no repeats within session)
-        session_questions = random.sample(self.questions, ROUNDS_PER_SESSION)
+        # Reset used-question tracker at midnight PHT (new day = fresh pool)
+        today_pht = datetime.now(PHT).strftime('%Y-%m-%d')
+        if self._used_questions_date != today_pht:
+            self._used_question_ids = set()
+            self._used_questions_date = today_pht
+
+        # Select 10 questions that weren't used in today's earlier session
+        available = [q for q in self.questions if q['id'] not in self._used_question_ids]
+        if len(available) < ROUNDS_PER_SESSION:
+            # Fallback: if not enough unused questions, use the full pool
+            available = self.questions
+            logger.warning("Not enough unused questions for dedup — using full pool.")
+
+        session_questions = random.sample(available, ROUNDS_PER_SESSION)
+
+        # Mark these as used for today
+        for q in session_questions:
+            self._used_question_ids.add(q['id'])
 
         # In-memory session leaderboard: {user_id: total_score}
         leaderboard: dict[int, int] = {}
@@ -357,13 +376,11 @@ class QuizCog(commands.Cog, name="quiz"):
 
     async def _finalize_session(self, channel: discord.TextChannel, guild: discord.Guild, leaderboard: dict):
         """
-        Build final leaderboard, check daily caps, and award EP.
+        Build final leaderboard with CASCADING EP payouts.
         
-        Edge cases:
-        - Daily cap via PRIMARY KEY (user_id, payout_date) → INSERT IGNORE for atomicity
-        - Large leaderboards truncated to fit Discord 4096-char embed limit
-        - EP service errors caught per-user (one failure doesn't block others)
-        - Score ties broken by user ID (deterministic ordering for fairness)
+        Users who already claimed EP today are skipped when assigning tiers.
+        The highest-scoring ELIGIBLE user gets 1st-place EP, next eligible gets 2nd, etc.
+        Everyone still appears on the visual leaderboard ranked by score.
         """
         if not leaderboard:
             await self._safe_send(channel, embed=discord.Embed(
@@ -378,29 +395,53 @@ class QuizCog(commands.Cog, name="quiz"):
 
         today_str = datetime.now(PHT).strftime('%Y-%m-%d')
 
-        # Build leaderboard lines and process payouts for ALL participants
-        lines = []
-        medals = ["🥇", "🥈", "🥉"]
-        payout_amounts = [PAYOUT_1ST, PAYOUT_2ND, PAYOUT_3RD]
-        display_limit = 10
-
-        for rank, (user_id, score) in enumerate(sorted_board):
-            member = guild.get_member(user_id)
-            name = member.mention if member else f"<@{user_id}>"
-            medal = medals[rank] if rank < 3 else "🏅"
-
-            # Determine EP payout based on placement
-            ep = payout_amounts[rank] if rank < 3 else PAYOUT_PARTICIPATION
-
-            # Check daily cap
+        # ─── PHASE 1: Determine who is eligible (not yet paid today) ─────
+        already_paid_set: set[int] = set()
+        for user_id, _ in sorted_board:
             already_paid = await db.fetch_one(
-                "SELECT ep_awarded FROM quiz_payouts WHERE user_id = %s AND payout_date = %s",
+                "SELECT 1 FROM quiz_payouts WHERE user_id = %s AND payout_date = %s",
                 (user_id, today_str)
             )
-
             if already_paid:
-                line = f"{medal} {name} — **{score} pts** | ~~{ep} EP~~ *(Already claimed today)*"
+                already_paid_set.add(user_id)
+
+        # ─── PHASE 2: Assign EP tiers via cascading ─────────────────────
+        # Walk the sorted leaderboard; skip already-paid users for tier assignment
+        payout_tiers = [PAYOUT_1ST, PAYOUT_2ND, PAYOUT_3RD]  # Top 3 tiers
+        tier_index = 0  # Which tier to assign next
+        user_payouts: dict[int, int] = {}  # user_id → EP to award
+
+        for user_id, score in sorted_board:
+            if user_id in already_paid_set:
+                continue  # Skip — already claimed today
+            if tier_index < len(payout_tiers):
+                user_payouts[user_id] = payout_tiers[tier_index]
+                tier_index += 1
             else:
+                user_payouts[user_id] = PAYOUT_PARTICIPATION
+
+        # ─── PHASE 3: Process payouts and build visual leaderboard ───────
+        lines = []
+        display_limit = 10
+
+        for visual_rank, (user_id, score) in enumerate(sorted_board):
+            member = guild.get_member(user_id)
+            name = member.mention if member else f"<@{user_id}>"
+            # Visual medal based on SCORE rank (not payout rank)
+            if visual_rank == 0:
+                medal = "🥇"
+            elif visual_rank == 1:
+                medal = "🥈"
+            elif visual_rank == 2:
+                medal = "🥉"
+            else:
+                medal = "🏅"
+
+            if user_id in already_paid_set:
+                # Already claimed — show on leaderboard but no EP
+                line = f"{medal} {name} — **{score} pts** | *Already claimed today*"
+            elif user_id in user_payouts:
+                ep = user_payouts[user_id]
                 try:
                     from services.ep_service import ep_service
                     await ep_service.process_ep_update(guild, user_id, ep)
@@ -412,9 +453,10 @@ class QuizCog(commands.Cog, name="quiz"):
                 except Exception as e:
                     logger.error(f"Failed to award quiz EP to {user_id}: {e}")
                     line = f"{medal} {name} — **{score} pts** | +{ep} EP ❌ (error)"
+            else:
+                line = f"{medal} {name} — **{score} pts**"
 
-            # Only add to visible embed if within top 10
-            if rank < display_limit:
+            if visual_rank < display_limit:
                 lines.append(line)
 
         extra = len(sorted_board) - display_limit
