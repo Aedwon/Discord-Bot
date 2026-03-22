@@ -217,8 +217,11 @@ class SetupCog(commands.Cog, name="Setup"):
         )
         await inter.response.send_message(embed=embed, ephemeral=True)
 
+    # ─────────────────────────────────────────────────────────────────────
+    # XP Role Auto-Discovery
+    # ─────────────────────────────────────────────────────────────────────
 
-    @setup_group.command(name="xp_roles", description="Auto-discover and explicitly map the 22 EXP Role Tiers dynamically.")
+    @setup_group.command(name="xp_roles", description="Auto-discover and map the 21 EXP Role Tiers dynamically.")
     async def setup_xp_roles(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True)
         
@@ -237,49 +240,99 @@ class SetupCog(commands.Cog, name="Setup"):
             if role:
                 await settings_service.set(f"xp_role_{name.replace(' ', '_')}", str(role.id))
                 found += 1
-                log.append(f"✅ Extracted: **{name}**")
+                log.append(f"✅ **{name}**")
             else:
-                log.append(f"❌ Missing: **{name}**")
+                log.append(f"❌ **{name}** — role not found")
                 
         embed = discord.Embed(title="⚙️ Auto-Map XP Roles", description="\n".join(log), color=discord.Color.brand_green())
-        embed.set_footer(text=f"Total Successfully Hard-Linked: {found}/21 Roles")
+        embed.set_footer(text=f"Linked: {found}/21 Roles")
         await inter.followup.send(embed=embed)
 
-    @setup_group.command(name="ep_roles", description="Auto-map the 9 MLBB Event Tiers (Warrior -> Mythical Immortal).")
+    # ─────────────────────────────────────────────────────────────────────
+    # EP Sub-Tier Role Auto-Discovery (34 roles)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @setup_group.command(name="ep_roles", description="Auto-map all 34 EP sub-tier roles (Warrior V → Legend I + Mythic ladder).")
     async def setup_ep_roles(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True)
-        expected = ["Warrior", "Elite", "Master", "Grandmaster", "Epic", "Legend", "Mythic", "Mythical Glory", "Mythical Immortal"]
+        from services.ep_service import ep_service
+
+        expected = ep_service.get_all_ep_role_names()
         found, log = 0, []
+
         for name in expected:
             role = discord.utils.get(inter.guild.roles, name=name)
             if role:
                 await settings_service.set(f"ep_role_{name.replace(' ', '_')}", str(role.id))
                 found += 1
-                log.append(f"✅ Extracted: **{name}**")
-            else: log.append(f"❌ Missing: **{name}**")
-        embed = discord.Embed(title="⚙️ MLBB Tiers Auto-Mapped", description="\n".join(log), color=discord.Color.blue())
+                log.append(f"✅ **{name}**")
+            else:
+                log.append(f"❌ **{name}** — role not found")
+
+        total = len(expected)
+        embed = discord.Embed(
+            title="⚙️ EP Sub-Tier Roles Auto-Mapped",
+            description="\n".join(log),
+            color=discord.Color.brand_green() if found == total else discord.Color.orange()
+        )
+        embed.set_footer(text=f"Linked: {found}/{total} roles")
         await inter.followup.send(embed=embed)
 
-    @setup_group.command(name="legacy_badges", description="Auto-map the 9 End-of-Season non-expiring baseline badges.")
-    async def setup_legacy(self, inter: discord.Interaction):
+    # ─────────────────────────────────────────────────────────────────────
+    # Peak Rank Role Auto-Discovery (10 roles)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @setup_group.command(name="peak_roles", description="Auto-map the 10 Peak Rank legacy roles (Peak Warrior → Peak Mythical Immortal).")
+    async def setup_peak_roles(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True)
-        expected = ["Warrior", "Elite", "Master", "Grandmaster", "Epic", "Legend", "Mythic", "Mythical Glory", "Mythical Immortal"]
+        from services.ep_service import ep_service
+
+        expected = ep_service.get_all_main_tier_names()
         found, log = 0, []
+
         for name in expected:
-            role = discord.utils.get(inter.guild.roles, name=f"Legacy {name}")
+            role = discord.utils.get(inter.guild.roles, name=f"Peak {name}")
             if role:
-                await settings_service.set(f"legacy_badge_{name.replace(' ', '_')}", str(role.id))
+                await settings_service.set(f"peak_role_{name.replace(' ', '_')}", str(role.id))
                 found += 1
-                log.append(f"✅ Extracted: **Legacy {name}**")
-            else: log.append(f"❌ Missing: **Legacy {name}**")
-        embed = discord.Embed(title="⚙️ EOS Badges Auto-Mapped", description="\n".join(log), color=discord.Color.gold())
+                log.append(f"✅ **Peak {name}**")
+            else:
+                log.append(f"❌ **Peak {name}** — role not found")
+
+        total = len(expected)
+        embed = discord.Embed(
+            title="⚙️ Peak Rank Roles Auto-Mapped",
+            description="\n".join(log),
+            color=discord.Color.gold() if found == total else discord.Color.orange()
+        )
+        embed.set_footer(text=f"Linked: {found}/{total} roles")
         await inter.followup.send(embed=embed)
-        
-    @setup_group.command(name="trigger_eos", description="Administrators only: Force trigger the global 90-day Season Rebuild.")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # End of Season Trigger
+    # ─────────────────────────────────────────────────────────────────────
+
+    @setup_group.command(name="trigger_eos", description="Force trigger End-of-Season: assign Peak Ranks, reset EP, advance season.")
     @app_commands.default_permissions(administrator=True)
     async def trigger_eos(self, inter: discord.Interaction):
+        current_season = await settings_service.get_int("current_season")
+        if current_season == 0:
+            current_season = 1
         await settings_service.set("eos_reset_triggered", "1")
-        await inter.response.send_message("🚨 **Global System Notification:** EOS Array mathematically toggled. The background daemon will intercept and globally erase Seasonal standings.", ephemeral=True)
+        await inter.response.send_message(
+            f"🚨 **End of Season {current_season} triggered.**\n"
+            f"The background engine will:\n"
+            f"• Upgrade Peak Rank roles for all qualifying users\n"
+            f"• Strip all seasonal EP roles\n"
+            f"• Reset EP to 0\n"
+            f"• Advance to Season {current_season + 1}\n\n"
+            f"This will process within the next 24 hours (or on the next loop cycle).",
+            ephemeral=True
+        )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Analytics Setup
+    # ─────────────────────────────────────────────────────────────────────
 
     @setup_group.command(name="analytics_sentiment_channel", description="Set the channel for automatic daily sentiment exports.")
     async def setup_sentiment_channel(self, inter: discord.Interaction, channel: discord.TextChannel):
@@ -300,10 +353,16 @@ class SetupCog(commands.Cog, name="Setup"):
         await settings_service.set("analytics_region_roles", region_roles)
         await inter.response.send_message(f"✅ Region roles configured: `{region_roles}`", ephemeral=True)
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Quiz Setup
+    # ─────────────────────────────────────────────────────────────────────
+
     @setup_group.command(name="quiz_channel", description="Set the channel for automated quiz sessions.")
     async def setup_quiz_channel(self, inter: discord.Interaction, channel: discord.TextChannel):
         await settings_service.set("quiz_channel_id", str(channel.id))
         await inter.response.send_message(f"✅ Quiz sessions will run in {channel.mention} (Noon & 8PM PHT daily).", ephemeral=True)
 
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))
+

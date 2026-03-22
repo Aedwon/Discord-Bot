@@ -1,7 +1,7 @@
 """
 Event Points (EP) Service.
-Handles MLBB-style tier calculations, dynamic Top-50 assignments, and Database interactions.
-Strictly relies on the `event_points` and `last_ep_update` tie-breaker columns natively.
+Handles MLBB-style tiered sub-rank calculations (V→I per tier),
+dynamic Top-50 Mythic ladder assignments, and database interactions.
 """
 
 from services.database import db
@@ -11,26 +11,121 @@ import logging
 
 logger = logging.getLogger("mlbb_bot.ep_service")
 
+# ─── TIER DEFINITIONS ──────────────────────────────────────────────────
+
+# Main tiers with their EP floor values (ordered low → high)
+MAIN_TIERS = [
+    ("Warrior",      0),
+    ("Elite",        500),
+    ("Master",       1500),
+    ("Grandmaster",  3000),
+    ("Epic",         5000),
+    ("Legend",       7500),
+]
+
+MYTHIC_FLOOR = 10000
+
+# Sub-tier breakpoints: each main tier is split into V, IV, III, II, I
+# Generated programmatically from the floor/ceiling of each tier.
+def _build_sub_tiers():
+    """Build the full sub-tier table with EP breakpoints."""
+    tiers = []
+    for i, (name, floor) in enumerate(MAIN_TIERS):
+        # Ceiling is next tier's floor - 1, or MYTHIC_FLOOR - 1 for Legend
+        if i + 1 < len(MAIN_TIERS):
+            ceiling = MAIN_TIERS[i + 1][1]
+        else:
+            ceiling = MYTHIC_FLOOR
+
+        tier_range = ceiling - floor
+        step = tier_range // 5  # Even split into 5 sub-tiers
+
+        numerals = ["V", "IV", "III", "II", "I"]
+        for j, numeral in enumerate(numerals):
+            sub_floor = floor + (step * j)
+            # Last sub-tier (I) extends to the tier ceiling
+            sub_ceiling = floor + (step * (j + 1)) if j < 4 else ceiling
+            tiers.append({
+                "name": f"{name} {numeral}",
+                "main_tier": name,
+                "floor": sub_floor,
+                "ceiling": sub_ceiling,
+            })
+    return tiers
+
+SUB_TIERS = _build_sub_tiers()
+
+# Mythic ladder tiers (position-based, not EP-based)
+MYTHIC_LADDER = ["Mythic", "Mythical Honor", "Mythical Glory", "Mythical Immortal"]
+
+# All 10 main tier names for Peak Rank / legacy purposes
+MAIN_TIER_NAMES = [t[0] for t in MAIN_TIERS] + MYTHIC_LADDER
+
+# All 34 role names the bot manages
+ALL_EP_ROLE_NAMES = [t["name"] for t in SUB_TIERS] + MYTHIC_LADDER
+
+
 class EPService:
-    def get_base_tier(self, ep: int) -> str:
-        """Calculate the standard MLBB rank precisely based on EP progression limits."""
-        if ep < 500: return "Warrior"
-        if ep < 1500: return "Elite"
-        if ep < 3000: return "Master"
-        if ep < 5000: return "Grandmaster"
-        if ep < 7500: return "Epic"
-        if ep < 10000: return "Legend"
-        return "Mythic" # The 10,000 EP Hard Gate
-        
+
+    # ─── TIER CALCULATION ──────────────────────────────────────────────
+
+    def get_sub_tier(self, ep: int) -> str:
+        """
+        Get the precise sub-tier name for a given EP value.
+        Returns e.g. "Warrior V", "Epic III", "Legend I".
+        For 10000+ EP, returns "Mythic" (ladder position is resolved separately).
+        """
+        if ep >= MYTHIC_FLOOR:
+            return "Mythic"
+
+        # Walk backwards through sub-tiers to find the correct bracket
+        for tier in reversed(SUB_TIERS):
+            if ep >= tier["floor"]:
+                return tier["name"]
+
+        return SUB_TIERS[0]["name"]  # Fallback: Warrior V
+
+    def get_main_tier(self, ep: int) -> str:
+        """
+        Get the main tier name (without sub-tier numeral).
+        Used for Peak Rank comparisons and legacy badge assignment.
+        """
+        if ep >= MYTHIC_FLOOR:
+            return "Mythic"  # Specific Mythic position resolved by ladder
+
+        for name, floor in reversed(MAIN_TIERS):
+            if ep >= floor:
+                return name
+
+        return "Warrior"  # Fallback
+
+    def get_main_tier_rank(self, tier_name: str) -> int:
+        """
+        Get a numeric rank value for a main tier (higher = better).
+        Used for Peak Rank upgrade comparisons.
+        """
+        rank_order = {name: i for i, name in enumerate(MAIN_TIER_NAMES)}
+        return rank_order.get(tier_name, 0)
+
+    def get_all_ep_role_names(self) -> list[str]:
+        """Return all 34 EP role names for setup/discovery."""
+        return ALL_EP_ROLE_NAMES.copy()
+
+    def get_all_main_tier_names(self) -> list[str]:
+        """Return all 10 main tier names for Peak Rank discovery."""
+        return MAIN_TIER_NAMES.copy()
+
+    # ─── EP UPDATE PROCESSING ──────────────────────────────────────────
+
     async def process_ep_update(self, guild: discord.Guild, user_id: int, ep_change: int) -> int:
         """
-        Calculates EP transactions explicitly, ensuring database integrity and tie-breaker timestamps.
-        Runs purely synchronously, delegating UI assignments safely.
+        Process an EP change for a user: update DB, assign correct sub-tier role.
+        Returns the user's new EP total.
         """
-        if not guild: return 0
-        
-        # 1. Update EP securely and force a timestamp reset for accurate Mythic Tie-Breakers.
-        # This handles negative ep_changes intrinsically mathematically via GREATEST(0, ...).
+        if not guild:
+            return 0
+
+        # 1. Atomic EP update with tie-breaker timestamp
         await db.execute('''
             INSERT INTO users (user_id, event_points) 
             VALUES (%s, %s)
@@ -38,95 +133,164 @@ class EPService:
                 event_points = GREATEST(0, event_points + VALUES(event_points)),
                 last_ep_update = CURRENT_TIMESTAMP
         ''', (user_id, ep_change))
-        
-        row = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (user_id,))
+
+        row = await db.fetch_one(
+            "SELECT event_points FROM users WHERE user_id = %s", (user_id,)
+        )
         new_ep = row['event_points'] if row else 0
-        
-        # 2. Derive Standard Limit Threshold Tier
-        new_tier = self.get_base_tier(new_ep)
-        
-        # 3. Retrieve their outdated / mapped physical roles
+
+        # 2. Resolve the correct sub-tier
+        new_sub_tier = self.get_sub_tier(new_ep)
+
+        # 3. Get the member and identify their current EP role
         member = guild.get_member(user_id)
-        current_held_tier = None
-        
-        if member:
-            all_ep_roles = []
-            ranks = ["Warrior", "Elite", "Master", "Grandmaster", "Epic", "Legend", "Mythic", "Mythical Glory", "Mythical Immortal"]
-            
-            for r in ranks:
-                role_id = await settings_service.get_int(f"ep_role_{r.replace(' ', '_')}")
-                if role_id:
-                    role_obj = guild.get_role(role_id)
-                    if role_obj:
-                        all_ep_roles.append(role_obj)
-                        if role_obj in member.roles:
-                            current_held_tier = r
-            
-            # Sub-10,000 Calculation:
-            # If they dropped down securely or climbed conventionally out of Mythic boundaries
-            if new_ep < 10000 and current_held_tier != new_tier:
-                new_role_id = await settings_service.get_int(f"ep_role_{new_tier.replace(' ', '_')}")
+        if not member:
+            return new_ep
+
+        # Build lookup of all 34 EP roles
+        all_ep_roles = []
+        current_held_role = None
+
+        for role_name in ALL_EP_ROLE_NAMES:
+            settings_key = f"ep_role_{role_name.replace(' ', '_')}"
+            role_id = await settings_service.get_int(settings_key)
+            if role_id:
+                role_obj = guild.get_role(role_id)
+                if role_obj:
+                    all_ep_roles.append(role_obj)
+                    if role_obj in member.roles:
+                        current_held_role = (role_name, role_obj)
+
+        # 4. Sub-10k: assign the correct sub-tier role
+        if new_ep < MYTHIC_FLOOR:
+            current_name = current_held_role[0] if current_held_role else None
+            if current_name != new_sub_tier:
+                new_role_id = await settings_service.get_int(
+                    f"ep_role_{new_sub_tier.replace(' ', '_')}"
+                )
                 if new_role_id:
                     new_role_obj = guild.get_role(new_role_id)
                     if new_role_obj:
                         try:
-                            await member.remove_roles(*all_ep_roles, reason="MLBB EP Core Shift")
-                            await member.add_roles(new_role_obj, reason="MLBB EP Core Shift")
+                            # Strip ALL EP roles first, then add the correct one
+                            roles_to_remove = [r for r in all_ep_roles if r in member.roles]
+                            if roles_to_remove:
+                                await member.remove_roles(
+                                    *roles_to_remove, reason="EP Sub-Tier Shift"
+                                )
+                            await member.add_roles(
+                                new_role_obj, reason=f"EP Sub-Tier: {new_sub_tier}"
+                            )
                         except discord.Forbidden:
-                            pass
-                            
-        # 4. Critical Edge Case Verification: Top 50 Shift
-        # A massive paradigm change is mathematically enforced here. If a player crossed 10K,
-        # OR dropped below 10K losing their Mythic status, the ENTIRE Top-50 ladder shifts natively!
-        if new_ep >= 10000 or (new_ep < 10000 and current_held_tier in ["Mythical Glory", "Mythical Immortal", "Mythic"]):
+                            logger.error(
+                                f"Missing permissions to update EP roles for {user_id}"
+                            )
+
+        # 5. If they crossed the Mythic threshold (up or down), recalculate the ladder
+        was_mythic = current_held_role and current_held_role[0] in MYTHIC_LADDER
+        is_mythic = new_ep >= MYTHIC_FLOOR
+
+        if is_mythic or (not is_mythic and was_mythic):
             await self.recalculate_mythic_roles(guild)
-            
+
         return new_ep
-        
+
+    # ─── MYTHIC LADDER ─────────────────────────────────────────────────
+
     async def recalculate_mythic_roles(self, guild: discord.Guild):
         """
-        Actively re-evaluates the Top 50 EP leaders safely.
-        By querying via `<EP> DESC, <TIME> ASC`, we seamlessly settle literal mathematical EP ties logically.
-        Forces the Immortal (1-10) and Glory (11-50) assignments locally.
+        Re-evaluate the Top 50 EP leaders and assign Mythic ladder roles.
+        Ties broken by earliest last_ep_update (first to reach the EP wins).
+        
+        Mythical Immortal: Top 1-10
+        Mythical Glory:    Top 11-25
+        Mythical Honor:    Top 26-50
+        Mythic:            51+ (still above 10k but outside Top 50)
         """
         top_players = await db.fetch_all('''
             SELECT user_id, event_points 
             FROM users 
-            WHERE event_points >= 10000 
+            WHERE event_points >= %s 
             ORDER BY event_points DESC, last_ep_update ASC
-        ''')
-        
-        if not top_players: return # None exist beyond the gate securely
-        
-        imm_id = await settings_service.get_int("ep_role_Mythical_Immortal")
-        glo_id = await settings_service.get_int("ep_role_Mythical_Glory")
-        myt_id = await settings_service.get_int("ep_role_Mythic")
-        
-        imm_role = guild.get_role(imm_id) if imm_id else None
-        glo_role = guild.get_role(glo_id) if glo_id else None
-        myt_role = guild.get_role(myt_id) if myt_id else None
-        
+        ''', (MYTHIC_FLOOR,))
+
+        if not top_players:
+            return
+
+        # Resolve all 4 Mythic ladder roles
+        role_map = {}
+        for tier_name in MYTHIC_LADDER:
+            key = f"ep_role_{tier_name.replace(' ', '_')}"
+            role_id = await settings_service.get_int(key)
+            if role_id:
+                role_obj = guild.get_role(role_id)
+                if role_obj:
+                    role_map[tier_name] = role_obj
+
+        mythic_roles = list(role_map.values())
+        if not mythic_roles:
+            return
+
         for index, row in enumerate(top_players, 1):
             user_id = row['user_id']
             member = guild.get_member(user_id)
-            if not member: continue
-                
-            # Distribute strictly to constraints natively
-            if index <= 10:
-                correct_role = imm_role
-            elif index <= 50:
-                correct_role = glo_role
-            else:
-                correct_role = myt_role # Booted entirely out of Top 50 globally.
-                
-            if correct_role and correct_role not in member.roles:
-                try:
-                    roles_to_strip = [r for r in [imm_role, glo_role, myt_role] if r and r in member.roles and r != correct_role]
-                    if roles_to_strip:
-                        await member.remove_roles(*roles_to_strip, reason="Top 50 Ladder Tie-Break Shift (Lost Ranking)")
-                    await member.add_roles(correct_role, reason="Top 50 Ladder Allocation (Secured Board Placement)")
-                except discord.Forbidden:
-                    logger.error(f"Cannot secure Mythic Top-50 roles for mathematically qualified {user_id}")
+            if not member:
+                continue
 
-# Core API Export 
+            # Determine correct Mythic tier by position
+            if index <= 10:
+                correct_tier = "Mythical Immortal"
+            elif index <= 25:
+                correct_tier = "Mythical Glory"
+            elif index <= 50:
+                correct_tier = "Mythical Honor"
+            else:
+                correct_tier = "Mythic"
+
+            correct_role = role_map.get(correct_tier)
+            if not correct_role:
+                continue
+
+            # Only update if they don't already have the correct role
+            if correct_role not in member.roles:
+                try:
+                    # Strip any existing Mythic ladder roles
+                    roles_to_strip = [
+                        r for r in mythic_roles
+                        if r in member.roles and r != correct_role
+                    ]
+                    if roles_to_strip:
+                        await member.remove_roles(
+                            *roles_to_strip,
+                            reason=f"Mythic Ladder Shift (was #{index})"
+                        )
+                    await member.add_roles(
+                        correct_role,
+                        reason=f"Mythic Ladder: #{index} → {correct_tier}"
+                    )
+                except discord.Forbidden:
+                    logger.error(
+                        f"Cannot assign Mythic role for user {user_id} (#{index})"
+                    )
+
+    # ─── PEAK RANK HELPERS ─────────────────────────────────────────────
+
+    def resolve_eos_tier(self, ep: int, position: int) -> str:
+        """
+        Resolve a user's main tier for EOS Peak Rank purposes.
+        For Mythic+ users, position determines the specific Mythic ladder tier.
+        """
+        if ep >= MYTHIC_FLOOR:
+            if position <= 10:
+                return "Mythical Immortal"
+            elif position <= 25:
+                return "Mythical Glory"
+            elif position <= 50:
+                return "Mythical Honor"
+            else:
+                return "Mythic"
+        return self.get_main_tier(ep)
+
+
+# Core API Export
 ep_service = EPService()
