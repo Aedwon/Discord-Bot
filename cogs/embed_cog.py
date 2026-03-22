@@ -1,6 +1,6 @@
 """
 Embeds Cog - Discohook Embed Manager with Scheduling
-Allows admins to send and schedule embeds from Discohook links.
+Allows admins to send, edit, schedule, and extract embeds from Discohook links.
 """
 
 import discord
@@ -12,7 +12,9 @@ import random
 import string
 import datetime
 import logging
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
+from io import BytesIO
+import pytz
 
 from services.database import db
 from utils.constants import TZ_MANILA
@@ -64,8 +66,8 @@ def discohook_to_view(components_data):
             elif comp_type == 3:  # Select Menu
                 options = [
                     discord.SelectOption(
-                        label=o["label"],
-                        value=o["value"],
+                        label=o.get("label", ""),
+                        value=o.get("value", ""),
                         description=o.get("description"),
                         emoji=o.get("emoji", {}).get("name") if o.get("emoji") else None,
                         default=o.get("default", False)
@@ -75,8 +77,8 @@ def discohook_to_view(components_data):
                 view.add_item(discord.ui.Select(
                     custom_id=comp.get("custom_id"),
                     placeholder=comp.get("placeholder"),
-                    min_values=1,
-                    max_values=1,
+                    min_values=comp.get("min_values", 1),
+                    max_values=comp.get("max_values", 1),
                     options=options,
                     disabled=comp.get("disabled", False)
                 ))
@@ -122,7 +124,8 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 view = discohook_to_view(data.get("components", []))
                 content = row['content']
                 
-                await channel.send(content=content, embeds=embeds, view=view)
+                sent_msg = await channel.send(content=content, embeds=embeds, view=view)
+                message_link = f"https://discord.com/channels/{channel.guild.id}/{channel.id}/{sent_msg.id}"
                 
                 # Mark as sent
                 await db.execute(
@@ -143,10 +146,11 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                             color=0x00FF00,
                             timestamp=datetime.datetime.now(TZ_MANILA)
                         )
-                        embed.add_field(name="Identifier", value=row['identifier'])
+                        embed.add_field(name="Identifier", value=f"`{row['identifier']}`")
                         embed.add_field(name="Channel", value=channel.mention)
-                        embed.add_field(name="Scheduled By", value=f"<@{row['user_id']}>")
-                        await log_channel.send(embed=embed)
+                        embed.add_field(name="User", value=f"<@{row['user_id']}>")
+                        embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
+                        await log_channel.send(content=f"<@{row['user_id']}>", embed=embed)
             
             except Exception as e:
                 logger.error(f"Failed to send scheduled embed {row['identifier']}: {e}")
@@ -163,14 +167,19 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     # Helpers
     # ─────────────────────────────────────────────────────────────────────
     
-    async def _process_link(self, link: str):
+    async def _process_link(self, link: str, interaction: discord.Interaction):
         """Parse a Discohook share link and extract embed data."""
+        if not (link.startswith("https://discohook.org/?data=") or link.startswith("https://discohook.app/?data=")):
+            await interaction.followup.send("❌ Invalid Discohook link! Ensure it starts with `https://discohook.app/?data=`.", ephemeral=True)
+            return None
+
         try:
             parsed = urlparse(link)
             qs = parse_qs(parsed.query)
             encoded = qs.get("data", [None])[0]
             
             if not encoded:
+                await interaction.followup.send("❌ No valid data found in the URL query.", ephemeral=True)
                 return None
             
             # Add padding if needed
@@ -187,8 +196,9 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         
         except Exception as e:
             logger.error(f"Link parse error: {e}")
+            await interaction.followup.send(f"❌ Failed to parse Discohook link: `{e}`", ephemeral=True)
             return None
-    
+
     # ─────────────────────────────────────────────────────────────────────
     # Slash Commands
     # ─────────────────────────────────────────────────────────────────────
@@ -197,51 +207,220 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
         channel="Channel to send the embed to",
-        link="Discohook share link",
-        schedule_minutes="Minutes from now to send (0 = immediate)"
+        link="Discohook share link (if under 512 chars)",
+        long_link="Alternative: Paste the full Discohook link here if it's too long",
+        schedule_for="(Optional) Date and time to send (DD/MM/YYYY HH:MM, UTC+8)"
     )
     async def send_embed(
         self,
         interaction: discord.Interaction,
         channel: discord.TextChannel,
-        link: str,
-        schedule_minutes: int = 0
+        link: str | None = None,
+        long_link: str | None = None,
+        schedule_for: str | None = None
     ):
         """Send or schedule an embed from a Discohook link."""
-        data = await self._process_link(link)
-        
+        await interaction.response.defer(ephemeral=True)
+        final_link = long_link or link
+        if not final_link:
+            await interaction.followup.send("❌ Please provide a Discohook link.", ephemeral=True)
+            return
+            
+        data = await self._process_link(final_link, interaction)
         if not data:
-            await interaction.response.send_message("❌ Invalid Discohook link.", ephemeral=True)
             return
         
         content = data.get("content", "")
         embeds_list = data.get("embeds", [])
         components_list = data.get("components", [])
+
+        embeds = [discord.Embed.from_dict(e) for e in embeds_list]
+        view = discohook_to_view(components_list)
         
-        if schedule_minutes > 0:
-            # Schedule for later
-            schedule_time = datetime.datetime.now() + datetime.timedelta(minutes=schedule_minutes)
+        if schedule_for:
+            # Parse DD/MM/YYYY HH:MM
+            try:
+                dt = datetime.datetime.strptime(schedule_for, "%d/%m/%Y %H:%M")
+                dt = TZ_MANILA.localize(dt)
+                now = datetime.datetime.now(TZ_MANILA)
+                if (dt - now).total_seconds() <= 0:
+                    await interaction.followup.send("❌ The scheduled time must be in the future.", ephemeral=True)
+                    return
+            except Exception:
+                await interaction.followup.send(
+                    "❌ Invalid date format. Use **DD/MM/YYYY HH:MM** (24-hour, UTC+8).\nExample: `23/04/2026 18:30`",
+                    ephemeral=True
+                )
+                return
+
             identifier = generate_identifier()
             full_json = json.dumps({"embeds": embeds_list, "components": components_list})
             
+            # Convert TZ aware datetime to UTC format or string equivalent for DB
+            # Depending on DB timezone string is easiest:
+            dt_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+
             await db.execute(
                 """INSERT INTO scheduled_embeds 
                    (identifier, channel_id, user_id, content, embed_json, schedule_for, status) 
                    VALUES (%s, %s, %s, %s, %s, %s, 'pending')""",
-                (identifier, channel.id, interaction.user.id, content, full_json, schedule_time)
+                (identifier, channel.id, interaction.user.id, content, full_json, dt_str)
             )
             
-            await interaction.response.send_message(
-                f"✅ Embed scheduled for <t:{int(schedule_time.timestamp())}:R> (ID: `{identifier}`)",
+            await interaction.followup.send(
+                f"⏰ Embed scheduled for {dt.strftime('%d/%m/%Y %H:%M')} in {channel.mention}.\n**ID:** `{identifier}`",
                 ephemeral=True
             )
+
+            # Log preview
+            log_row = await db.fetch_one(
+                "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                (interaction.guild.id,)
+            )
+            if log_row and log_row.get('embed_log_channel_id'):
+                log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
+                if log_channel:
+                    preview_text = f"📝 **Scheduled embed PREVIEW**\n**ID:** `{identifier}`\n**User:** {interaction.user.mention}\n**Channel:** {channel.mention}\n**Scheduled for:** {dt.strftime('%d/%m/%Y %H:%M')} UTC+8\n\n{content or ''}"
+                    await log_channel.send(content=preview_text, embeds=embeds, view=view)
+
         else:
             # Send immediately
-            embeds = [discord.Embed.from_dict(e) for e in embeds_list]
-            view = discohook_to_view(components_list)
-            await channel.send(content=content, embeds=embeds, view=view)
-            await interaction.response.send_message(f"✅ Embed sent to {channel.mention}!", ephemeral=True)
+            sent_msg = await channel.send(content=content, embeds=embeds, view=view)
+            message_link = f"https://discord.com/channels/{interaction.guild_id}/{channel.id}/{sent_msg.id}"
+            await interaction.followup.send(f"✅ Embed sent to {channel.mention}: [Jump to Message]({message_link})", ephemeral=True)
+
+            # Log immediately
+            log_row = await db.fetch_one(
+                "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                (interaction.guild.id,)
+            )
+            if log_row and log_row.get('embed_log_channel_id'):
+                log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
+                if log_channel:
+                    log_embed = discord.Embed(title="📢 Embed Sent", color=discord.Color.gold())
+                    log_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+                    log_embed.add_field(name="User", value=interaction.user.mention, inline=True)
+                    log_embed.add_field(name="Channel", value=channel.mention, inline=True)
+                    log_embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
+                    await log_channel.send(embed=log_embed)
     
+    @app_commands.command(name="edit_embed", description="Edit an existing message using a Discohook link.")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        message_link="The message link to edit",
+        link="Short Discohook link (if under 512 characters)",
+        long_link="Alternative: Paste the full Discohook link here if it's too long",
+    )
+    async def edit_embed(
+        self, interaction: discord.Interaction,
+        message_link: str,
+        link: str | None = None,
+        long_link: str | None = None,
+    ):
+        await interaction.response.defer(ephemeral=True)
+        final_link = long_link or link
+        if not final_link:
+            await interaction.followup.send("❌ No Discohook link provided.", ephemeral=True)
+            return
+
+        data = await self._process_link(final_link, interaction)
+        if not data:
+            return
+        
+        content = data.get("content", "")
+        embeds_list = data.get("embeds", [])
+        components_list = data.get("components", [])
+
+        try:
+            parts = message_link.strip().split("/")
+            if len(parts) < 7:
+                await interaction.followup.send("❌ Invalid message link format.", ephemeral=True)
+                return
+
+            guild_id, channel_id, msg_id = int(parts[-3]), int(parts[-2]), int(parts[-1])
+            channel = interaction.guild.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
+            target_message = await channel.fetch_message(msg_id)
+
+            new_embeds = [discord.Embed.from_dict(e) for e in embeds_list]
+            new_view = discohook_to_view(components_list)
+
+            if target_message.author.id == self.bot.user.id:
+                await target_message.edit(content=content, embeds=new_embeds, view=new_view)
+                await interaction.followup.send(
+                    f"✅ Edited: [Jump to Message]({message_link})", ephemeral=True,
+                )
+                return
+
+            if target_message.webhook_id:
+                webhooks = await channel.webhooks()
+                webhook = next((w for w in webhooks if w.id == target_message.webhook_id), None)
+                if webhook and webhook.token:
+                    await webhook.edit_message(
+                        message_id=target_message.id, content=content, embeds=new_embeds,
+                    )
+                    await interaction.followup.send(
+                        f"✅ Edited webhook message (components may not be supported on webhooks depending on discord config): [Jump]({message_link})",
+                        ephemeral=True,
+                    )
+                    return
+                else:
+                    await interaction.followup.send("❌ Could not find webhook to edit.", ephemeral=True)
+                    return
+
+            await interaction.followup.send("❌ I can only edit my own messages or webhook messages.", ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: `{e}`", ephemeral=True)
+
+    @app_commands.command(name="dl_embed", description="Generate a Discohook link from a Discord message.")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(message_link="Link to the Discord message containing the embed.")
+    async def dl_embed(self, interaction: discord.Interaction, message_link: str):
+        try:
+            parts = message_link.strip().split("/")
+            if len(parts) < 7:
+                await interaction.response.send_message("❌ Invalid message link format.", ephemeral=True)
+                return
+
+            guild_id, channel_id, msg_id = int(parts[-3]), int(parts[-2]), int(parts[-1])
+            channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
+            message = await channel.fetch_message(msg_id)
+
+            if not message.embeds and not message.content and not message.components:
+                await interaction.response.send_message("❌ Message has no embeds, content, or components.", ephemeral=True)
+                return
+
+            payload = {
+                "messages": [{
+                    "data": {
+                        "content": message.content or "",
+                        "embeds": [embed.to_dict() for embed in message.embeds],
+                        "components": [c.to_dict() for c in message.components] if message.components else [],
+                    },
+                    "type": "message",
+                }]
+            }
+
+            json_string = json.dumps(payload)
+            encoded = base64.urlsafe_b64encode(json_string.encode()).decode().rstrip("=")
+            discohook_link = f"https://discohook.app/?data={quote(encoded)}"
+
+            if len(discohook_link) > 2000:
+                buffer = BytesIO(discohook_link.encode("utf-8"))
+                buffer.seek(0)
+                await interaction.response.send_message(
+                    content="📄 The link is too long for a single message. Here's a text file:",
+                    ephemeral=True,
+                    file=discord.File(fp=buffer, filename="discohook_link.txt"),
+                )
+            else:
+                await interaction.response.send_message(
+                    f"✅ [Open in Discohook]({discohook_link})", ephemeral=True,
+                )
+
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: `{e}`", ephemeral=True)
+
     @app_commands.command(name="cancel_embed", description="Cancel a scheduled embed")
     @app_commands.default_permissions(administrator=True)
     async def cancel_embed(self, interaction: discord.Interaction):
