@@ -109,7 +109,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         query = """
             SELECT identifier, channel_id, user_id, content, embed_json 
             FROM scheduled_embeds 
-            WHERE status = 'pending' AND schedule_for <= NOW()
+            WHERE status = 'pending' AND schedule_for <= UTC_TIMESTAMP()
         """
         rows = await db.fetch_all(query)
         
@@ -257,8 +257,8 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             full_json = json.dumps({"embeds": embeds_list, "components": components_list})
             
             # Convert TZ aware datetime to UTC format or string equivalent for DB
-            # Depending on DB timezone string is easiest:
-            dt_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            dt_utc = dt.astimezone(pytz.UTC)
+            dt_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
 
             await db.execute(
                 """INSERT INTO scheduled_embeds 
@@ -433,12 +433,25 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         if not rows:
             await interaction.response.send_message("❌ You have no pending scheduled embeds.", ephemeral=True)
             return
+
+        formatted_rows = []
+        for r in rows:
+            sf = r['schedule_for']
+            if isinstance(sf, str):
+                sf = datetime.datetime.strptime(sf, "%Y-%m-%d %H:%M:%S")
+            sf_utc = sf.replace(tzinfo=pytz.UTC)
+            sf_manila = sf_utc.astimezone(TZ_MANILA)
             
-        view = ManageScheduledEmbedView(rows, self, interaction.user)
+            formatted_rows.append({
+                'identifier': r['identifier'],
+                'schedule_for': sf_manila.strftime("%d/%m/%Y %H:%M")
+            })
+            
+        view = ManageScheduledEmbedView(formatted_rows, self, interaction.user)
         await interaction.response.send_message("Select an embed to preview and manage:", view=view, ephemeral=True)
         
     async def preview_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
-        row = await db.fetch_one("SELECT content, embed_json, UNIX_TIMESTAMP(schedule_for) as sched_unix FROM scheduled_embeds WHERE identifier = %s", (identifier,))
+        row = await db.fetch_one("SELECT content, embed_json, schedule_for FROM scheduled_embeds WHERE identifier = %s", (identifier,))
         if not row:
             await interaction.response.edit_message(content="❌ Could not find that embed.", embeds=[], view=None)
             return
@@ -446,7 +459,12 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         try:
             payload = json.loads(row['embed_json'])
             content = row['content']
-            unix_time = int(row['sched_unix'])
+            
+            sf = row['schedule_for']
+            if isinstance(sf, str):
+                sf = datetime.datetime.strptime(sf, "%Y-%m-%d %H:%M:%S")
+            sf_utc = sf.replace(tzinfo=pytz.UTC)
+            unix_time = int(sf_utc.timestamp())
             time_str = f"<t:{unix_time}:F> (<t:{unix_time}:R>)"
             
             # The database saves just "embeds" and "components"
