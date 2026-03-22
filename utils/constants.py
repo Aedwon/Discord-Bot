@@ -26,7 +26,6 @@ SETUP_SCHEMA = {
         {"key": "leaderboard_channel_id", "name": "Leaderboard", "type": "channel", "cmd": "`/setup channel leaderboard <#channel>`"},
     ],
     "💎 Boost Channels": [
-        {"key": "boost_announce_channel_id", "name": "Boost Announce", "type": "channel", "cmd": "`/setup channel announce <#channel>`"},
         {"key": "boost_public_channel_id", "name": "Boost Public", "type": "channel", "cmd": "`/setup channel boost_public <#channel>`"},
         {"key": "boost_admin_channel_id", "name": "Boost Admin", "type": "channel", "cmd": "`/setup channel boost_admin <#channel>`"},
         {"key": "booster_chat_channel_id", "name": "Booster Chat", "type": "channel", "cmd": "`/setup channel booster_chat <#channel>`"},

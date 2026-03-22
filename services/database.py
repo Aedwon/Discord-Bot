@@ -125,6 +125,16 @@ class Database:
             )
         ''')
         
+        # Booster Raffle History
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS booster_raffle_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                won_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_brh_won_at (won_at)
+            )
+        ''')
+        
         # Auto-create voice channel configs
         await self.execute('''
             CREATE TABLE IF NOT EXISTS autocreate_configs (

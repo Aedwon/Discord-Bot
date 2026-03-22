@@ -300,9 +300,9 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
             channel = self.bot.get_channel(public_channel_id)
             if channel:
                 public_embed = discord.Embed(
-                    title="🚀 New Server Boost!",
-                    description=f"**{member.display_name}** just boosted the server!",
-                    color=discord.Color.nitro_pink()
+                    title="✨ Celestial Ascendance",
+                    description=f"**{member.display_name}** has transcended and boosted the server!\n*May their light guide us through the cosmos.*",
+                    color=0xFFD700
                 )
                 public_embed.set_thumbnail(url=member.display_avatar.url)
                 try:
@@ -344,10 +344,11 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
             channel = self.bot.get_channel(public_channel_id)
             if channel:
                 public_embed = discord.Embed(
-                    title="💔 Boost Ended",
-                    description=f"**{member.display_name}**'s boost has expired.",
+                    title="🌌 A Light Dims...",
+                    description=f"**{member.display_name}**'s celestial ascendance has faded. Their boost has expired.",
                     color=discord.Color.dark_grey()
                 )
+                public_embed.set_thumbnail(url=member.display_avatar.url)
                 try:
                     await channel.send(embed=public_embed)
                 except discord.Forbidden:
