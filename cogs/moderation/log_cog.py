@@ -3,7 +3,7 @@ Log Cog - Comprehensive message edit and delete logging.
 """
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import logging
 import asyncio
 
@@ -16,6 +16,24 @@ class LogCog(commands.Cog, name="Logging"):
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.cleanup_message_cache.start()
+        
+    def cog_unload(self):
+        self.cleanup_message_cache.cancel()
+
+    @tasks.loop(hours=24)
+    async def cleanup_message_cache(self):
+        """Purge messages older than 7 days to save database space."""
+        from services.database import db
+        try:
+            await db.execute("DELETE FROM message_cache WHERE created_at < NOW() - INTERVAL 7 DAY")
+            logger.info("Message cache cleanup complete. Purged messages older than 7 days.")
+        except Exception as e:
+            logger.error(f"Failed to cleanup message cache: {e}")
+            
+    @cleanup_message_cache.before_loop
+    async def before_cleanup(self):
+        await self.bot.wait_until_ready()
         
     async def get_log_channel(self) -> discord.TextChannel:
         """Helper to get the configured message log channel."""
@@ -42,6 +60,25 @@ class LogCog(commands.Cog, name="Logging"):
         if valid_media:
             return "\n".join([f"📎 [Media Link]({m})" for m in valid_media])
         return ""
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """Cache all sent messages to database to survive bot restarts."""
+        if message.author.bot or message.guild is None:
+            return
+            
+        from services.database import db
+        media = self.extract_media(message)
+        avatar = message.author.display_avatar.url if message.author.display_avatar else ""
+        
+        try:
+            await db.execute('''
+                INSERT IGNORE INTO message_cache 
+                (message_id, channel_id, author_id, author_name, author_avatar, content, media_urls)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ''', (message.id, message.channel.id, message.author.id, message.author.name, avatar, message.content or "", media))
+        except Exception as e:
+            logger.error(f"Failed to insert message to cache: {e}")
 
     @commands.Cog.listener()
     async def on_message_delete(self, message: discord.Message):
@@ -81,20 +118,46 @@ class LogCog(commands.Cog, name="Logging"):
         if not channel:
             return
             
-        # Uncached delete. We don't have author or content.
-        embed = discord.Embed(
-            title="🗑️ Old Message Deleted (Uncached)",
-            description="*This message was sent before the bot most recently restarted, so its precise text and author are unknown.*",
-            color=discord.Color.dark_red(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.add_field(name="Channel", value=f"<#{payload.channel_id}>", inline=True)
-        embed.add_field(name="Message ID", value=str(payload.message_id), inline=True)
+        from services.database import db
         
-        try:
-            await channel.send(embed=embed)
-        except Exception:
-            pass
+        # Uncached delete. Check if it's in our database!
+        cached = await db.fetch_one("SELECT * FROM message_cache WHERE message_id = %s", (payload.message_id,))
+        if cached:
+            embed = discord.Embed(
+                title="🗑️ Message Deleted (Recovered from DB)",
+                description=cached['content'] or "*No text content*",
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_author(name=f"{cached['author_name']} ({cached['author_id']})", icon_url=cached['author_avatar'] if cached['author_avatar'] else None)
+            embed.add_field(name="Channel", value=f"<#{payload.channel_id}>", inline=True)
+            embed.add_field(name="Message ID", value=str(payload.message_id), inline=True)
+            
+            if cached['media_urls']:
+                embed.add_field(name="Attachments & Media", value=cached['media_urls'], inline=False)
+                
+            try:
+                await channel.send(embed=embed)
+            except Exception:
+                pass
+                
+            # Cleanup from DB early
+            await db.execute("DELETE FROM message_cache WHERE message_id = %s", (payload.message_id,))
+        else:
+            # Complete unknown
+            embed = discord.Embed(
+                title="🗑️ Old Message Deleted (Uncached)",
+                description="*This message was sent before the bot restarted and is too old to be in the database cache. Its content is unknown.*",
+                color=discord.Color.dark_red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.add_field(name="Channel", value=f"<#{payload.channel_id}>", inline=True)
+            embed.add_field(name="Message ID", value=str(payload.message_id), inline=True)
+            
+            try:
+                await channel.send(embed=embed)
+            except Exception:
+                pass
 
     @commands.Cog.listener()
     async def on_bulk_message_delete(self, messages: list[discord.Message]):
@@ -228,31 +291,72 @@ class LogCog(commands.Cog, name="Logging"):
         if "content" not in payload.data:
             return # Likely just an embed unrolling
             
-        embed = discord.Embed(
-            title="✏️ Old Message Edited (Uncached)",
-            description="*This message was sent before the bot restarted. We only know its new content.*",
-            color=discord.Color.gold(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.add_field(name="Channel", value=f"<#{payload.channel_id}>", inline=True)
-        embed.add_field(name="Message ID", value=str(payload.message_id), inline=True)
-        
+        from services.database import db
         new_content = payload.data.get("content", "*Unknown*")
         
-        embeds = [embed]
-        
-        # Slice very long content
-        for i in range(0, max(len(new_content), 1), 4000):
-            chunk = new_content[i:i+4000] if new_content else "*No text*"
-            e = discord.Embed(title="New Content", description=chunk, color=discord.Color.yellow())
-            embeds.append(e)
+        cached = await db.fetch_one("SELECT * FROM message_cache WHERE message_id = %s", (payload.message_id,))
+        if cached:
+            if cached['content'] == new_content:
+                return # Ghost edit bypass
+                
+            embed = discord.Embed(
+                title="✏️ Message Edited (Recovered from DB)",
+                color=discord.Color.yellow(),
+                url=f"https://discord.com/channels/{payload.guild_id}/{payload.channel_id}/{payload.message_id}",
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_author(name=f"{cached['author_name']} ({cached['author_id']})", icon_url=cached['author_avatar'] if cached['author_avatar'] else None)
+            embed.add_field(name="Channel", value=f"<#{payload.channel_id}>", inline=True)
             
-        for i in range(0, len(embeds), 10):
-            batch = embeds[i:i+10]
-            try:
-                await channel.send(embeds=batch)
-            except Exception:
-                pass
+            def split_content(text: str, chunk_size: int = 4000) -> list[str]:
+                if not text:
+                    return ["*No text*"]
+                return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+                
+            before_chunks = split_content(cached['content'])
+            after_chunks = split_content(new_content)
+            
+            embeds = [embed]
+            for i, chunk in enumerate(before_chunks):
+                e = discord.Embed(title=f"Before (Part {i+1})" if len(before_chunks) > 1 else "Before", description=chunk, color=discord.Color.light_grey())
+                embeds.append(e)
+            for i, chunk in enumerate(after_chunks):
+                e = discord.Embed(title=f"After (Part {i+1})" if len(after_chunks) > 1 else "After", description=chunk, color=discord.Color.yellow())
+                embeds.append(e)
+                
+            for i in range(0, len(embeds), 10):
+                batch = embeds[i:i+10]
+                try:
+                    await channel.send(embeds=batch)
+                except Exception:
+                    pass
+                    
+            # Update cache!
+            await db.execute("UPDATE message_cache SET content = %s WHERE message_id = %s", (new_content, payload.message_id))
+        else:
+            embed = discord.Embed(
+                title="✏️ Old Message Edited (Uncached)",
+                description="*This message was sent before the bot restarted. We only know its new content!*",
+                color=discord.Color.gold(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.add_field(name="Channel", value=f"<#{payload.channel_id}>", inline=True)
+            embed.add_field(name="Message ID", value=str(payload.message_id), inline=True)
+            
+            embeds = [embed]
+            
+            # Slice very long content
+            for i in range(0, max(len(new_content), 1), 4000):
+                chunk = new_content[i:i+4000] if new_content else "*No text*"
+                e = discord.Embed(title="New Content", description=chunk, color=discord.Color.yellow())
+                embeds.append(e)
+                
+            for i in range(0, len(embeds), 10):
+                batch = embeds[i:i+10]
+                try:
+                    await channel.send(embeds=batch)
+                except Exception:
+                    pass
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LogCog(bot))

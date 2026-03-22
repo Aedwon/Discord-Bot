@@ -128,6 +128,20 @@ class Database:
                 category_id BIGINT
             )
         ''')
+        
+        # Message Cache for moderation logs
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS message_cache (
+                message_id BIGINT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                author_id BIGINT NOT NULL,
+                author_name VARCHAR(255),
+                author_avatar TEXT,
+                content TEXT,
+                media_urls TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""
