@@ -306,7 +306,7 @@ class ModCog(commands.Cog, name="Moderation"):
     
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        """Assign auto-role to new members."""
+        """Assign auto-role to new members and re-grant Verified role if applicable."""
         if member.bot:
             return
         
@@ -322,6 +322,20 @@ class ModCog(commands.Cog, name="Moderation"):
             print(f"[ModCog] Failed to assign auto-role to {member.display_name}: {e}")
         except discord.HTTPException as e:
             print(f"[ModCog] HTTP error assigning auto-role: {e}")
+
+        # Re-grant Verified role if user was previously verified
+        try:
+            from services.verification_service import verification_service
+            from services.settings_service import settings_service
+            if verification_service.is_verified(member.id):
+                verified_role_id = await settings_service.get_int("verified_role_id")
+                if verified_role_id:
+                    v_role = member.guild.get_role(verified_role_id)
+                    if v_role:
+                        await member.add_roles(v_role, reason="Re-grant: previously verified")
+                        print(f"[ModCog] Re-granted Verified role to {member.display_name}")
+        except Exception as e:
+            print(f"[ModCog] Error re-granting Verified role: {e}")
     
     # ─────────────────────────────────────────────────────────────────────
     # Slash Commands

@@ -6,6 +6,7 @@ dynamic Top-50 Mythic ladder assignments, and database interactions.
 
 from services.database import db
 from services.settings_service import settings_service
+from services.verification_service import verification_service
 import discord
 import logging
 
@@ -123,6 +124,10 @@ class EPService:
         Returns the user's new EP total.
         """
         if not guild:
+            return 0
+
+        # Verification gate — unverified users earn no EP
+        if not verification_service.is_verified(user_id):
             return 0
 
         # 1. Atomic EP update with tie-breaker timestamp

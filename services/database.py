@@ -68,6 +68,17 @@ class Database:
             )
         ''')
         
+        # Verification table — links Discord users to MLBB accounts
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS verified_users (
+                user_id BIGINT PRIMARY KEY,
+                full_name VARCHAR(255) NOT NULL,
+                mlbb_uid BIGINT NOT NULL UNIQUE,
+                mlbb_server INT NOT NULL,
+                verified_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         # Event system tables
         await self.execute('''
             CREATE TABLE IF NOT EXISTS event_codes (

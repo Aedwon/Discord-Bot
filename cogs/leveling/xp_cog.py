@@ -12,6 +12,7 @@ from discord import app_commands
 from config import XP_CONFIG, BATCH_UPDATE_INTERVAL
 from services.xp_service import xp_service
 from services.settings_service import settings_service
+from services.verification_service import verification_service
 from utils.embeds import create_leaderboard_embed, create_rank_embed
 
 
@@ -118,6 +119,7 @@ class XpCog(commands.Cog, name="Leveling"):
                 and not m.voice.mute and not m.voice.self_mute
                 and not m.voice.deaf and not m.voice.self_deaf
                 and not m.voice.suppress
+                and verification_service.is_verified(m.id)
             ]
             
             if len(valid_members) >= voice_config["min_members"]:
@@ -139,6 +141,10 @@ class XpCog(commands.Cog, name="Leveling"):
         
         # Check if XP system is enabled
         if not await self._is_xp_enabled():
+            return
+        
+        # Verification gate — unverified users earn no XP
+        if not verification_service.is_verified(message.author.id):
             return
         
         msg_config = XP_CONFIG["message"]
@@ -166,6 +172,10 @@ class XpCog(commands.Cog, name="Leveling"):
         
         # Check if XP system is enabled
         if not await self._is_xp_enabled():
+            return
+        
+        # Verification gate
+        if not verification_service.is_verified(user.id):
             return
         
         react_config = XP_CONFIG["reaction"]
