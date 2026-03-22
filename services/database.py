@@ -309,6 +309,16 @@ class Database:
                 INDEX idx_ak_keyword (keyword, created_at)
             )
         ''')
+        
+        # Quiz daily payout deduplication (prevents double payouts for 2x daily sessions)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_payouts (
+                user_id BIGINT NOT NULL,
+                payout_date DATE NOT NULL,
+                ep_awarded INT DEFAULT 0,
+                PRIMARY KEY (user_id, payout_date)
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""

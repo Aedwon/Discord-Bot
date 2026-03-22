@@ -273,5 +273,10 @@ class SetupCog(commands.Cog, name="Setup"):
         await settings_service.set("analytics_region_roles", region_roles)
         await inter.response.send_message(f"✅ Region roles configured: `{region_roles}`", ephemeral=True)
 
+    @setup_group.command(name="quiz_channel", description="Set the channel for automated quiz sessions.")
+    async def setup_quiz_channel(self, inter: discord.Interaction, channel: discord.TextChannel):
+        await settings_service.set("quiz_channel_id", str(channel.id))
+        await inter.response.send_message(f"✅ Quiz sessions will run in {channel.mention} (Noon & 8PM PHT daily).", ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))
