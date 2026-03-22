@@ -85,8 +85,12 @@ class XpService:
         final_xp = int(amount * multiplier)
         
         await db.execute('''
-            INSERT INTO users (user_id, xp) VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp)
+            INSERT INTO users (user_id, xp, consecutive_active_days, last_active_date) 
+            VALUES (%s, %s, 1, CURDATE())
+            ON DUPLICATE KEY UPDATE 
+                xp = xp + VALUES(xp),
+                consecutive_active_days = IF(last_active_date = CURDATE(), consecutive_active_days, IF(last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), consecutive_active_days + 1, 1)),
+                last_active_date = CURDATE()
         ''', (user_id, final_xp))
         
         result = await db.fetch_one(
@@ -123,8 +127,12 @@ class XpService:
             final_xp = int(xp * multiplier)
             
             await db.execute('''
-                INSERT INTO users (user_id, xp) VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp)
+                INSERT INTO users (user_id, xp, consecutive_active_days, last_active_date) 
+                VALUES (%s, %s, 1, CURDATE())
+                ON DUPLICATE KEY UPDATE 
+                    xp = xp + VALUES(xp),
+                    consecutive_active_days = IF(last_active_date = CURDATE(), consecutive_active_days, IF(last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), consecutive_active_days + 1, 1)),
+                    last_active_date = CURDATE()
             ''', (user_id, final_xp))
             
             new_xp = await self.get_xp(user_id)
@@ -208,13 +216,14 @@ class XpService:
     async def award_currency(self, user_id: int, xp: int = 0, tokens: int = 0, ep: int = 0):
         """Award arbitrary currency to a user (Event System)."""
         await db.execute('''
-            INSERT INTO users (user_id, xp, tokens, event_points) 
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO users (user_id, xp, tokens, event_points, lifetime_tokens) 
+            VALUES (%s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 xp = xp + VALUES(xp),
                 tokens = tokens + VALUES(tokens),
-                event_points = event_points + VALUES(event_points)
-        ''', (user_id, xp, tokens, ep))
+                event_points = event_points + VALUES(event_points),
+                lifetime_tokens = lifetime_tokens + VALUES(lifetime_tokens)
+        ''', (user_id, xp, tokens, ep, max(0, tokens)))
         
     async def set_currency(self, user_id: int, xp: int = None, tokens: int = None, ep: int = None):
         """Force set arbitrary currency for a user. None means unchanged."""

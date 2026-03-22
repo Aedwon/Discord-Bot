@@ -235,17 +235,7 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
         result = await db.fetch_one('SELECT emblem_role_id FROM users WHERE user_id = %s', (user_id,))
         return result['emblem_role_id'] if result else None
     
-    async def _add_badge(self, user_id: int, badge: str):
-        """Add a badge to user's profile."""
-        result = await db.fetch_one('SELECT badges FROM users WHERE user_id = %s', (user_id,))
-        badges = json.loads(result['badges']) if result and result['badges'] else []
-        if badge not in badges:
-            badges.append(badge)
-            await db.execute('UPDATE users SET badges = %s WHERE user_id = %s', (json.dumps(badges), user_id))
-    
-    async def _get_badges(self, user_id: int) -> list:
-        result = await db.fetch_one('SELECT badges FROM users WHERE user_id = %s', (user_id,))
-        return json.loads(result['badges']) if result and result['badges'] else []
+
     
     # ─────────────────────────────────────────────────────────────────────
     # Event Listeners
@@ -292,7 +282,8 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
         ''', (tier["token_multiplier"], tier["raffle_entries"], user_id))
         
         # Add S1 Booster badge
-        await self._add_badge(user_id, "S1 Booster")
+        from services.badge_service import badge_service
+        await badge_service.add_badge(member, "S1 Booster")
         
         # Public announcement (simple - who boosted)
         public_channel_id = await self._get_boost_public_channel_id()
@@ -755,7 +746,9 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
             return await inter.response.send_message(embed=embed)
         
         perks = await xp_service.get_user_perks(member.id)
-        badges = await self._get_badges(member.id)
+        
+        from services.badge_service import badge_service
+        badges = await badge_service.get_badges(member.id)
         days = (datetime.now() - member.premium_since.replace(tzinfo=None)).days
         
         embed = discord.Embed(

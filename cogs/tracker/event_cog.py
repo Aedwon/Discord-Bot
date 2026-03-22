@@ -48,6 +48,9 @@ class PersistentEventView(discord.ui.View):
             from services.ep_service import ep_service
             await ep_service.process_ep_update(interaction.guild, user_id, ep_amount)
             
+            from services.badge_service import badge_service
+            await badge_service.eval_battlefield(interaction.user)
+            
             await interaction.followup.send(f"✅ Successfully claimed **{ep_amount} Participation EP**! Thank you for natively participating!")
             
         except Exception as e:
@@ -142,7 +145,30 @@ class EventCog(commands.GroupCog, name="event"):
         # Refresh the RAM mapping architecture entirely if an event ends or begins globally
         if before.status != after.status:
             await self._initialize_peak_tracking()
+            
+            if after.status == discord.EventStatus.completed:
+                from services.badge_service import badge_service
+                
+                # Fetch participants of THIS event
+                participants = await db.fetch_all("SELECT DISTINCT user_id FROM guild_event_rewards WHERE event_id = %s", (after.id,))
+                participant_ids = [str(r['user_id']) for r in participants]
 
+                if participant_ids:
+                    placeholders = ','.join(['%s'] * len(participant_ids))
+                    await db.execute(f"UPDATE users SET consecutive_events_attended = consecutive_events_attended + 1 WHERE user_id IN ({placeholders})", tuple(participant_ids))
+                    await db.execute(f"UPDATE users SET consecutive_events_attended = 0 WHERE consecutive_events_attended > 0 AND user_id NOT IN ({placeholders})", tuple(participant_ids))
+                    
+                    for pid in participant_ids:
+                        member = after.guild.get_member(int(pid))
+                        if member: await badge_service.eval_convivialist(member)
+                else:
+                    await db.execute("UPDATE users SET consecutive_events_attended = 0 WHERE consecutive_events_attended > 0")
+                
+                # Revoke badge from users who lost their streak but still have the badge visually
+                lost_badge_rows = await db.fetch_all("SELECT user_id FROM users WHERE consecutive_events_attended < 10 AND badges LIKE '%Convivialist%'")
+                for r in lost_badge_rows:
+                    member = after.guild.get_member(int(r['user_id']))
+                    if member: await badge_service.eval_convivialist(member, force_revocation=True)
     async def send_audit_log(self, interaction: discord.Interaction, title: str, description: str, color: discord.Color):
         if not interaction.guild: return
         log_channel_id = await settings_service.get_int("event_log_channel_id")

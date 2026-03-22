@@ -59,10 +59,15 @@ class XpCog(commands.Cog, name="Leveling"):
             updates = await xp_service.batch_update(self.pending_xp.copy())
             self.pending_xp.clear()
             
-            # Mathematical Auto-Leveling Role Assigner
+            # Mathematical Auto-Leveling Role Assigner & Badges
             guild = self.bot.guilds[0] if self.bot.guilds else None
             if guild:
+                from services.badge_service import badge_service
                 for user_id, data in updates.items():
+                    member = guild.get_member(user_id)
+                    if member:
+                        await badge_service.eval_twilight(member)
+                        
                     old_lvl = xp_service.get_level(data["old_xp"])
                     new_lvl = xp_service.get_level(data["new_xp"])
                     

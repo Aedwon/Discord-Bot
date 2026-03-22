@@ -45,9 +45,33 @@ class Database:
                 shop_discount FLOAT DEFAULT 0.0,
                 boost_start_date DATETIME DEFAULT NULL,
                 xp_locked BOOLEAN DEFAULT FALSE,
-                xp_lock_until DATETIME DEFAULT NULL
+                xp_lock_until DATETIME DEFAULT NULL,
+                badges TEXT,
+                consecutive_active_days INT DEFAULT 0,
+                last_active_date DATE DEFAULT NULL,
+                thanks_received INT DEFAULT 0,
+                lifetime_tokens INT DEFAULT 0,
+                consecutive_events_attended INT DEFAULT 0
             )
         ''')
+        
+        # Safe Migrations for new column additions
+        new_columns = [
+            ("badges", "TEXT"),
+            ("consecutive_active_days", "INT DEFAULT 0"),
+            ("last_active_date", "DATE DEFAULT NULL"),
+            ("thanks_received", "INT DEFAULT 0"),
+            ("lifetime_tokens", "INT DEFAULT 0"),
+            ("consecutive_events_attended", "INT DEFAULT 0")
+        ]
+        
+        for col_name, col_def in new_columns:
+            try:
+                await self.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}")
+                if col_name == "badges":
+                    await self.execute("UPDATE users SET badges = '[]' WHERE badges IS NULL")
+            except Exception:
+                pass
         
         await self.execute('''
             CREATE TABLE IF NOT EXISTS mod_logs (
@@ -57,6 +81,19 @@ class Database:
                 target_id BIGINT NOT NULL,
                 reason TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Thanks history for global and targeted cooldown tracking
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS thanks_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                sender_id BIGINT NOT NULL,
+                receiver_id BIGINT NOT NULL,
+                reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ths_sender (sender_id),
+                INDEX idx_ths_created (created_at)
             )
         ''')
         
