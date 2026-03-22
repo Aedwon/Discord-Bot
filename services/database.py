@@ -187,6 +187,128 @@ class Database:
                 PRIMARY KEY (event_id, channel_id)
             )
         ''')
+        
+        # ─── ANALYTICS ENGINE TABLES ────────────────────────────────────
+        
+        # Message metadata + content (30-day rolling window, purged nightly)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                author_id BIGINT NOT NULL,
+                content TEXT,
+                has_link BOOLEAN DEFAULT FALSE,
+                word_count SMALLINT DEFAULT 0,
+                is_deleted BOOLEAN DEFAULT FALSE,
+                hour_of_day TINYINT NOT NULL,
+                day_of_week TINYINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_am_created (created_at),
+                INDEX idx_am_channel (channel_id, created_at),
+                INDEX idx_am_author (author_id)
+            )
+        ''')
+        
+        # Voice session duration tracking
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_voice_sessions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                joined_at DATETIME NOT NULL,
+                left_at DATETIME DEFAULT NULL,
+                INDEX idx_avs_user (user_id),
+                INDEX idx_avs_channel (channel_id, joined_at)
+            )
+        ''')
+        
+        # Member join/leave with invite attribution
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_member_joins (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                invite_code VARCHAR(20) DEFAULT NULL,
+                inviter_id BIGINT DEFAULT NULL,
+                joined_at DATETIME NOT NULL,
+                left_at DATETIME DEFAULT NULL,
+                INDEX idx_amj_joined (joined_at)
+            )
+        ''')
+        
+        # Reaction engagement tracking
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_reactions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                message_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                emoji VARCHAR(100) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ar_created (created_at)
+            )
+        ''')
+        
+        # Event RSVP tracking
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_event_rsvps (
+                event_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                rsvped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (event_id, user_id)
+            )
+        ''')
+        
+        # Tracked link buttons (interceptor pattern for CTR)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_tracked_links (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                label VARCHAR(200) NOT NULL,
+                url TEXT NOT NULL,
+                message_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                created_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Per-user unique click deduplication
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_link_clicks (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                link_id INT NOT NULL,
+                user_id BIGINT NOT NULL,
+                clicked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_click (link_id, user_id)
+            )
+        ''')
+        
+        # Permanent daily aggregated summaries (never purged)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_daily_rollups (
+                date DATE PRIMARY KEY,
+                total_messages INT DEFAULT 0,
+                unique_messagers INT DEFAULT 0,
+                total_voice_minutes INT DEFAULT 0,
+                unique_voice_users INT DEFAULT 0,
+                new_joins INT DEFAULT 0,
+                new_leaves INT DEFAULT 0,
+                total_reactions INT DEFAULT 0,
+                total_threads INT DEFAULT 0
+            )
+        ''')
+        
+        # Keyword match tracking for sentiment export
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_keywords (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                keyword VARCHAR(100) NOT NULL,
+                channel_id BIGINT NOT NULL,
+                author_id BIGINT NOT NULL,
+                message_content TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ak_keyword (keyword, created_at)
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""

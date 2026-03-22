@@ -1,0 +1,269 @@
+"""
+Analytics Service — Query layer for aggregating community metrics.
+Handles retention calculations, peak hour analysis, sentiment exports, and rollup generation.
+All time boundaries aligned to Asia/Manila (UTC+8).
+"""
+
+import io
+from datetime import datetime, timedelta, timezone
+from services.database import db
+import logging
+
+logger = logging.getLogger("mlbb_bot.analytics_service")
+
+# Philippine Standard Time offset
+PHT = timezone(timedelta(hours=8))
+
+
+class AnalyticsService:
+
+    def now_pht(self) -> datetime:
+        """Get current time in Asia/Manila."""
+        return datetime.now(PHT)
+
+    # ─── MESSAGE METRICS ────────────────────────────────────────────
+
+    async def get_message_volume(self, days: int = 7) -> list:
+        """Message count per channel over the last N days."""
+        return await db.fetch_all('''
+            SELECT channel_id, COUNT(*) as msg_count, COUNT(DISTINCT author_id) as unique_authors
+            FROM analytics_messages
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY channel_id ORDER BY msg_count DESC LIMIT 15
+        ''', (days,))
+
+    async def get_peak_hours(self, days: int = 7) -> list:
+        """Heatmap data: message count by hour_of_day and day_of_week."""
+        return await db.fetch_all('''
+            SELECT hour_of_day, day_of_week, COUNT(*) as msg_count
+            FROM analytics_messages
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY hour_of_day, day_of_week
+        ''', (days,))
+
+    async def get_communicator_ratio(self, guild_member_count: int, days: int = 7) -> dict:
+        """Calculate visitor vs communicator ratio."""
+        msg_users = await db.fetch_one('''
+            SELECT COUNT(DISTINCT author_id) as c FROM analytics_messages
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+        ''', (days,))
+        voice_users = await db.fetch_one('''
+            SELECT COUNT(DISTINCT user_id) as c FROM analytics_voice_sessions
+            WHERE joined_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+        ''', (days,))
+        msg_c = msg_users['c'] if msg_users else 0
+        voice_c = voice_users['c'] if voice_users else 0
+        # Union of message + voice users is an approximation (some overlap)
+        communicators = msg_c + voice_c  # Upper bound; exact would need UNION query
+        ratio = (communicators / guild_member_count * 100) if guild_member_count > 0 else 0
+        return {"communicators": communicators, "total": guild_member_count, "ratio": round(ratio, 1)}
+
+    # ─── RETENTION ──────────────────────────────────────────────────
+
+    async def get_retention(self, day_n: int) -> dict:
+        """Calculate Day-N retention: of users who joined N days ago, how many messaged since?"""
+        target_date = self.now_pht() - timedelta(days=day_n)
+        date_str = target_date.strftime('%Y-%m-%d')
+        
+        joined = await db.fetch_one('''
+            SELECT COUNT(*) as c FROM analytics_member_joins
+            WHERE DATE(joined_at) = %s
+        ''', (date_str,))
+        
+        retained = await db.fetch_one('''
+            SELECT COUNT(DISTINCT am.author_id) as c
+            FROM analytics_messages am
+            INNER JOIN analytics_member_joins amj ON am.author_id = amj.user_id
+            WHERE DATE(amj.joined_at) = %s AND am.created_at > amj.joined_at
+        ''', (date_str,))
+        
+        total = joined['c'] if joined else 0
+        kept = retained['c'] if retained else 0
+        rate = (kept / total * 100) if total > 0 else 0
+        return {"joined": total, "retained": kept, "rate": round(rate, 1)}
+
+    # ─── INVITE ATTRIBUTION ─────────────────────────────────────────
+
+    async def get_top_invites(self, days: int = 30) -> list:
+        """Top invite codes by join count."""
+        return await db.fetch_all('''
+            SELECT invite_code, inviter_id, COUNT(*) as join_count
+            FROM analytics_member_joins
+            WHERE invite_code IS NOT NULL AND joined_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY invite_code, inviter_id ORDER BY join_count DESC LIMIT 10
+        ''', (days,))
+
+    # ─── VOICE METRICS ──────────────────────────────────────────────
+
+    async def get_voice_stats(self, days: int = 7) -> list:
+        """Top channels by total voice minutes."""
+        return await db.fetch_all('''
+            SELECT channel_id,
+                   ROUND(SUM(TIMESTAMPDIFF(MINUTE, joined_at, COALESCE(left_at, NOW())))) as total_minutes,
+                   COUNT(DISTINCT user_id) as unique_users
+            FROM analytics_voice_sessions
+            WHERE joined_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY channel_id ORDER BY total_minutes DESC LIMIT 10
+        ''', (days,))
+
+    # ─── EVENT RSVP CONVERSION ──────────────────────────────────────
+
+    async def get_event_conversion(self, event_id: int) -> dict:
+        """RSVP vs actual attendance for an event."""
+        rsvps = await db.fetch_one(
+            "SELECT COUNT(*) as c FROM analytics_event_rsvps WHERE event_id = %s", (event_id,))
+        attendees = await db.fetch_one(
+            "SELECT COUNT(DISTINCT user_id) as c FROM guild_event_rewards WHERE event_id = %s", (event_id,))
+        r = rsvps['c'] if rsvps else 0
+        a = attendees['c'] if attendees else 0
+        rate = (a / r * 100) if r > 0 else 0
+        return {"rsvps": r, "attendees": a, "conversion": round(rate, 1)}
+
+    # ─── LINK CTR ───────────────────────────────────────────────────
+
+    async def get_link_ctr(self, link_id: int) -> dict:
+        """Click-through stats for a tracked link."""
+        clicks = await db.fetch_one(
+            "SELECT COUNT(*) as c FROM analytics_link_clicks WHERE link_id = %s", (link_id,))
+        link = await db.fetch_one(
+            "SELECT label, url, created_at FROM analytics_tracked_links WHERE id = %s", (link_id,))
+        return {
+            "clicks": clicks['c'] if clicks else 0,
+            "label": link['label'] if link else "Unknown",
+            "url": link['url'] if link else "",
+        }
+
+    # ─── SENTIMENT EXPORT ───────────────────────────────────────────
+
+    async def generate_sentiment_export(self, guild, days: int = 1) -> io.BytesIO:
+        """
+        Generate a structured .txt file of messages for LLM sentiment analysis.
+        Groups by channel, sorted chronologically within each channel.
+        """
+        cutoff = self.now_pht() - timedelta(days=days)
+        cutoff_str = cutoff.strftime('%Y-%m-%d %H:%M:%S')
+
+        rows = await db.fetch_all('''
+            SELECT channel_id, author_id, content, is_deleted, created_at
+            FROM analytics_messages
+            WHERE created_at >= %s
+            ORDER BY channel_id, created_at
+        ''', (cutoff_str,))
+
+        # Group by channel
+        channels = {}
+        for row in rows:
+            cid = row['channel_id']
+            if cid not in channels:
+                channels[cid] = []
+            channels[cid].append(row)
+
+        # Build export
+        end_date = self.now_pht().strftime('%Y-%m-%d')
+        start_date = cutoff.strftime('%Y-%m-%d')
+        period = "Daily" if days == 1 else f"{days}-Day"
+        
+        lines = []
+        lines.append(f"=== Community Sentiment Report: {start_date} to {end_date} (Asia/Manila) ===")
+        lines.append(f"=== Period: {period} | Total Messages: {len(rows)} ===")
+        lines.append("")
+
+        for cid, messages in channels.items():
+            # Resolve channel name
+            ch = guild.get_channel(cid)
+            ch_name = f"#{ch.name}" if ch else f"#unknown-{cid}"
+            lines.append(f"--- {ch_name} ({len(messages)} messages) ---")
+            for msg in messages:
+                ts = msg['created_at'].strftime('%H:%M') if msg['created_at'] else "??:??"
+                member = guild.get_member(msg['author_id'])
+                author = member.display_name if member else str(msg['author_id'])
+                content = msg['content'] or "[empty]"
+                deleted_tag = " [DELETED]" if msg['is_deleted'] else ""
+                lines.append(f"[{ts}] {author}: {content}{deleted_tag}")
+            lines.append("")
+
+        text = "\n".join(lines)
+        buffer = io.BytesIO(text.encode('utf-8-sig'))  # BOM for Excel compatibility
+        buffer.seek(0)
+        return buffer
+
+    # ─── DAILY ROLLUP ───────────────────────────────────────────────
+
+    async def run_daily_rollup(self):
+        """Aggregate yesterday's raw data into permanent daily summaries."""
+        yesterday = (self.now_pht() - timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        msgs = await db.fetch_one('''
+            SELECT COUNT(*) as total, COUNT(DISTINCT author_id) as uniq
+            FROM analytics_messages WHERE DATE(created_at) = %s
+        ''', (yesterday,))
+        
+        voice = await db.fetch_one('''
+            SELECT COALESCE(ROUND(SUM(TIMESTAMPDIFF(MINUTE, joined_at, COALESCE(left_at, NOW())))), 0) as mins,
+                   COUNT(DISTINCT user_id) as uniq
+            FROM analytics_voice_sessions WHERE DATE(joined_at) = %s
+        ''', (yesterday,))
+        
+        joins = await db.fetch_one(
+            "SELECT COUNT(*) as c FROM analytics_member_joins WHERE DATE(joined_at) = %s", (yesterday,))
+        leaves = await db.fetch_one(
+            "SELECT COUNT(*) as c FROM analytics_member_joins WHERE DATE(left_at) = %s", (yesterday,))
+        reactions = await db.fetch_one(
+            "SELECT COUNT(*) as c FROM analytics_reactions WHERE DATE(created_at) = %s", (yesterday,))
+
+        await db.execute('''
+            INSERT INTO analytics_daily_rollups 
+            (date, total_messages, unique_messagers, total_voice_minutes, unique_voice_users, new_joins, new_leaves, total_reactions)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                total_messages = VALUES(total_messages),
+                unique_messagers = VALUES(unique_messagers),
+                total_voice_minutes = VALUES(total_voice_minutes),
+                unique_voice_users = VALUES(unique_voice_users),
+                new_joins = VALUES(new_joins),
+                new_leaves = VALUES(new_leaves),
+                total_reactions = VALUES(total_reactions)
+        ''', (
+            yesterday,
+            msgs['total'] if msgs else 0,
+            msgs['uniq'] if msgs else 0,
+            voice['mins'] if voice else 0,
+            voice['uniq'] if voice else 0,
+            joins['c'] if joins else 0,
+            leaves['c'] if leaves else 0,
+            reactions['c'] if reactions else 0,
+        ))
+        logger.info(f"Daily rollup completed for {yesterday}")
+
+    async def purge_old_messages(self, retention_days: int = 30):
+        """Auto-purge raw message data older than retention window."""
+        await db.execute('''
+            DELETE FROM analytics_messages 
+            WHERE created_at < DATE_SUB(NOW(), INTERVAL %s DAY)
+        ''', (retention_days,))
+        logger.info(f"Purged analytics_messages older than {retention_days} days")
+
+    # ─── OVERVIEW ───────────────────────────────────────────────────
+
+    async def get_overview(self, days: int = 7) -> dict:
+        """Compound overview stats for the last N days."""
+        rollups = await db.fetch_all('''
+            SELECT * FROM analytics_daily_rollups
+            WHERE date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+            ORDER BY date DESC
+        ''', (days,))
+        
+        totals = {
+            "messages": sum(r['total_messages'] for r in rollups),
+            "communicators": max((r['unique_messagers'] for r in rollups), default=0),
+            "voice_minutes": sum(r['total_voice_minutes'] for r in rollups),
+            "joins": sum(r['new_joins'] for r in rollups),
+            "leaves": sum(r['new_leaves'] for r in rollups),
+            "reactions": sum(r['total_reactions'] for r in rollups),
+            "days_tracked": len(rollups),
+        }
+        return totals
+
+
+# Singleton export
+analytics_service = AnalyticsService()

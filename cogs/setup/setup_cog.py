@@ -254,5 +254,24 @@ class SetupCog(commands.Cog, name="Setup"):
         await settings_service.set("eos_reset_triggered", "1")
         await inter.response.send_message("🚨 **Global System Notification:** EOS Array mathematically toggled. The background daemon will intercept and globally erase Seasonal standings.", ephemeral=True)
 
+    @setup_group.command(name="analytics_sentiment_channel", description="Set the channel for automatic daily sentiment exports.")
+    async def setup_sentiment_channel(self, inter: discord.Interaction, channel: discord.TextChannel):
+        await settings_service.set("analytics_sentiment_channel", str(channel.id))
+        await inter.response.send_message(f"✅ Daily sentiment exports will auto-post to {channel.mention}.", ephemeral=True)
+
+    @setup_group.command(name="analytics_tracked_roles", description="Set which opt-in roles to track adoption rates for.")
+    async def setup_tracked_roles(self, inter: discord.Interaction, role1: discord.Role, role2: discord.Role = None, role3: discord.Role = None, role4: discord.Role = None, role5: discord.Role = None):
+        roles = [r for r in [role1, role2, role3, role4, role5] if r]
+        role_ids = ",".join(str(r.id) for r in roles)
+        await settings_service.set("analytics_tracked_roles", role_ids)
+        names = ", ".join(f"**{r.name}**" for r in roles)
+        await inter.response.send_message(f"✅ Now tracking adoption rates for: {names}", ephemeral=True)
+
+    @setup_group.command(name="analytics_regions", description="Set which role names represent geographic regions.")
+    async def setup_regions(self, inter: discord.Interaction, region_roles: str):
+        """Comma-separated list of role names that represent regions (e.g. 'Luzon,Visayas,Mindanao,SEA,Europe')"""
+        await settings_service.set("analytics_region_roles", region_roles)
+        await inter.response.send_message(f"✅ Region roles configured: `{region_roles}`", ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))
