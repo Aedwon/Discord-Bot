@@ -324,6 +324,25 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
                 except discord.Forbidden:
                     pass
         
+        # Send Welcome DM
+        try:
+            welcome_text = (
+                "🚀 **Thank you for boosting the MSL Network!**\n\n"
+                "Greetings, and thank you for your incredible support! By boosting the server, you’ve just taken your place among the celestial ranks of the MSL Network.\n\n"
+                "As a **Tier 1 Server Booster**, your premium perks are active immediately. Here is what you just unlocked:\n"
+                "💰 **The Imperial Multiplier:** You now earn 1.5x XP and 1.5x MSL Tokens (coming soon) on all passive activity, daily check-ins, and quests.\n"
+                "🛍️ **The Imperial Discount:** Enjoy a permanent 20% discount on everything in the MSL Token Shop (coming soon).\n"
+                "💎 **Weekly Diamond Raffle:** You are officially entered into our premium weekly drawing (25 winners of 100 Diamonds each week), with a guarantee to win at least once a month!\n"
+                "🎁 **Daily Loot:** You now receive one free Moniyan Mystery Pouch automatically every single day.\n"
+                "🎨 **Exclusive Booster Colors:** Stand out in the chat! Use the `/booster-color` command to choose from 15 exclusive premium color roles.\n"
+                "🛡️ **VIP Access & Status:** You've been granted the hoisted \"Server Booster\" role, your permanent \"S1 Booster\" badge, and access to the exclusive #booster-chat and #booster-lounge voice channel.\n\n"
+                "*Pro-Tip: Your perks level up the longer you support the server! Maintaining your boost streak will eventually unlock Tier 2 (Veteran) and Tier 3 (Mythic) status, granting up to a 2.0x economic multiplier and massively multiplying your Diamond Raffle tickets.*\n\n"
+                "Thank you for helping us build the ultimate collegiate esports hub in the Philippines. See you in the Land of Dawn!"
+            )
+            await member.send(welcome_text)
+        except discord.Forbidden:
+            print(f"[BoostTracker] Could not DM {member.display_name} (DMs disabled).")
+            
         print(f"[BoostTracker] {member.display_name} boosted! Badge added.")
     
     async def _handle_boost_expired(self, member: discord.Member):
@@ -371,6 +390,18 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
                 except discord.Forbidden:
                     pass
         
+        # Send Expiration/Grace Period DM
+        try:
+            expire_text = (
+                "🌌 **A Light Dims...**\n\n"
+                "Hello! It looks like your server boost for the MSL Network has just expired or was moved to another server.\n\n"
+                "We have safely stored your total XP, Tokens, Event Points, and progression history, however, your Imperial Multipliers and Booster Raffle Entries have been paused.\n\n"
+                "If this was a billing error with Discord, renewing your boost within the next 3 days will instantly restore your precise streak and Tier status! Thank you for the time you spent supporting our collegiate esports hub!"
+            )
+            await member.send(expire_text)
+        except discord.Forbidden:
+            print(f"[BoostTracker] Could not DM {member.display_name} about boost expiration (DMs disabled).")
+
         print(f"[BoostTracker] {member.display_name}'s boost expired. Perks removed, badges kept.")
     
     # ─────────────────────────────────────────────────────────────────────
@@ -405,6 +436,22 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
                     WHERE user_id = %s
                 ''', (tier["token_multiplier"], tier["raffle_entries"], member.id))
                 print(f"[BoostTracker] Promoted {member.display_name} to {tier['name']}")
+                
+                # Send Tier Upgrade DM
+                try:
+                    discount_text = f"Maintained at a massive {int(tier['shop_discount']*100)}% discount"
+                    upgrade_dm = (
+                        f"🌟 **Ascension Achieved: {tier['name']}!**\n\n"
+                        f"Greetings! You have continuously supported the MSL Network for {months} months, elevating your status to **{tier['name']}**.\n\n"
+                        "Here is what has been upgraded mathematically in your account:\n"
+                        f"💰 **The Imperial Multiplier:** Increased to {tier['xp_multiplier']}x XP and Tokens.\n"
+                        f"🛍️ **The Imperial Discount:** {discount_text} in the shop.\n"
+                        f"🎟️ **Diamond Raffle Entries:** You now receive {tier['raffle_entries']} raffle tickets automatically every single week, drastically improving your odds!\n\n"
+                        "Thank you for your enduring loyalty to the MSL Network!"
+                    )
+                    await member.send(upgrade_dm)
+                except discord.Forbidden:
+                    print(f"[BoostTracker] Could not DM {member.display_name} about tier upgrade (DMs disabled).")
                 
                 # Send public upgrade announcement
                 public_channel_id = await self._get_boost_public_channel_id()
