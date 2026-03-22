@@ -45,11 +45,8 @@ class PersistentEventView(discord.ui.View):
             if affected_rows == 0:
                 return await interaction.followup.send("❌ You have already securely claimed your participation points for this event!")
             
-            await db.execute("""
-                INSERT INTO users (user_id, xp, tokens, event_points) 
-                VALUES (%s, 0, 0, %s)
-                ON DUPLICATE KEY UPDATE event_points = event_points + VALUES(event_points)
-            """, (user_id, ep_amount))
+            from services.ep_service import ep_service
+            await ep_service.process_ep_update(interaction.guild, user_id, ep_amount)
             
             await interaction.followup.send(f"✅ Successfully claimed **{ep_amount} Participation EP**! Thank you for natively participating!")
             
@@ -247,11 +244,8 @@ class EventCog(commands.GroupCog, name="event"):
 
         try:
             await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", (event_id_int, user.id, placement, bonus_to_award))
-            await db.execute("""
-                INSERT INTO users (user_id, xp, tokens, event_points) 
-                VALUES (%s, 0, 0, %s)
-                ON DUPLICATE KEY UPDATE event_points = event_points + VALUES(event_points)
-            """, (user.id, bonus_to_award))
+            from services.ep_service import ep_service
+            await ep_service.process_ep_update(interaction.guild, user.id, bonus_to_award)
             
             discord_event = interaction.guild.get_scheduled_event(event_id_int)
             event_name = discord_event.name if discord_event else f"Event Profile {event_id}"
@@ -282,7 +276,8 @@ class EventCog(commands.GroupCog, name="event"):
         if total_revoked == 0: return await interaction.followup.send(f"❌ User has 0 EP traced to this event.")
             
         await db.execute("DELETE FROM guild_event_rewards WHERE event_id = %s AND user_id = %s", (event_id_int, user.id))
-        await db.execute("UPDATE users SET event_points = GREATEST(0, event_points - %s) WHERE user_id = %s", (total_revoked, user.id))
+        from services.ep_service import ep_service
+        await ep_service.process_ep_update(interaction.guild, user.id, -total_revoked)
         
         await self.send_audit_log(interaction, "Payout UNDO", f"**Admin:** {interaction.user.mention}\n**Target:** {user.mention}\n**Erased:** `{total_revoked} EP`", discord.Color.red())
         await interaction.followup.send(f"🚨 **Revocation Complete:** Stripped `{total_revoked} EP` from {user.mention}.")

@@ -33,27 +33,19 @@ class Database:
         return self._pool
     
     async def _init_tables(self):
-        """Create tables if they don't exist."""
+        # Users table for XP logging, Economy tokens, and native Event Points
         await self.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 xp INT DEFAULT 0,
                 tokens INT DEFAULT 0,
+                event_points INT DEFAULT 0,
+                last_ep_update DATETIME DEFAULT CURRENT_TIMESTAMP,
                 xp_multiplier FLOAT DEFAULT 1.0,
-                token_multiplier FLOAT DEFAULT 1.0,
                 shop_discount FLOAT DEFAULT 0.0,
                 boost_start_date DATETIME DEFAULT NULL,
-                badges TEXT,
-                color_role_id BIGINT DEFAULT NULL,
-                emblem_role_id BIGINT DEFAULT NULL,
-                raffle_entries INT DEFAULT 0,
-                pouches_today INT DEFAULT 0,
-                last_pouch_date DATE DEFAULT NULL,
-                xp_locked TINYINT DEFAULT 0,
+                xp_locked BOOLEAN DEFAULT FALSE,
                 xp_lock_until DATETIME DEFAULT NULL,
-                is_restricted TINYINT DEFAULT 0,
-                event_points INT DEFAULT 0
-            )
         ''')
         
         await self.execute('''

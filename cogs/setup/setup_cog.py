@@ -218,5 +218,41 @@ class SetupCog(commands.Cog, name="Setup"):
         embed.set_footer(text=f"Total Successfully Hard-Linked: {found}/21 Roles")
         await inter.followup.send(embed=embed)
 
+    @setup_group.command(name="ep_roles", description="Auto-map the 9 MLBB Event Tiers (Warrior -> Mythical Immortal).")
+    async def setup_ep_roles(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True)
+        expected = ["Warrior", "Elite", "Master", "Grandmaster", "Epic", "Legend", "Mythic", "Mythical Glory", "Mythical Immortal"]
+        found, log = 0, []
+        for name in expected:
+            role = discord.utils.get(inter.guild.roles, name=name)
+            if role:
+                await settings_service.set(f"ep_role_{name.replace(' ', '_')}", str(role.id))
+                found += 1
+                log.append(f"✅ Extracted: **{name}**")
+            else: log.append(f"❌ Missing: **{name}**")
+        embed = discord.Embed(title="⚙️ MLBB Tiers Auto-Mapped", description="\n".join(log), color=discord.Color.blue())
+        await inter.followup.send(embed=embed)
+
+    @setup_group.command(name="legacy_badges", description="Auto-map the 9 End-of-Season non-expiring baseline badges.")
+    async def setup_legacy(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True)
+        expected = ["Warrior", "Elite", "Master", "Grandmaster", "Epic", "Legend", "Mythic", "Mythical Glory", "Mythical Immortal"]
+        found, log = 0, []
+        for name in expected:
+            role = discord.utils.get(inter.guild.roles, name=f"Legacy {name}")
+            if role:
+                await settings_service.set(f"legacy_badge_{name.replace(' ', '_')}", str(role.id))
+                found += 1
+                log.append(f"✅ Extracted: **Legacy {name}**")
+            else: log.append(f"❌ Missing: **Legacy {name}**")
+        embed = discord.Embed(title="⚙️ EOS Badges Auto-Mapped", description="\n".join(log), color=discord.Color.gold())
+        await inter.followup.send(embed=embed)
+        
+    @setup_group.command(name="trigger_eos", description="Administrators only: Force trigger the global 90-day Season Rebuild.")
+    @app_commands.default_permissions(administrator=True)
+    async def trigger_eos(self, inter: discord.Interaction):
+        await settings_service.set("eos_reset_triggered", "1")
+        await inter.response.send_message("🚨 **Global System Notification:** EOS Array mathematically toggled. The background daemon will intercept and globally erase Seasonal standings.", ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))
