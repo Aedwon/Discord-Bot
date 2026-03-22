@@ -18,7 +18,7 @@ import pytz
 
 from services.database import db
 from utils.constants import TZ_MANILA
-from utils.views import CancelScheduledEmbedView
+from utils.views import ManageScheduledEmbedView
 
 logger = logging.getLogger('mlbb_bot')
 
@@ -421,10 +421,10 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: `{e}`", ephemeral=True)
 
-    @app_commands.command(name="cancel_embed", description="Cancel a scheduled embed")
+    @app_commands.command(name="manage_embeds", description="View, preview, and manage your scheduled embeds")
     @app_commands.default_permissions(administrator=True)
-    async def cancel_embed(self, interaction: discord.Interaction):
-        """Cancel a pending scheduled embed."""
+    async def manage_embeds(self, interaction: discord.Interaction):
+        """Manage pending scheduled embeds."""
         rows = await db.fetch_all(
             "SELECT identifier, schedule_for FROM scheduled_embeds WHERE user_id = %s AND status = 'pending'",
             (interaction.user.id,)
@@ -433,14 +433,79 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         if not rows:
             await interaction.response.send_message("❌ You have no pending scheduled embeds.", ephemeral=True)
             return
+            
+        view = ManageScheduledEmbedView(rows, self, interaction.user)
+        await interaction.response.send_message("Select an embed to preview and manage:", view=view, ephemeral=True)
         
-        view = CancelScheduledEmbedView(rows, self, interaction.user)
-        await interaction.response.send_message("Select an embed to cancel:", view=view, ephemeral=True)
-    
+    async def preview_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
+        row = await db.fetch_one("SELECT content, embed_json, UNIX_TIMESTAMP(schedule_for) as sched_unix FROM scheduled_embeds WHERE identifier = %s", (identifier,))
+        if not row:
+            await interaction.response.edit_message(content="❌ Could not find that embed.", embeds=[], view=None)
+            return
+            
+        try:
+            payload = json.loads(row['embed_json'])
+            content = row['content']
+            unix_time = int(row['sched_unix'])
+            time_str = f"<t:{unix_time}:F> (<t:{unix_time}:R>)"
+            
+            # The database saves just "embeds" and "components"
+            embeds = [discord.Embed.from_dict(e) for e in payload.get("embeds", [])]
+            
+            # Prepend preview warning
+            if content:
+                content = f"**[PREVIEW FOR `{identifier}`]**\n**Scheduled for:** {time_str}\n\n{content}"
+            else:
+                content = f"**[PREVIEW FOR `{identifier}`]**\n**Scheduled for:** {time_str}"
+                
+            from utils.views import ManageEmbedActionView
+            action_view = ManageEmbedActionView(identifier, self, interaction.user)
+            
+            await interaction.response.edit_message(content=content, embeds=embeds, view=action_view)
+        except Exception as e:
+            await interaction.response.edit_message(content=f"❌ Error previewing embed: `{e}`", embeds=[], view=None)
+            
     async def cancel_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
         """Actually cancel the embed (called from the view)."""
         await db.execute("DELETE FROM scheduled_embeds WHERE identifier = %s", (identifier,))
-        await interaction.response.send_message(f"✅ Cancelled scheduled embed `{identifier}`.", ephemeral=True)
+        await interaction.response.edit_message(content=f"🗑️ Cancelled and deleted scheduled embed `{identifier}`.", embeds=[], view=None)
+
+    async def post_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
+        """Instantly post a scheduled embed right now."""
+        row = await db.fetch_one(
+            "SELECT channel_id, user_id, content, embed_json FROM scheduled_embeds WHERE identifier = %s AND status = 'pending'",
+            (identifier,)
+        )
+        if not row:
+            await interaction.response.edit_message(content="❌ Could not find that pending embed.", embeds=[], view=None)
+            return
+            
+        try:
+            channel = self.bot.get_channel(row['channel_id'])
+            if not channel:
+                channel = await self.bot.fetch_channel(row['channel_id'])
+                
+            data = json.loads(row['embed_json'])
+            
+            embeds = [discord.Embed.from_dict(e) for e in data.get("embeds", [])]
+            view = discohook_to_view(data.get("components", []))
+            content = row['content']
+            
+            sent_msg = await channel.send(content=content, embeds=embeds, view=view)
+            
+            await db.execute(
+                "UPDATE scheduled_embeds SET status = 'sent' WHERE identifier = %s",
+                (identifier,)
+            )
+            
+            await interaction.response.edit_message(
+                content=f"✅ **Sent instantly!** Scheduled embed `{identifier}` has been published to {channel.mention}.",
+                embeds=[],
+                view=None
+            )
+        except Exception as e:
+            logger.error(f"Failed to force post embed {identifier}: {e}")
+            await interaction.response.edit_message(content=f"❌ Error posting embed: `{e}`", embeds=[], view=None)
     
     @app_commands.command(name="set_embed_log", description="Set the channel for scheduled embed logs")
     @app_commands.default_permissions(administrator=True)
