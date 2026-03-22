@@ -160,6 +160,7 @@ async def load_extensions():
     cog_modules = [
         "cogs.leveling.xp_cog",
         "cogs.moderation.mod_cog",
+        "cogs.moderation.log_cog",
         "cogs.tracker.boost_cog",
         "cogs.setup.setup_cog",
         "cogs.embed_cog",
@@ -184,6 +185,8 @@ async def reload(inter: discord.Interaction, cog: str = None):
         "leveling": "cogs.leveling.xp_cog",
         "mod": "cogs.moderation.mod_cog",
         "moderation": "cogs.moderation.mod_cog",
+        "logs": "cogs.moderation.log_cog",
+        "logging": "cogs.moderation.log_cog",
         "boost": "cogs.tracker.boost_cog",
         "tracker": "cogs.tracker.boost_cog",
         "setup": "cogs.setup.setup_cog",
