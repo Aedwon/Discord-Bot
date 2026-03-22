@@ -405,6 +405,22 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
                     WHERE user_id = %s
                 ''', (tier["token_multiplier"], tier["raffle_entries"], member.id))
                 print(f"[BoostTracker] Promoted {member.display_name} to {tier['name']}")
+                
+                # Send public upgrade announcement
+                public_channel_id = await self._get_boost_public_channel_id()
+                if public_channel_id:
+                    channel = self.bot.get_channel(public_channel_id)
+                    if channel:
+                        public_embed = discord.Embed(
+                            title="🌟 Celestial Ascension!",
+                            description=f"**{member.display_name}** has reached a new height of devotion and is now a **{tier['name']}**!\n*Their light shines brighter than ever!*",
+                            color=0xFFD700
+                        )
+                        public_embed.set_thumbnail(url=member.display_avatar.url)
+                        try:
+                            await channel.send(embed=public_embed)
+                        except discord.Forbidden:
+                            pass
     
     @check_tier_promotions.before_loop
     async def before_tier_check(self):
