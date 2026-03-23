@@ -96,5 +96,48 @@ class TestCog(commands.Cog, name="Test Commands"):
         )
         await interaction.response.send_message(msg, ephemeral=True)
 
+    @test_group.command(name="xp-dryrun", description="Simulates an XP message to see why you aren't getting XP")
+    async def xp_dryrun(self, interaction: discord.Interaction, test_message_content: str = "This is a 10 char msg"):
+        from services.verification_service import verification_service
+        from services.settings_service import settings_service
+        from config import XP_CONFIG
+        
+        xp_cog = interaction.client.get_cog("Leveling")
+        
+        reasons = []
+        # Check XP Enabled
+        enabled = await settings_service.get_int("xp_system_enabled") == 1
+        if not enabled: reasons.append("❌ XP System is disabled globally.")
+        else: reasons.append("✅ XP System is enabled.")
+            
+        # Check Verification
+        verified = verification_service.is_verified(interaction.user.id)
+        if not verified: reasons.append("❌ You are not in the Verified Cache.")
+        else: reasons.append("✅ You are verified.")
+            
+        # Check Length
+        min_len = XP_CONFIG["message"]["min_length"]
+        if len(test_message_content) < min_len: reasons.append(f"❌ Message too short ({len(test_message_content)} < {min_len}).")
+        else: reasons.append("✅ Message meets minimum length.")
+            
+        # Check Bot Channel
+        bot_chan = await settings_service.get_int("bot_channel_id")
+        if interaction.channel_id == bot_chan: reasons.append("❌ You are typing in the designated Bot Channel (ignored).")
+        else: reasons.append("✅ You are not in the Bot Channel.")
+            
+        # Check Cooldown
+        if xp_cog:
+            if interaction.user.id in xp_cog.gained_msg_xp: reasons.append("❌ You are currently on Cooldown (in gained_msg_xp).")
+            else: reasons.append("✅ You are not on Cooldown.")
+                
+            loop_state = xp_cog.batch_update_db.is_running()
+            if not loop_state: reasons.append("❌ The Background Task Loop IS DEAD! It will never process XP or clear your cooldown.")
+            else: reasons.append("✅ The Background Task Loop is healthy and running.")
+        else:
+            reasons.append("❌ Leveling Cog is missing.")
+
+        await interaction.response.send_message("\n".join(reasons), ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(TestCog(bot))
+
