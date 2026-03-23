@@ -127,6 +127,12 @@ class XpCog(commands.Cog, name="Leveling"):
             self.gained_msg_xp.add(user_id)
             xp_amount = randint(msg_config["min_xp"], msg_config["max_xp"])
             self.pending_xp[user_id] = self.pending_xp.get(user_id, 0) + xp_amount
+            
+            if message.content.startswith("Xptest"):
+                await message.reply(f"🚀 **LIVE DEBUG:** Message approved! You earned `{xp_amount}` XP! (It is now in my RAM waiting for the 10s batch cycle to push to the database)", delete_after=15)
+        else:
+            if message.content.startswith("Xptest"):
+                await message.reply(f"⏳ **LIVE DEBUG:** You are in `gained_msg_xp` (cooldown phase). You must wait for the background loop to clear this before earning again.", delete_after=15)
     
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):

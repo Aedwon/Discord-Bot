@@ -88,10 +88,10 @@ class XpService:
             INSERT INTO users (user_id, xp, consecutive_active_days, last_active_date) 
             VALUES (%s, %s, 1, CURDATE())
             ON DUPLICATE KEY UPDATE 
-                xp = xp + VALUES(xp),
-                consecutive_active_days = IF(last_active_date = CURDATE(), consecutive_active_days, IF(last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), consecutive_active_days + 1, 1)),
+                xp = users.xp + %s,
+                consecutive_active_days = IF(users.last_active_date = CURDATE(), users.consecutive_active_days, IF(users.last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), users.consecutive_active_days + 1, 1)),
                 last_active_date = CURDATE()
-        ''', (user_id, final_xp))
+        ''', (user_id, final_xp, final_xp))
         
         result = await db.fetch_one(
             'SELECT xp FROM users WHERE user_id = %s', 
@@ -130,10 +130,10 @@ class XpService:
                 INSERT INTO users (user_id, xp, consecutive_active_days, last_active_date) 
                 VALUES (%s, %s, 1, CURDATE())
                 ON DUPLICATE KEY UPDATE 
-                    xp = xp + VALUES(xp),
-                    consecutive_active_days = IF(last_active_date = CURDATE(), consecutive_active_days, IF(last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), consecutive_active_days + 1, 1)),
+                    xp = users.xp + %s,
+                    consecutive_active_days = IF(users.last_active_date = CURDATE(), users.consecutive_active_days, IF(users.last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), users.consecutive_active_days + 1, 1)),
                     last_active_date = CURDATE()
-            ''', (user_id, final_xp))
+            ''', (user_id, final_xp, final_xp))
             
             new_xp = await self.get_xp(user_id)
             results[user_id] = {"old_xp": old_xp, "new_xp": new_xp}
