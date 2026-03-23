@@ -244,7 +244,8 @@ class XpService:
             
         # Ensure row exists first
         await db.execute('''
-            INSERT IGNORE INTO users (user_id) VALUES (%s)
+            INSERT INTO users (user_id) VALUES (%s)
+            ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)
         ''', (user_id,))
         
         query = f"UPDATE users SET {', '.join(updates)} WHERE user_id = %s"

@@ -47,7 +47,7 @@ class TrackedLinkButton(discord.ui.Button):
         # Increment click counter (unique per user via UNIQUE KEY)
         try:
             await db.execute(
-                "INSERT IGNORE INTO analytics_link_clicks (link_id, user_id) VALUES (%s, %s)",
+                "INSERT INTO analytics_link_clicks (link_id, user_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE link_id = VALUES(link_id)",
                 (self.link_id, interaction.user.id)
             )
         except Exception:
@@ -277,7 +277,7 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             return
         try:
             await db.execute(
-                "INSERT IGNORE INTO analytics_event_rsvps (event_id, user_id) VALUES (%s, %s)",
+                "INSERT INTO analytics_event_rsvps (event_id, user_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE event_id = VALUES(event_id)",
                 (event.id, user.id)
             )
         except Exception:

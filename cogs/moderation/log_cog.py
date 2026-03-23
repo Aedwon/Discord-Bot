@@ -77,9 +77,10 @@ class LogCog(commands.Cog, name="Logging"):
         
         try:
             await db.execute('''
-                INSERT IGNORE INTO message_cache 
+                INSERT INTO message_cache 
                 (message_id, channel_id, author_id, author_name, author_avatar, content, media_urls)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE message_id = VALUES(message_id)
             ''', (message.id, message.channel.id, message.author.id, message.author.name, avatar, message.content or "", media))
         except Exception as e:
             logger.error(f"Failed to insert message to cache: {e}")

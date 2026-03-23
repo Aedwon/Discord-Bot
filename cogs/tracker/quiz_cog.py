@@ -451,7 +451,7 @@ class QuizCog(commands.Cog, name="quiz"):
                     from services.ep_service import ep_service
                     await ep_service.process_ep_update(guild, user_id, ep)
                     await db.execute(
-                        "INSERT IGNORE INTO quiz_payouts (user_id, payout_date, ep_awarded) VALUES (%s, %s, %s)",
+                        "INSERT INTO quiz_payouts (user_id, payout_date, ep_awarded) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)",
                         (user_id, today_str, ep)
                     )
                     line = f"{medal} {name} — **{score} pts** | +**{ep} EP** ✅"

@@ -29,8 +29,10 @@ class BadgeService:
             badges.append(badge_name)
             
             # Ensure the user row exists to prevent update failure on new profiles
-            await db.execute("INSERT IGNORE INTO users (user_id) VALUES (%s)", (member.id,))
-            await db.execute("UPDATE users SET badges = %s WHERE user_id = %s", (json.dumps(badges), member.id))
+            await db.execute(
+                "INSERT INTO users (user_id, badges) VALUES (%s, %s) ON DUPLICATE KEY UPDATE badges = %s",
+                (member.id, json.dumps(badges), json.dumps(badges))
+            )
             logger.info(f"[BadgeService] Granted '{badge_name}' to {member.id}")
 
         if role_setting_key:

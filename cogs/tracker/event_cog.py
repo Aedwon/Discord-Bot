@@ -38,7 +38,7 @@ class PersistentEventView(discord.ui.View):
                 return await interaction.followup.send("❌ You already received a high-tier Placement reward for this event! Participation points do not geometrically stack with placement victories.")
                  
             affected_rows = await db.execute(
-                "INSERT IGNORE INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", 
+                "INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE event_id = VALUES(event_id)", 
                 (event_id, user_id, 'participation', ep_amount)
             )
             
@@ -356,7 +356,7 @@ class EventCog(commands.GroupCog, name="event"):
         try: event_id_int = int(event_id)
         except ValueError: return await interaction.response.send_message("❌ Invalid Event ID.", ephemeral=True)
         
-        await db.execute("INSERT IGNORE INTO guild_event_overflows (event_id, channel_id) VALUES (%s, %s)", (event_id_int, channel.id))
+        await db.execute("INSERT INTO guild_event_overflows (event_id, channel_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE event_id = VALUES(event_id)", (event_id_int, channel.id))
         await self._initialize_peak_tracking() # Reboot RAM Cache globally to include the newly linked overflow channel immediately!
         
         await self.send_audit_log(interaction, "VC Overflow Mapped", f"**Event ID:** `{event_id}`\n**Overflow Linked:** {channel.mention}", discord.Color.blurple())
