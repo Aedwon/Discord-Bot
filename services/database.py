@@ -62,7 +62,8 @@ class Database:
             ("last_active_date", "DATE DEFAULT NULL"),
             ("thanks_received", "INT DEFAULT 0"),
             ("lifetime_tokens", "INT DEFAULT 0"),
-            ("consecutive_events_attended", "INT DEFAULT 0")
+            ("consecutive_events_attended", "INT DEFAULT 0"),
+            ("last_ep_update", "DATETIME DEFAULT CURRENT_TIMESTAMP"),
         ]
         
         for col_name, col_def in new_columns:
