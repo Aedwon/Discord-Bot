@@ -120,7 +120,8 @@ class EPService:
 
     async def process_ep_update(self, guild: discord.Guild, user_id: int, ep_change: int) -> int:
         """
-        Process an EP change for a user: update DB, assign correct sub-tier role.
+        Process an EP change for a user: update DB, assign correct sub-tier role,
+        and send rank-up notifications.
         Returns the user's new EP total.
         """
         if not guild:
@@ -129,6 +130,13 @@ class EPService:
         # Verification gate — unverified users earn no EP
         if not verification_service.is_verified(user_id):
             return 0
+
+        # 0. Capture old EP for tier-change detection
+        old_row = await db.fetch_one(
+            "SELECT event_points FROM users WHERE user_id = %s", (user_id,)
+        )
+        old_ep = old_row['event_points'] if old_row else 0
+        old_sub_tier = self.get_sub_tier(old_ep) if old_ep > 0 else None
 
         # 1. Atomic EP update with tie-breaker timestamp
         await db.execute('''
@@ -198,7 +206,38 @@ class EPService:
         if is_mythic or (not is_mythic and was_mythic):
             await self.recalculate_mythic_roles(guild)
 
+        # 6. EP rank-up notification → alert channel
+        if new_ep > old_ep and new_sub_tier != old_sub_tier:
+            await self._send_ep_rank_notification(guild, member, old_sub_tier, new_sub_tier, new_ep)
+
         return new_ep
+
+    async def _send_ep_rank_notification(
+        self, guild: discord.Guild, member: discord.Member,
+        old_tier: str, new_tier: str, new_ep: int
+    ):
+        """Send an EP rank-up notification to the level alerts channel."""
+        try:
+            alert_ch_id = await settings_service.get_int("level_alerts_channel_id")
+            if not alert_ch_id:
+                return
+            channel = guild.get_channel(alert_ch_id)
+            if not channel:
+                return
+
+            embed = discord.Embed(
+                title="🏅 EP Rank Up!",
+                description=(
+                    f"**{old_tier or 'Unranked'}** → **{new_tier}**\n"
+                    f"`{new_ep:,}` Event Points"
+                ),
+                color=discord.Color.purple()
+            )
+            embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await channel.send(content=member.mention, embed=embed)
+        except Exception as e:
+            logger.error(f"Failed to send EP rank notification for {member.id}: {e}")
 
     # ─── MYTHIC LADDER ─────────────────────────────────────────────────
 

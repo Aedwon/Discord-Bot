@@ -121,6 +121,13 @@ class XpCog(commands.Cog, name="Leveling"):
         except discord.Forbidden:
             pass
 
+    async def _get_alert_channel(self, guild: discord.Guild):
+        """Get the configured level alerts channel, if any."""
+        ch_id = await settings_service.get_int("level_alerts_channel_id")
+        if ch_id:
+            return guild.get_channel(ch_id)
+        return None
+
     async def _handle_level_change(
         self, guild: discord.Guild, user_id: int,
         old_xp: int, new_xp: int,
@@ -129,8 +136,10 @@ class XpCog(commands.Cog, name="Leveling"):
     ):
         """
         Detect level/tier changes, assign roles, and send notifications.
-        notify_channel: used by the batch loop (sends to the chat channel).
-        interaction: used by /xp-add (sends as a followup to the interaction).
+        Routing:
+          - Level up (same tier) → chat channel / interaction
+          - Rank up (tier changed) → dedicated alert channel
+          - First XP gain → alert channel
         """
         old_lvl = xp_service.get_level(old_xp)
         new_lvl = xp_service.get_level(new_xp)
@@ -142,17 +151,20 @@ class XpCog(commands.Cog, name="Leveling"):
         if not member:
             return
         
-        # DEFAULT TIER: If user had 0 XP before, assign their starting tier role
+        alert_channel = await self._get_alert_channel(guild)
+        
+        # DEFAULT TIER: First XP gain → assign starting tier role + welcome in alert channel
         if old_xp == 0 and new_xp > 0 and new_tier:
             await self._assign_tier_role(guild, member, new_tier)
-            # Send welcome notification
-            if notify_channel:
+            target = alert_channel or notify_channel
+            if target:
                 try:
                     embed = discord.Embed(
-                        description=f"🌟 {member.mention} joined the ranks as **{new_tier}** (Level {new_lvl})!",
+                        description=f"🌟 Joined the ranks as **{new_tier}** (Level {new_lvl})!",
                         color=discord.Color.blue()
                     )
-                    await notify_channel.send(embed=embed)
+                    embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+                    await target.send(content=member.mention, embed=embed)
                 except Exception:
                     pass
             return
@@ -160,39 +172,41 @@ class XpCog(commands.Cog, name="Leveling"):
         if new_lvl <= old_lvl:
             return
         
-        # RANK UP (tier changed)
+        # RANK UP (tier changed) → alert channel
         if new_tier and new_tier != old_tier:
             await self._assign_tier_role(guild, member, new_tier, old_tier)
             
             rank_embed = discord.Embed(
-                title="🎖️ Rank Up!",
+                title="⚔️ EXP Rank Up!",
                 description=(
-                    f"Congratulations {member.mention}!\n\n"
                     f"**{old_tier or 'Unranked'}** → **{new_tier}**\n"
                     f"Level **{new_lvl}** • `{new_xp:,}` XP"
                 ),
                 color=discord.Color.gold()
             )
+            rank_embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
             rank_embed.set_thumbnail(url=member.display_avatar.url)
             
+            target = alert_channel or notify_channel
             if interaction:
-                try: await interaction.followup.send(embed=rank_embed)
+                try: await interaction.followup.send(content=member.mention, embed=rank_embed)
                 except Exception: pass
-            elif notify_channel:
-                try: await notify_channel.send(embed=rank_embed)
+            if target:
+                try: await target.send(content=member.mention, embed=rank_embed)
                 except Exception: pass
         else:
-            # LEVEL UP (same tier)
+            # LEVEL UP (same tier) → chat channel
             lvl_embed = discord.Embed(
-                description=f"⬆️ {member.mention} reached **Level {new_lvl}**! ({new_xp:,} XP)",
+                description=f"⬆️ Reached **Level {new_lvl}**! ({new_xp:,} XP)",
                 color=discord.Color.green()
             )
+            lvl_embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
             
             if interaction:
-                try: await interaction.followup.send(embed=lvl_embed)
+                try: await interaction.followup.send(content=member.mention, embed=lvl_embed)
                 except Exception: pass
             elif notify_channel:
-                try: await notify_channel.send(embed=lvl_embed)
+                try: await notify_channel.send(content=member.mention, embed=lvl_embed)
                 except Exception: pass
 
 

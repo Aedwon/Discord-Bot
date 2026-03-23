@@ -85,7 +85,7 @@ class SetupCog(commands.Cog, name="Setup"):
             "message_log", "ticket_log", "voice_log", "giveaway_log",
             "boost_public", "boost_admin",
             "modlog", "cmdlog", "event_log",
-            "leaderboard", "bot", "booster_chat"
+            "leaderboard", "bot", "booster_chat", "level_alerts"
         ],
         channel: discord.TextChannel
     ):
@@ -106,6 +106,8 @@ class SetupCog(commands.Cog, name="Setup"):
             "leaderboard": "leaderboard_channel_id",
             "bot": "bot_channel_id",
             "booster_chat": "booster_chat_channel_id",
+            # Leveling
+            "level_alerts": "level_alerts_channel_id",
         }
         await settings_service.set(key_map[setting], str(channel.id))
         await inter.response.send_message(f"✅ **{setting}** channel set to {channel.mention}", ephemeral=True)
