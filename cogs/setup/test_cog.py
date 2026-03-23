@@ -138,6 +138,19 @@ class TestCog(commands.Cog, name="Test Commands"):
 
         await interaction.response.send_message("\n".join(reasons), ephemeral=True)
 
+    @test_group.command(name="check-db", description="Raw SQL dump of a user's row in the `users` table")
+    async def check_db(self, interaction: discord.Interaction, member: discord.Member):
+        row = await db.fetch_one("SELECT * FROM users WHERE user_id = %s", (member.id,))
+        if not row:
+            await interaction.response.send_message(f"❌ User {member.mention} DOES NOT EXIST in the `users` table!", ephemeral=True)
+            return
+            
+        msg = f"**Database Row for {member.display_name}:**\n```json\n"
+        for k, v in row.items():
+            msg += f"{k}: {v} (Type: {type(v).__name__})\n"
+        msg += "```"
+        await interaction.response.send_message(msg, ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(TestCog(bot))
 
