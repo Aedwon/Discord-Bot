@@ -50,6 +50,61 @@ class XpCog(commands.Cog, name="Leveling"):
             return
             
         self.gained_msg_xp.clear()
+        
+        # Clear large caches
+        if len(self.message_reaction_xp) > 10000:
+            self.message_reaction_xp.clear()
+        if len(self.user_reacted_to_message) > 50000:
+            self.user_reacted_to_message.clear()
+        
+        try:
+            await self._process_voice_xp()
+        except Exception as e:
+            print(f"[XP Loop] Voice processing error: {e}")
+        
+        if self.pending_xp:
+            try:
+                updates = await xp_service.batch_update(self.pending_xp.copy())
+            except Exception as e:
+                print(f"[XP Loop] Database batch_update error: {e}")
+                updates = {}
+                
+            self.pending_xp.clear()
+            
+            # Mathematical Auto-Leveling Role Assigner & Badges
+            guild = self.bot.guilds[0] if self.bot.guilds else None
+            if guild:
+                from services.badge_service import badge_service
+                for user_id, data in updates.items():
+                    member = guild.get_member(user_id)
+                    if member:
+                        await badge_service.eval_twilight(member)
+                        
+                    old_lvl = xp_service.get_level(data["old_xp"])
+                    new_lvl = xp_service.get_level(data["new_xp"])
+                    
+                    if new_lvl > old_lvl:
+                        old_tier = xp_service.get_tier_name(old_lvl)
+                        new_tier = xp_service.get_tier_name(new_lvl)
+                        
+                        if new_tier and new_tier != old_tier:
+                            r_id = await settings_service.get(f"xp_role_{new_tier.replace(' ', '_')}")
+                            if r_id:
+                                member = guild.get_member(user_id)
+                                if member:
+                                    role = guild.get_role(int(r_id))
+                                    if role:
+                                        try:
+                                            # Strip the old outdated Tier if mapped
+                                            if old_tier:
+                                                o_id = await settings_service.get(f"xp_role_{old_tier.replace(' ', '_')}")
+                                                if o_id:
+                                                    o_role = guild.get_role(int(o_id))
+                                                    if o_role: await member.remove_roles(o_role, reason="XP Tier Upgraded")
+                                            # Directly embed the new correct tier natively
+                                            await member.add_roles(role, reason="XP Auto-Leveling Tier Up")
+                                        except discord.Forbidden:
+                                            pass
     
     async def _is_xp_enabled(self) -> bool:
         """Check if the XP system is enabled."""
