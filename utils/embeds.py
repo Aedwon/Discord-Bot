@@ -15,6 +15,8 @@ def create_leaderboard_embed(guild: discord.Guild, users: list) -> discord.Embed
         guild: The Discord guild
         users: List of (user_id, xp) tuples
     """
+    from services.xp_service import xp_service
+    
     embed = discord.Embed(
         title="🏆 Server Leaderboard",
         color=discord.Color.gold()
@@ -26,10 +28,12 @@ def create_leaderboard_embed(guild: discord.Guild, users: list) -> discord.Embed
     for index, (user_id, xp) in enumerate(users):
         member = guild.get_member(user_id)
         name = member.display_name if member else f"User {user_id}"
+        level = xp_service.get_level(xp)
+        tier = xp_service.get_tier_name(level)
         
         # Medal for top 3, number for rest
         rank_str = medals[index] if index < 3 else f"**{index + 1}.**"
-        description_lines.append(f"{rank_str} **{name}** — {xp:,} XP")
+        description_lines.append(f"{rank_str} **{name}** — {xp:,} XP • Lv. {level} • {tier}")
     
     embed.description = "\n".join(description_lines) or "No users yet!"
     embed.set_footer(text="Keep chatting to climb the ranks!")
@@ -46,6 +50,11 @@ def create_rank_embed(member: discord.Member, rank: int | None, xp: int) -> disc
         rank: User's rank (None if unranked)
         xp: User's total XP
     """
+    from services.xp_service import xp_service
+    
+    level = xp_service.get_level(xp)
+    tier = xp_service.get_tier_name(level)
+    
     embed = discord.Embed(
         title=f"📊 {member.display_name}'s Stats",
         color=member.color if member.color != discord.Color.default() else discord.Color.blue()
@@ -57,6 +66,8 @@ def create_rank_embed(member: discord.Member, rank: int | None, xp: int) -> disc
         embed.add_field(name="Rank", value="Unranked", inline=True)
     
     embed.add_field(name="XP", value=f"{xp:,}", inline=True)
+    embed.add_field(name="Level", value=str(level), inline=True)
+    embed.add_field(name="Tier", value=tier or "None", inline=True)
     
     embed.set_thumbnail(url=member.display_avatar.url)
     

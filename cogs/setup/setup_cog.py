@@ -363,6 +363,94 @@ class SetupCog(commands.Cog, name="Setup"):
         await settings_service.set("quiz_channel_id", str(channel.id))
         await inter.response.send_message(f"✅ Quiz sessions will run in {channel.mention} (Noon & 8PM PHT daily).", ephemeral=True)
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Bulk XP Role Sync
+    # ─────────────────────────────────────────────────────────────────────
+
+    @setup_group.command(name="sync_xp_roles", description="Bulk-assign the correct XP tier role to ALL users based on their current XP.")
+    async def sync_xp_roles(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True)
+        
+        from services.database import db
+        from services.xp_service import xp_service
+        import asyncio
+        
+        # Fetch all users with XP
+        all_users = await db.fetch_all("SELECT user_id, xp FROM users WHERE xp > 0 ORDER BY xp DESC")
+        if not all_users:
+            return await inter.followup.send("No users with XP found in the database.")
+        
+        # Build role lookup: tier_name → role_id
+        ranks = ["Commoner", "Vassal", "Noble", "High Noble"]
+        numerals = ["V", "IV", "III", "II", "I"]
+        all_tiers = [f"{r} {n}" for r in ranks for n in numerals] + ["Monarch"]
+        
+        tier_roles = {}
+        for name in all_tiers:
+            r_id = await settings_service.get(f"xp_role_{name.replace(' ', '_')}")
+            if r_id and r_id != "0":
+                role = inter.guild.get_role(int(r_id))
+                if role:
+                    tier_roles[name] = role
+        
+        if not tier_roles:
+            return await inter.followup.send("❌ No XP tier roles are mapped. Run `/setup xp_roles` first.")
+        
+        # All mapped roles as a set for stripping
+        all_mapped_roles = set(tier_roles.values())
+        
+        assigned = 0
+        skipped = 0
+        errors = 0
+        
+        for row in all_users:
+            user_id = row['user_id']
+            xp = row['xp']
+            
+            member = inter.guild.get_member(user_id)
+            if not member:
+                skipped += 1
+                continue
+            
+            level = xp_service.get_level(xp)
+            correct_tier = xp_service.get_tier_name(level)
+            correct_role = tier_roles.get(correct_tier)
+            
+            if not correct_role:
+                skipped += 1
+                continue
+            
+            # Skip if already correct
+            if correct_role in member.roles:
+                skipped += 1
+                continue
+            
+            try:
+                # Strip any wrong tier roles
+                wrong_roles = [r for r in all_mapped_roles if r in member.roles and r != correct_role]
+                if wrong_roles:
+                    await member.remove_roles(*wrong_roles, reason="XP Sync: Stripping old tiers")
+                
+                await member.add_roles(correct_role, reason=f"XP Sync: {correct_tier}")
+                assigned += 1
+            except discord.Forbidden:
+                errors += 1
+            except discord.HTTPException:
+                errors += 1
+            
+            # Rate limit protection
+            await asyncio.sleep(0.5)
+        
+        embed = discord.Embed(
+            title="✅ XP Role Sync Complete",
+            description=(
+                f"**Assigned:** {assigned} users\n"
+                f"**Skipped:** {skipped} (already correct or not in server)\n"
+                f"**Errors:** {errors}"
+            ),
+            color=discord.Color.green() if errors == 0 else discord.Color.orange()
+        )
+        await inter.followup.send(embed=embed)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))

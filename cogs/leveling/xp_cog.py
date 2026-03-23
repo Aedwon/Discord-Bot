@@ -77,7 +77,7 @@ class XpCog(commands.Cog, name="Leveling"):
                 
             self.pending_xp.clear()
             
-            # Mathematical Auto-Leveling Role Assigner & Badges
+            # Process level changes, role assignments, and notifications
             guild = self.bot.guilds[0] if self.bot.guilds else None
             if guild:
                 from services.badge_service import badge_service
@@ -85,69 +85,117 @@ class XpCog(commands.Cog, name="Leveling"):
                     member = guild.get_member(user_id)
                     if member:
                         await badge_service.eval_twilight(member)
-                        
-                    old_lvl = xp_service.get_level(data["old_xp"])
-                    new_lvl = xp_service.get_level(data["new_xp"])
                     
-                    if new_lvl > old_lvl:
-                        old_tier = xp_service.get_tier_name(old_lvl)
-                        new_tier = xp_service.get_tier_name(new_lvl)
-                        
-                        # Send level-up message
-                        channel_id = user_channels.get(user_id)
-                        channel = guild.get_channel(channel_id) if channel_id else None
-                        
-                        if new_tier and new_tier != old_tier:
-                            # RANK UP (tier changed) — assign role + send rank-up message
-                            r_id = await settings_service.get(f"xp_role_{new_tier.replace(' ', '_')}")
-                            if r_id and r_id != "0":
-                                if not member:
-                                    member = guild.get_member(user_id)
-                                if member:
-                                    role = guild.get_role(int(r_id))
-                                    if role:
-                                        try:
-                                            # Strip the old outdated Tier if mapped
-                                            if old_tier:
-                                                o_id = await settings_service.get(f"xp_role_{old_tier.replace(' ', '_')}")
-                                                if o_id and o_id != "0":
-                                                    o_role = guild.get_role(int(o_id))
-                                                    if o_role and o_role in member.roles:
-                                                        await member.remove_roles(o_role, reason="XP Tier Upgraded")
-                                            # Assign the new tier role
-                                            await member.add_roles(role, reason="XP Auto-Leveling Tier Up")
-                                        except discord.Forbidden:
-                                            pass
-                            
-                            # Send rank-up notification
-                            if channel and member:
-                                try:
-                                    rank_embed = discord.Embed(
-                                        title="🎖️ Rank Up!",
-                                        description=(
-                                            f"Congratulations {member.mention}!\n\n"
-                                            f"**{old_tier or 'Unranked'}** → **{new_tier}**\n"
-                                            f"Level **{new_lvl}** • `{data['new_xp']:,}` XP"
-                                        ),
-                                        color=discord.Color.gold()
-                                    )
-                                    rank_embed.set_thumbnail(url=member.display_avatar.url)
-                                    await channel.send(embed=rank_embed)
-                                except Exception:
-                                    pass
-                        else:
-                            # LEVEL UP (same tier) — send simple level-up message
-                            if channel and member:
-                                try:
-                                    lvl_embed = discord.Embed(
-                                        description=f"⬆️ {member.mention} reached **Level {new_lvl}**! ({data['new_xp']:,} XP)",
-                                        color=discord.Color.green()
-                                    )
-                                    await channel.send(embed=lvl_embed)
-                                except Exception:
-                                    pass
+                    channel_id = user_channels.get(user_id)
+                    notify_channel = guild.get_channel(channel_id) if channel_id else None
+                    
+                    await self._handle_level_change(
+                        guild, user_id, data["old_xp"], data["new_xp"],
+                        notify_channel=notify_channel
+                    )
 
-    
+    async def _assign_tier_role(self, guild: discord.Guild, member: discord.Member, tier_name: str, old_tier: str = None):
+        """Assign a tier role to a member, stripping the old one if present. Respects rate limits."""
+        r_id = await settings_service.get(f"xp_role_{tier_name.replace(' ', '_')}")
+        if not r_id or r_id == "0":
+            return
+        
+        role = guild.get_role(int(r_id))
+        if not role:
+            return
+        
+        # Skip if they already have it
+        if role in member.roles:
+            return
+        
+        try:
+            # Strip old tier role if present
+            if old_tier:
+                o_id = await settings_service.get(f"xp_role_{old_tier.replace(' ', '_')}")
+                if o_id and o_id != "0":
+                    o_role = guild.get_role(int(o_id))
+                    if o_role and o_role in member.roles:
+                        await member.remove_roles(o_role, reason="XP Tier Change")
+            
+            await member.add_roles(role, reason=f"XP Tier: {tier_name}")
+        except discord.Forbidden:
+            pass
+
+    async def _handle_level_change(
+        self, guild: discord.Guild, user_id: int,
+        old_xp: int, new_xp: int,
+        notify_channel: discord.TextChannel = None,
+        interaction: discord.Interaction = None
+    ):
+        """
+        Detect level/tier changes, assign roles, and send notifications.
+        notify_channel: used by the batch loop (sends to the chat channel).
+        interaction: used by /xp-add (sends as a followup to the interaction).
+        """
+        old_lvl = xp_service.get_level(old_xp)
+        new_lvl = xp_service.get_level(new_xp)
+        
+        old_tier = xp_service.get_tier_name(old_lvl)
+        new_tier = xp_service.get_tier_name(new_lvl)
+        
+        member = guild.get_member(user_id)
+        if not member:
+            return
+        
+        # DEFAULT TIER: If user had 0 XP before, assign their starting tier role
+        if old_xp == 0 and new_xp > 0 and new_tier:
+            await self._assign_tier_role(guild, member, new_tier)
+            # Send welcome notification
+            if notify_channel:
+                try:
+                    embed = discord.Embed(
+                        description=f"🌟 {member.mention} joined the ranks as **{new_tier}** (Level {new_lvl})!",
+                        color=discord.Color.blue()
+                    )
+                    await notify_channel.send(embed=embed)
+                except Exception:
+                    pass
+            return
+        
+        if new_lvl <= old_lvl:
+            return
+        
+        # RANK UP (tier changed)
+        if new_tier and new_tier != old_tier:
+            await self._assign_tier_role(guild, member, new_tier, old_tier)
+            
+            rank_embed = discord.Embed(
+                title="🎖️ Rank Up!",
+                description=(
+                    f"Congratulations {member.mention}!\n\n"
+                    f"**{old_tier or 'Unranked'}** → **{new_tier}**\n"
+                    f"Level **{new_lvl}** • `{new_xp:,}` XP"
+                ),
+                color=discord.Color.gold()
+            )
+            rank_embed.set_thumbnail(url=member.display_avatar.url)
+            
+            if interaction:
+                try: await interaction.followup.send(embed=rank_embed)
+                except Exception: pass
+            elif notify_channel:
+                try: await notify_channel.send(embed=rank_embed)
+                except Exception: pass
+        else:
+            # LEVEL UP (same tier)
+            lvl_embed = discord.Embed(
+                description=f"⬆️ {member.mention} reached **Level {new_lvl}**! ({new_xp:,} XP)",
+                color=discord.Color.green()
+            )
+            
+            if interaction:
+                try: await interaction.followup.send(embed=lvl_embed)
+                except Exception: pass
+            elif notify_channel:
+                try: await notify_channel.send(embed=lvl_embed)
+                except Exception: pass
+
+
     async def _is_xp_enabled(self) -> bool:
         """Check if the XP system is enabled."""
         return await settings_service.get_int("xp_system_enabled") == 1
@@ -342,13 +390,24 @@ class XpCog(commands.Cog, name="Leveling"):
     @app_commands.default_permissions(administrator=True)
     async def xp_add(self, inter: discord.Interaction, user: discord.Member, amount: int):
         from services.xp_service import xp_service
+        await inter.response.defer()
+        
+        old_xp = await xp_service.get_xp(user.id)
         new_total = await xp_service.add_xp(user.id, amount)
+        
         embed = discord.Embed(
             title="✨ XP Granted",
             description=f"Successfully added {amount} XP to {user.mention}.\nNew Total: **{new_total} XP**",
             color=discord.Color.green()
         )
-        await inter.response.send_message(embed=embed)
+        await inter.followup.send(embed=embed)
+        
+        # Trigger level-up detection, role assignment, and notifications
+        if inter.guild:
+            await self._handle_level_change(
+                inter.guild, user.id, old_xp, new_total,
+                interaction=inter
+            )
         
     @app_commands.command(name="xp-set", description="Set a specific user's XP (Admin only)")
     @app_commands.describe(user="The user to modify", amount="Exact XP amount to set")
