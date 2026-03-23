@@ -30,10 +30,10 @@ class XpCog(commands.Cog, name="Leveling"):
         self.message_reaction_xp = {}
         self.user_reacted_to_message = set()
         self.daily_reaction_cache = {}
-    
-    async def cog_load(self):
-        """Called when cog is loaded - start background task."""
-        self.batch_update_db.start()
+        
+        # Manually ensure the loop starts perfectly
+        if not self.batch_update_db.is_running():
+            self.batch_update_db.start()
     
     def cog_unload(self):
         self.batch_update_db.cancel()
@@ -53,10 +53,18 @@ class XpCog(commands.Cog, name="Leveling"):
         if len(self.user_reacted_to_message) > 50000:
             self.user_reacted_to_message.clear()
         
-        await self._process_voice_xp()
+        try:
+            await self._process_voice_xp()
+        except Exception as e:
+            print(f"[XP Loop] Voice processing error: {e}")
         
         if self.pending_xp:
-            updates = await xp_service.batch_update(self.pending_xp.copy())
+            try:
+                updates = await xp_service.batch_update(self.pending_xp.copy())
+            except Exception as e:
+                print(f"[XP Loop] Database batch_update error: {e}")
+                updates = {}
+                
             self.pending_xp.clear()
             
             # Mathematical Auto-Leveling Role Assigner & Badges
@@ -163,6 +171,11 @@ class XpCog(commands.Cog, name="Leveling"):
             return
         
         user_id = message.author.id
+        
+        # Automatically un-blacklist users if the background loop died
+        if not self.batch_update_db.is_running() and user_id in self.gained_msg_xp:
+            self.gained_msg_xp.remove(user_id)
+            self.batch_update_db.start()
         
         if user_id not in self.gained_msg_xp:
             self.gained_msg_xp.add(user_id)
