@@ -31,6 +31,9 @@ class XpCog(commands.Cog, name="Leveling"):
         self.user_reacted_to_message = set()
         self.daily_reaction_cache = {}
         
+        # Track which channel each user last chatted in (for level-up messages)
+        self._last_message_channel = {}
+        
     async def cog_load(self):
         """Called when cog is loaded - start background task natively."""
         if not self.batch_update_db.is_running():
@@ -63,6 +66,9 @@ class XpCog(commands.Cog, name="Leveling"):
             print(f"[XP Loop] Voice processing error: {e}")
         
         if self.pending_xp:
+            # Snapshot which channels users were chatting in for level-up messages
+            user_channels = dict(self._last_message_channel) if hasattr(self, '_last_message_channel') else {}
+            
             try:
                 updates = await xp_service.batch_update(self.pending_xp.copy())
             except Exception as e:
@@ -87,10 +93,16 @@ class XpCog(commands.Cog, name="Leveling"):
                         old_tier = xp_service.get_tier_name(old_lvl)
                         new_tier = xp_service.get_tier_name(new_lvl)
                         
+                        # Send level-up message
+                        channel_id = user_channels.get(user_id)
+                        channel = guild.get_channel(channel_id) if channel_id else None
+                        
                         if new_tier and new_tier != old_tier:
+                            # RANK UP (tier changed) — assign role + send rank-up message
                             r_id = await settings_service.get(f"xp_role_{new_tier.replace(' ', '_')}")
-                            if r_id:
-                                member = guild.get_member(user_id)
+                            if r_id and r_id != "0":
+                                if not member:
+                                    member = guild.get_member(user_id)
                                 if member:
                                     role = guild.get_role(int(r_id))
                                     if role:
@@ -98,13 +110,43 @@ class XpCog(commands.Cog, name="Leveling"):
                                             # Strip the old outdated Tier if mapped
                                             if old_tier:
                                                 o_id = await settings_service.get(f"xp_role_{old_tier.replace(' ', '_')}")
-                                                if o_id:
+                                                if o_id and o_id != "0":
                                                     o_role = guild.get_role(int(o_id))
-                                                    if o_role: await member.remove_roles(o_role, reason="XP Tier Upgraded")
-                                            # Directly embed the new correct tier natively
+                                                    if o_role and o_role in member.roles:
+                                                        await member.remove_roles(o_role, reason="XP Tier Upgraded")
+                                            # Assign the new tier role
                                             await member.add_roles(role, reason="XP Auto-Leveling Tier Up")
                                         except discord.Forbidden:
                                             pass
+                            
+                            # Send rank-up notification
+                            if channel and member:
+                                try:
+                                    rank_embed = discord.Embed(
+                                        title="🎖️ Rank Up!",
+                                        description=(
+                                            f"Congratulations {member.mention}!\n\n"
+                                            f"**{old_tier or 'Unranked'}** → **{new_tier}**\n"
+                                            f"Level **{new_lvl}** • `{data['new_xp']:,}` XP"
+                                        ),
+                                        color=discord.Color.gold()
+                                    )
+                                    rank_embed.set_thumbnail(url=member.display_avatar.url)
+                                    await channel.send(embed=rank_embed)
+                                except Exception:
+                                    pass
+                        else:
+                            # LEVEL UP (same tier) — send simple level-up message
+                            if channel and member:
+                                try:
+                                    lvl_embed = discord.Embed(
+                                        description=f"⬆️ {member.mention} reached **Level {new_lvl}**! ({data['new_xp']:,} XP)",
+                                        color=discord.Color.green()
+                                    )
+                                    await channel.send(embed=lvl_embed)
+                                except Exception:
+                                    pass
+
     
     async def _is_xp_enabled(self) -> bool:
         """Check if the XP system is enabled."""
@@ -172,6 +214,9 @@ class XpCog(commands.Cog, name="Leveling"):
             return
         
         user_id = message.author.id
+        
+        # Track which channel the user is chatting in for level-up messages
+        self._last_message_channel[user_id] = message.channel.id
         
         # Automatically un-blacklist users if the background loop died
         if not self.batch_update_db.is_running() and user_id in self.gained_msg_xp:

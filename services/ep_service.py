@@ -135,9 +135,9 @@ class EPService:
             INSERT INTO users (user_id, event_points) 
             VALUES (%s, %s)
             ON DUPLICATE KEY UPDATE 
-                event_points = GREATEST(0, event_points + VALUES(event_points)),
+                event_points = GREATEST(0, users.event_points + %s),
                 last_ep_update = CURRENT_TIMESTAMP
-        ''', (user_id, ep_change))
+        ''', (user_id, ep_change, ep_change))
 
         row = await db.fetch_one(
             "SELECT event_points FROM users WHERE user_id = %s", (user_id,)

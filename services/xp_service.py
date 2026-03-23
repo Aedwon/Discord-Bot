@@ -173,10 +173,10 @@ class XpService:
             INSERT INTO users (user_id, xp_multiplier, shop_discount, boost_start_date)
             VALUES (%s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE 
-                xp_multiplier = VALUES(xp_multiplier),
-                shop_discount = VALUES(shop_discount),
-                boost_start_date = COALESCE(boost_start_date, VALUES(boost_start_date))
-        ''', (user_id, xp_multiplier, shop_discount, start_date))
+                xp_multiplier = %s,
+                shop_discount = %s,
+                boost_start_date = COALESCE(users.boost_start_date, %s)
+        ''', (user_id, xp_multiplier, shop_discount, start_date, xp_multiplier, shop_discount, start_date))
     
     async def remove_booster_perks(self, user_id: int) -> None:
         """Remove all booster perks from a user."""
@@ -219,11 +219,11 @@ class XpService:
             INSERT INTO users (user_id, xp, tokens, event_points, lifetime_tokens) 
             VALUES (%s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-                xp = xp + VALUES(xp),
-                tokens = tokens + VALUES(tokens),
-                event_points = event_points + VALUES(event_points),
-                lifetime_tokens = lifetime_tokens + VALUES(lifetime_tokens)
-        ''', (user_id, xp, tokens, ep, max(0, tokens)))
+                xp = users.xp + %s,
+                tokens = users.tokens + %s,
+                event_points = users.event_points + %s,
+                lifetime_tokens = users.lifetime_tokens + %s
+        ''', (user_id, xp, tokens, ep, max(0, tokens), xp, tokens, ep, max(0, tokens)))
         
     async def set_currency(self, user_id: int, xp: int = None, tokens: int = None, ep: int = None):
         """Force set arbitrary currency for a user. None means unchanged."""
