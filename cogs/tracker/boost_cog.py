@@ -20,6 +20,8 @@ from utils.embeds import create_boost_announcement_embed
 class BoostCog(commands.Cog, name="Boost Tracker"):
     """Full booster rewards system with tiered perks."""
     
+    booster_group = app_commands.Group(name="booster", description="Server booster perks and cosmetics")
+    
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.recent_boosts = {}
@@ -551,7 +553,7 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
     # Slash Commands - Cosmetics
     # ─────────────────────────────────────────────────────────────────────
     
-    @app_commands.command(name="booster-color", description="Choose an exclusive booster color role")
+    @booster_group.command(name="color", description="Choose an exclusive booster color role")
     async def booster_color(self, interaction: discord.Interaction):
         """Let boosters choose from exclusive color roles."""
         member = interaction.user
@@ -636,7 +638,7 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
         
         await interaction.response.send_message("🎨 Choose your exclusive color:", view=view, ephemeral=True)
     
-    @app_commands.command(name="booster-emblem", description="Choose an exclusive emblem (Tier 2+ only)")
+    @booster_group.command(name="emblem", description="Choose an exclusive emblem (Tier 2+ only)")
     async def booster_emblem(self, interaction: discord.Interaction):
         """Let Tier 2+ boosters choose an emblem icon."""
         member = interaction.user
@@ -726,7 +728,7 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
     # Slash Commands - Perks & Info
     # ─────────────────────────────────────────────────────────────────────
     
-    @app_commands.command(name="boostperks", description="Show your booster perks and progress")
+    @booster_group.command(name="perks", description="Show your booster perks and progress")
     async def boostperks(self, inter: discord.Interaction):
         """Show your booster perks and progress."""
         member = inter.user
@@ -776,7 +778,7 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
         embed.set_thumbnail(url=member.display_avatar.url)
         await inter.response.send_message(embed=embed)
     
-    @app_commands.command(name="boosters", description="List all server boosters with their tier")
+    @booster_group.command(name="list", description="List all server boosters with their tier")
     @app_commands.default_permissions(administrator=True)
     async def boosters(self, inter: discord.Interaction):
         """List all boosters with their tier."""

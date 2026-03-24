@@ -314,17 +314,28 @@ async def help_command(inter: discord.Interaction):
                 ("**`/xp leaderboard`**", "View top 10 XP earners"),
                 ("**`/event profile [user]`**", "View your Event Points"),
                 ("**`/event leaderboard`**", "View top event attendees"),
-                ("**`/thank <user>`**", "Thank someone (+10 XP)"),
+                ("**`/social thank <user>`**", "Thank someone (+10 XP)"),
             ]
         },
         "booster": {
             "emoji": "💎",
             "title": "Booster Perks",
             "commands": [
-                ("**`/boostperks`**", "View your tier and multipliers"),
-                ("**`/booster-color`**", "Choose a custom name color"),
-                ("**`/booster-emblem`**", "Choose an emblem badge"),
-                ("**`/boosters`**", "List all server boosters"),
+                ("**`/booster perks`**", "View your tier and multipliers"),
+                ("**`/booster color`**", "Choose a custom name color"),
+                ("**`/booster emblem`**", "Choose an emblem badge"),
+                ("**`/booster list`**", "List all server boosters"),
+            ]
+        },
+        "verification": {
+            "emoji": "📋",
+            "title": "Verification",
+            "commands": [
+                ("**`/verify deploy <channel>`**", "Post verification panel"),
+                ("**`/verify status <user>`**", "Check verification status"),
+                ("**`/verify whois <uid>`**", "Look up user by MLBB UID"),
+                ("**`/verify update <user>`**", "Edit verification info"),
+                ("**`/verify remove <user>`**", "Remove verification"),
             ]
         },
         "admin_voice": {
@@ -370,6 +381,8 @@ async def help_command(inter: discord.Interaction):
                 ("**`/ticket deploy [channel]`**", "Post ticket panel"),
                 ("**`/ticket config-category <cat>`**", "Set ticket category"),
                 ("**`/xp start / stop / status`**", "Control XP system"),
+                ("**`/autorole`**", "Bulk-assign auto-role"),
+                ("**`/raffle`**", "Force execute booster raffle"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },

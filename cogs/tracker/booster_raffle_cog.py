@@ -165,7 +165,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
     # Admin Override Commands
     # ──────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="raffle-force", description="Forcefully execute the booster raffle (Admin Only)")
+    @app_commands.command(name="raffle", description="Forcefully execute the booster raffle (Admin Only)")
     @app_commands.default_permissions(administrator=True)
     async def raffle_force(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

@@ -208,12 +208,11 @@ class VerificationCog(commands.Cog, name="verification"):
         await verification_service.load_cache()
         logger.info("Verification system ready")
 
+    verify_group = app_commands.Group(name="verify", description="MLBB verification system")
+
     # ─── SETUP COMMANDS ─────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="setup-verification",
-        description="Post the verification panel in a channel."
-    )
+    @verify_group.command(name="deploy", description="Post the verification panel in a channel.")
     @app_commands.default_permissions(administrator=True)
     async def setup_verification(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """Post the persistent verification embed + button in the specified channel."""
@@ -242,7 +241,7 @@ class VerificationCog(commands.Cog, name="verification"):
 
     # ─── ADMIN LOOKUP COMMANDS ──────────────────────────────────────────
 
-    @app_commands.command(name="verified", description="Check a user's verification status.")
+    @verify_group.command(name="status", description="Check a user's verification status.")
     @app_commands.default_permissions(administrator=True)
     async def verified(self, interaction: discord.Interaction, user: discord.Member):
         info = await verification_service.get_user_info(user.id)
@@ -266,7 +265,7 @@ class VerificationCog(commands.Cog, name="verification"):
         embed.set_thumbnail(url=user.display_avatar.url)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="whois", description="Look up a Discord user by their MLBB UID.")
+    @verify_group.command(name="whois", description="Look up a Discord user by their MLBB UID.")
     @app_commands.default_permissions(administrator=True)
     async def whois(self, interaction: discord.Interaction, mlbb_uid: int):
         info = await verification_service.lookup_by_uid(mlbb_uid)
@@ -289,10 +288,7 @@ class VerificationCog(commands.Cog, name="verification"):
 
     # ─── ADMIN EDIT / UNVERIFY ──────────────────────────────────────────
 
-    @app_commands.command(
-        name="update-verification",
-        description="Edit a user's MLBB verification info."
-    )
+    @verify_group.command(name="update", description="Edit a user's MLBB verification info.")
     @app_commands.default_permissions(administrator=True)
     async def update_verification(self, interaction: discord.Interaction, user: discord.Member):
         info = await verification_service.get_user_info(user.id)
@@ -304,7 +300,7 @@ class VerificationCog(commands.Cog, name="verification"):
         modal = AdminEditModal(user.id, info)
         await interaction.response.send_modal(modal)
 
-    @app_commands.command(name="unverify", description="Remove a user's verification.")
+    @verify_group.command(name="remove", description="Remove a user's verification.")
     @app_commands.default_permissions(administrator=True)
     async def unverify(self, interaction: discord.Interaction, user: discord.Member):
         removed = await verification_service.unverify_user(user.id)
