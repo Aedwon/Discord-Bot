@@ -243,6 +243,118 @@ class AnalyticsService:
         ''', (retention_days,))
         logger.info(f"Purged analytics_messages older than {retention_days} days")
 
+    # ─── ACTIVE USER METRICS (DAU / WAU / MAU) ────────────────────
+
+    async def get_active_users(self) -> dict:
+        """
+        Compute DAU, WAU, MAU using a de-duplicated UNION across
+        message authors and voice session participants.
+
+        Also returns:
+          - 7-day DAU trend from rollup snapshots
+          - Period-over-period change percentages for WAU and MAU
+        """
+        # ── Live counts (UNION de-duplicates users across both tables) ──
+
+        dau = await db.fetch_one('''
+            SELECT COUNT(*) AS c FROM (
+                SELECT author_id AS uid FROM analytics_messages
+                WHERE created_at >= CURDATE()
+                UNION
+                SELECT user_id AS uid FROM analytics_voice_sessions
+                WHERE joined_at >= CURDATE()
+            ) AS today_active
+        ''')
+
+        wau = await db.fetch_one('''
+            SELECT COUNT(*) AS c FROM (
+                SELECT author_id AS uid FROM analytics_messages
+                WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                UNION
+                SELECT user_id AS uid FROM analytics_voice_sessions
+                WHERE joined_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            ) AS week_active
+        ''')
+
+        mau = await db.fetch_one('''
+            SELECT COUNT(*) AS c FROM (
+                SELECT author_id AS uid FROM analytics_messages
+                WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                UNION
+                SELECT user_id AS uid FROM analytics_voice_sessions
+                WHERE joined_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            ) AS month_active
+        ''')
+
+        # ── Previous-period WAU/MAU for trend comparison ──
+
+        prev_wau = await db.fetch_one('''
+            SELECT COUNT(*) AS c FROM (
+                SELECT author_id AS uid FROM analytics_messages
+                WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+                  AND created_at < DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                UNION
+                SELECT user_id AS uid FROM analytics_voice_sessions
+                WHERE joined_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+                  AND joined_at < DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            ) AS prev_week
+        ''')
+
+        prev_mau = await db.fetch_one('''
+            SELECT COUNT(*) AS c FROM (
+                SELECT author_id AS uid FROM analytics_messages
+                WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+                  AND created_at < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                UNION
+                SELECT user_id AS uid FROM analytics_voice_sessions
+                WHERE joined_at >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+                  AND joined_at < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            ) AS prev_month
+        ''')
+
+        # ── 7-day DAU trend from rollup snapshots ──
+        # Note: rollups track messagers + voice users separately.
+        # We approximate DAU from rollups as max(unique_messagers, unique_voice_users)
+        # since a precise UNION isn't available from pre-aggregated data.
+        # The "today" live count above is always exact.
+
+        dau_trend = await db.fetch_all('''
+            SELECT date,
+                   (unique_messagers + unique_voice_users) AS approx_dau
+            FROM analytics_daily_rollups
+            WHERE date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            ORDER BY date ASC
+        ''')
+
+        # ── Percentage changes ──
+        dau_val = dau['c'] if dau else 0
+        wau_val = wau['c'] if wau else 0
+        mau_val = mau['c'] if mau else 0
+        prev_wau_val = prev_wau['c'] if prev_wau else 0
+        prev_mau_val = prev_mau['c'] if prev_mau else 0
+
+        def pct_change(current: int, previous: int) -> float | None:
+            if previous == 0:
+                return None  # No baseline to compare
+            return round((current - previous) / previous * 100, 1)
+
+        # DAU/WAU ratio = "stickiness" — industry standard engagement metric
+        stickiness = round(dau_val / wau_val * 100, 1) if wau_val > 0 else 0.0
+
+        return {
+            "dau": dau_val,
+            "wau": wau_val,
+            "mau": mau_val,
+            "wau_change": pct_change(wau_val, prev_wau_val),
+            "mau_change": pct_change(mau_val, prev_mau_val),
+            "stickiness": stickiness,
+            "dau_trend": [
+                {"date": row['date'].strftime('%m/%d') if hasattr(row['date'], 'strftime') else str(row['date']),
+                 "count": row['approx_dau']}
+                for row in dau_trend
+            ],
+        }
+
     # ─── OVERVIEW ───────────────────────────────────────────────────
 
     async def get_overview(self, days: int = 7) -> dict:

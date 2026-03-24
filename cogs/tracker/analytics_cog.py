@@ -393,6 +393,83 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         embed.add_field(name="⭐ Reactions", value=f"**{stats['reactions']:,}**", inline=True)
         await interaction.followup.send(embed=embed)
 
+    @analytics_group.command(name="active_users", description="DAU, WAU, MAU with trends and stickiness ratio.")
+    async def analytics_active_users(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        data = await analytics_service.get_active_users()
+
+        # ── Trend arrows ──
+        def trend_str(change: float | None) -> str:
+            if change is None:
+                return "🆕 *No prior data*"
+            arrow = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            sign = "+" if change > 0 else ""
+            return f"{arrow} {sign}{change}% vs prior period"
+
+        embed = discord.Embed(
+            title="📊 Active Users — DAU / WAU / MAU",
+            description="Real-time de-duplicated counts across **messages** and **voice**.",
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(
+            name="📅 DAU (Today)",
+            value=f"**{data['dau']:,}**",
+            inline=True
+        )
+        embed.add_field(
+            name="📆 WAU (7 Days)",
+            value=f"**{data['wau']:,}**\n{trend_str(data['wau_change'])}",
+            inline=True
+        )
+        embed.add_field(
+            name="🗓️ MAU (30 Days)",
+            value=f"**{data['mau']:,}**\n{trend_str(data['mau_change'])}",
+            inline=True
+        )
+
+        # Stickiness = DAU / WAU — how "daily" the weekly users are
+        embed.add_field(
+            name="🧲 Stickiness (DAU ÷ WAU)",
+            value=f"**{data['stickiness']}%**",
+            inline=True
+        )
+
+        # WAU/MAU ratio — breadth of monthly engagement
+        wau_mau = round(data['wau'] / data['mau'] * 100, 1) if data['mau'] > 0 else 0
+        embed.add_field(
+            name="🔄 WAU ÷ MAU",
+            value=f"**{wau_mau}%**",
+            inline=True
+        )
+
+        # Blank field for alignment
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+        # ── 7-day trend mini-chart ──
+        trend = data['dau_trend']
+        if trend:
+            max_count = max(t['count'] for t in trend) or 1
+            chart_lines = []
+            for t in trend:
+                bar_len = int(t['count'] / max_count * 12)
+                bar = "█" * bar_len + "░" * (12 - bar_len)
+                chart_lines.append(f"`{t['date']}` {bar} **{t['count']}**")
+            embed.add_field(
+                name="📉 7-Day DAU Trend",
+                value="\n".join(chart_lines),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📉 7-Day DAU Trend",
+                value="*No rollup data yet — trends appear after the first midnight rollup.*",
+                inline=False
+            )
+
+        embed.set_footer(text="DAU = users active today • WAU = last 7d • MAU = last 30d")
+        await interaction.followup.send(embed=embed)
+
     @analytics_group.command(name="retention", description="Day-1, Day-7, Day-30 new member retention rates.")
     async def analytics_retention(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
