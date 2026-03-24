@@ -5,12 +5,13 @@ Admin commands for lookup, edit, and unverify.
 """
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import logging
 
 from services.verification_service import verification_service
 from services.settings_service import settings_service
+from utils.checks import require_admin_auth
 
 logger = logging.getLogger("mlbb_bot.verification_cog")
 
@@ -85,13 +86,31 @@ class VerificationModal(discord.ui.Modal, title="📝 MLBB Account Verification"
                     except discord.Forbidden:
                         logger.error(f"Cannot grant Verified role to {interaction.user.id}")
 
+            # ── MSL Cross-Reference ──
+            msl_status = ""
+            if verification_service.is_msl(uid):
+                msl_nickname = verification_service.get_msl_nickname(uid)
+                msl_role_id = await settings_service.get_int("msl_role_id")
+                if msl_role_id:
+                    msl_role = interaction.guild.get_role(msl_role_id)
+                    if msl_role:
+                        try:
+                            await interaction.user.add_roles(msl_role, reason="MSL Verification")
+                            msl_status = f"\n\n🎓 **Moonton Student Leader Detected!**\nMSL Name: **{msl_nickname}**"
+                        except discord.Forbidden:
+                            logger.error(f"Cannot grant MSL role to {interaction.user.id}")
+                    else:
+                        msl_status = f"\n\n🎓 **Moonton Student Leader Detected!**\nMSL Name: **{msl_nickname}**"
+                else:
+                    msl_status = f"\n\n🎓 **Moonton Student Leader Detected!**\nMSL Name: **{msl_nickname}**"
+
             embed = discord.Embed(
                 title="✅ Verification Successful!",
                 description=(
                     f"**Name:** {name}\n"
                     f"**MLBB UID:** {uid}\n"
                     f"**Server:** {server}\n\n"
-                    "You can now earn XP and Event Points. Have fun! 🎉"
+                    f"You can now earn XP and Event Points. Have fun! 🎉{msl_status}"
                 ),
                 color=discord.Color.green(),
             )
@@ -203,10 +222,22 @@ class VerificationCog(commands.Cog, name="verification"):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Register persistent view and load verification cache on startup."""
+        """Register persistent view and load verification + MSL caches on startup."""
         self.bot.add_view(VerifyView())
         await verification_service.load_cache()
+        await verification_service.load_msl_cache()
+        self.msl_refresh_loop.start()
         logger.info("Verification system ready")
+
+    @tasks.loop(hours=6)
+    async def msl_refresh_loop(self):
+        """Periodically refresh the MSL cache from Google Sheets."""
+        count = await verification_service.load_msl_cache()
+        logger.info(f"MSL cache refreshed: {count} entries")
+
+    @msl_refresh_loop.before_loop
+    async def before_msl_refresh(self):
+        await self.bot.wait_until_ready()
 
     verify_group = app_commands.Group(name="verify", description="MLBB verification system")
 
@@ -323,6 +354,93 @@ class VerificationCog(commands.Cog, name="verification"):
             f"✅ {user.mention} has been **unverified**. They will no longer earn XP or EP.",
             ephemeral=True,
         )
+
+    # ─── MSL SUBGROUP ────────────────────────────────────────────────────
+
+    msl_group = app_commands.Group(
+        name="msl", description="Moonton Student Leader verification",
+        parent=verify_group
+    )
+
+    @msl_group.command(name="setup", description="Configure the MSL spreadsheet and role")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        sheet_url="Google Sheets URL (must be public / anyone with link)",
+        role="The MSL role to assign"
+    )
+    async def msl_setup(self, interaction: discord.Interaction, sheet_url: str, role: discord.Role):
+        await interaction.response.defer(ephemeral=True)
+
+        # Validate the URL looks like a Google Sheet
+        if 'spreadsheets/d/' not in sheet_url:
+            return await interaction.followup.send(
+                "❌ That doesn't look like a Google Sheets URL. "
+                "It should contain `spreadsheets/d/`.",
+                ephemeral=True
+            )
+
+        await settings_service.set("msl_sheet_url", sheet_url)
+        await settings_service.set("msl_role_id", str(role.id))
+
+        # Immediately load the cache to validate
+        count = await verification_service.load_msl_cache()
+
+        await interaction.followup.send(
+            f"✅ **MSL Verification configured!**\n\n"
+            f"📄 Sheet: {sheet_url}\n"
+            f"🏷️ Role: {role.mention}\n"
+            f"👥 **{count}** MSL entries loaded from the FINAL tab.",
+            ephemeral=True
+        )
+
+    @msl_group.command(name="refresh", description="Force refresh the MSL cache from Google Sheets")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    async def msl_refresh(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        count = await verification_service.load_msl_cache()
+        await interaction.followup.send(
+            f"✅ MSL cache refreshed — **{count}** entries loaded.",
+            ephemeral=True
+        )
+
+    @msl_group.command(name="check", description="Check if a verified user is an MSL member")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(user="The user to check")
+    async def msl_check(self, interaction: discord.Interaction, user: discord.Member):
+        info = await verification_service.get_user_info(user.id)
+        if not info:
+            return await interaction.response.send_message(
+                f"❌ {user.mention} is not verified.", ephemeral=True
+            )
+
+        mlbb_uid = info['mlbb_uid']
+        if verification_service.is_msl(mlbb_uid):
+            nickname = verification_service.get_msl_nickname(mlbb_uid)
+            msl_role_id = await settings_service.get_int("msl_role_id")
+
+            # Grant role if not already assigned
+            if msl_role_id:
+                msl_role = interaction.guild.get_role(msl_role_id)
+                if msl_role and msl_role not in user.roles:
+                    try:
+                        await user.add_roles(msl_role, reason="MSL manual check")
+                    except discord.Forbidden:
+                        pass
+
+            await interaction.response.send_message(
+                f"🎓 **{user.mention}** is an MSL member!\n"
+                f"MSL Nickname: **{nickname}**\n"
+                f"MLBB UID: **{mlbb_uid}**",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ {user.mention} (UID: {mlbb_uid}) is **not** in the MSL spreadsheet.",
+                ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot):

@@ -388,6 +388,9 @@ async def help_command(inter: discord.Interaction):
                 ("**`/event raffle create`**", "Deploy a new event raffle"),
                 ("**`/event raffle draw <id>`**", "Manually draw raffle winners"),
                 ("**`/event raffle cancel <id>`**", "Cancel an active raffle"),
+                ("**`/verify msl setup`**", "Configure MSL sheet & role"),
+                ("**`/verify msl refresh`**", "Force refresh MSL cache"),
+                ("**`/verify msl check <user>`**", "Check if user is MSL"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },
