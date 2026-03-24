@@ -35,7 +35,6 @@ XP_CONFIG = {
     "message": {
         "min_xp": 10,
         "max_xp": 15,
-        "min_length": 10,        # Minimum message length to earn XP
         "cooldown_seconds": 10,  # One XP gain per cycle
     },
     "reaction": {
@@ -44,7 +43,10 @@ XP_CONFIG = {
         "daily_cap": 100,           # User's daily cap for reaction XP
     },
     "voice": {
-        "xp_per_cycle": 2,
+        "xp_stream_video": 4,       # High XP for screen share / camera
+        "xp_unmuted": 2,            # Normal XP for active talking
+        "xp_muted": 1,              # Low XP for just listening
+        "xp_deafened": 1,           # Minimal XP for deafened/AFK
         "min_members": 2,           # Minimum active members in VC
         "cycle_seconds": 10,
     },

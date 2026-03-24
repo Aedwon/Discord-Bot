@@ -232,21 +232,35 @@ class XpCog(commands.Cog, name="Leveling"):
             if afk_channel and vc.id == afk_channel.id:
                 continue
             
-            valid_members = [
+            # Get all verified human members in the channel
+            human_members = [
                 m for m in vc.members
-                if not m.bot
-                and not m.voice.mute and not m.voice.self_mute
-                and not m.voice.deaf and not m.voice.self_deaf
-                and not m.voice.suppress
-                and verification_service.is_verified(m.id)
+                if not m.bot and verification_service.is_verified(m.id)
             ]
             
-            if len(valid_members) >= voice_config["min_members"]:
-                for member in valid_members:
-                    self.pending_xp[member.id] = (
-                        self.pending_xp.get(member.id, 0) + 
-                        voice_config["xp_per_cycle"]
-                    )
+            if len(human_members) >= voice_config["min_members"]:
+                for member in human_members:
+                    # Skip stage listeners who are suppressed
+                    if member.voice.suppress:
+                        continue
+                        
+                    # Tier 1: Streaming or Video (Highest)
+                    if member.voice.self_stream or member.voice.self_video:
+                        xp_amt = voice_config.get("xp_stream_video", 4)
+                    # Tier 4: Deafened (Lowest/None)
+                    elif member.voice.deaf or member.voice.self_deaf:
+                        xp_amt = voice_config.get("xp_deafened", 0)
+                    # Tier 3: Muted (Low)
+                    elif member.voice.mute or member.voice.self_mute:
+                        xp_amt = voice_config.get("xp_muted", 1)
+                    # Tier 2: Unmuted (Normal)
+                    else:
+                        xp_amt = voice_config.get("xp_unmuted", 2)
+                        
+                    if xp_amt > 0:
+                        self.pending_xp[member.id] = (
+                            self.pending_xp.get(member.id, 0) + xp_amt
+                        )
     
     # ─────────────────────────────────────────────────────────────────────
     # Event Listeners
@@ -268,8 +282,8 @@ class XpCog(commands.Cog, name="Leveling"):
         
         msg_config = XP_CONFIG["message"]
         
-        if len(message.content) < msg_config["min_length"]:
-            return
+        # User requested to remove the minimum 10 characters check.
+        # Cooldown is handled globally by self.gained_msg_xp which clears every 10s cycle.
         
         # Ignore bot channel
         bot_channel_id = await settings_service.get_int("bot_channel_id")
