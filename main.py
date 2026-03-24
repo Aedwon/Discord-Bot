@@ -36,6 +36,35 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # Target guild object (created after bot connects)
 TARGET_GUILD = None
 
+from utils.checks import AdminAuthError
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    if isinstance(error, discord.app_commands.CheckFailure) and isinstance(error.original if hasattr(error, 'original') else error, AdminAuthError):
+        embed = discord.Embed(
+            title="🔒 Unauthorized",
+            description="This command requires an active Admin Session.\n\nPlease use `/admin auth` to unlock it.",
+            color=discord.Color.red()
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to send auth error: {e}")
+        return
+
+    # Fallback for other errors
+    logger.error(f"Command execution failed: {error}")
+    try:
+        msg = f"❌ An error occurred: {error}"
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
 
 @bot.event
 async def on_ready():
@@ -170,6 +199,7 @@ async def load_extensions():
         "cogs.tracker.quiz_cog",
         "cogs.tracker.social_cog",
         "cogs.setup.setup_cog",
+        "cogs.setup.auth_cog",
         "cogs.setup.test_cog",
         "cogs.embed_cog",
         "cogs.voice_cog",

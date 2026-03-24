@@ -560,6 +560,7 @@ class ModCog(commands.Cog, name="Moderation"):
         await self._log_to_channel(inter.guild, embed)
     
     @app_commands.command(name="assign-autorole", description="Assign auto-role to all members who don't have it")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def assign_autorole(self, inter: discord.Interaction):
         """
@@ -792,6 +793,7 @@ class ModCog(commands.Cog, name="Moderation"):
     # ─────────────────────────────────────────────────────────────────────
     
     @app_commands.command(name="testrole", description="[DEBUG] Test role assignment with detailed checks")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
         user="The member to assign the role to",

@@ -9,6 +9,7 @@ from discord import app_commands
 from typing import Literal
 
 from services.settings_service import settings_service
+from utils.checks import require_admin_auth
 
 
 class SetupCog(commands.Cog, name="Setup"):
@@ -24,6 +25,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
     
     @setup_group.command(name="view", description="View all current bot settings & setup checklist")
+    @require_admin_auth()
     async def setup_view(self, inter: discord.Interaction):
         """View current bot settings and setup checklist."""
         settings = await settings_service.get_all()
@@ -74,6 +76,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
     
     @setup_group.command(name="channel", description="Set a text channel")
+    @require_admin_auth()
     @app_commands.describe(
         setting="Which channel setting to configure",
         channel="The channel to set"
@@ -117,6 +120,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
     
     @setup_group.command(name="role", description="Set a role")
+    @require_admin_auth()
     @app_commands.describe(
         setting="Which role setting to configure",
         role="The role to set"
@@ -145,6 +149,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
     
     @setup_group.command(name="vc", description="Set a voice channel")
+    @require_admin_auth()
     @app_commands.describe(
         setting="Which voice channel setting to configure",
         channel="The voice channel to set"
@@ -166,16 +171,19 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
     
     @setup_group.command(name="color-add", description="Add a booster color role")
+    @require_admin_auth()
     async def setup_color_add(self, inter: discord.Interaction, name: str, role: discord.Role):
         await settings_service.set_color_role(name, role.id)
         await inter.response.send_message(f"✅ Added color **{name}** → {role.mention}", ephemeral=True)
     
     @setup_group.command(name="color-remove", description="Remove a booster color role")
+    @require_admin_auth()
     async def setup_color_remove(self, inter: discord.Interaction, name: str):
         await settings_service.remove_color_role(name)
         await inter.response.send_message(f"✅ Removed color **{name}**", ephemeral=True)
     
     @setup_group.command(name="color-list", description="List all booster color roles")
+    @require_admin_auth()
     async def setup_color_list(self, inter: discord.Interaction):
         colors = await settings_service.get_color_roles()
         if not colors:
@@ -194,11 +202,13 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
     
     @setup_group.command(name="emblem-add", description="Add a booster emblem role")
+    @require_admin_auth()
     async def setup_emblem_add(self, inter: discord.Interaction, emoji: str, role: discord.Role):
         await settings_service.set_emblem_role(emoji, role.id)
         await inter.response.send_message(f"✅ Added emblem {emoji} → {role.mention}", ephemeral=True)
     
     @setup_group.command(name="emblem-remove", description="Remove a booster emblem role")
+    @require_admin_auth()
     async def setup_emblem_remove(self, inter: discord.Interaction, emoji: str):
         emblems = await settings_service.get_emblem_roles()
         emblems.pop(emoji, None)
@@ -207,6 +217,7 @@ class SetupCog(commands.Cog, name="Setup"):
         await inter.response.send_message(f"✅ Removed emblem {emoji}", ephemeral=True)
     
     @setup_group.command(name="emblem-list", description="List all booster emblem roles")
+    @require_admin_auth()
     async def setup_emblem_list(self, inter: discord.Interaction):
         emblems = await settings_service.get_emblem_roles()
         if not emblems:
@@ -225,6 +236,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
 
     @setup_group.command(name="xp_roles", description="Auto-discover and map the 21 EXP Role Tiers dynamically.")
+    @require_admin_auth()
     async def setup_xp_roles(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True)
         
@@ -316,6 +328,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
 
     @setup_group.command(name="trigger_eos", description="Force trigger End-of-Season: assign Peak Ranks, reset EP, advance season.")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def trigger_eos(self, inter: discord.Interaction):
         current_season = await settings_service.get_int("current_season")
@@ -338,11 +351,13 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
 
     @setup_group.command(name="analytics_sentiment_channel", description="Set the channel for automatic daily sentiment exports.")
+    @require_admin_auth()
     async def setup_sentiment_channel(self, inter: discord.Interaction, channel: discord.TextChannel):
         await settings_service.set("analytics_sentiment_channel", str(channel.id))
         await inter.response.send_message(f"✅ Daily sentiment exports will auto-post to {channel.mention}.", ephemeral=True)
 
     @setup_group.command(name="analytics_tracked_roles", description="Set which opt-in roles to track adoption rates for.")
+    @require_admin_auth()
     async def setup_tracked_roles(self, inter: discord.Interaction, role1: discord.Role, role2: discord.Role = None, role3: discord.Role = None, role4: discord.Role = None, role5: discord.Role = None):
         roles = [r for r in [role1, role2, role3, role4, role5] if r]
         role_ids = ",".join(str(r.id) for r in roles)
@@ -351,6 +366,7 @@ class SetupCog(commands.Cog, name="Setup"):
         await inter.response.send_message(f"✅ Now tracking adoption rates for: {names}", ephemeral=True)
 
     @setup_group.command(name="analytics_regions", description="Set which role names represent geographic regions.")
+    @require_admin_auth()
     async def setup_regions(self, inter: discord.Interaction, region_roles: str):
         """Comma-separated list of role names that represent regions (e.g. 'Luzon,Visayas,Mindanao,SEA,Europe')"""
         await settings_service.set("analytics_region_roles", region_roles)
@@ -361,6 +377,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
 
     @setup_group.command(name="quiz_channel", description="Set the channel for automated quiz sessions.")
+    @require_admin_auth()
     async def setup_quiz_channel(self, inter: discord.Interaction, channel: discord.TextChannel):
         await settings_service.set("quiz_channel_id", str(channel.id))
         await inter.response.send_message(f"✅ Quiz sessions will run in {channel.mention} (Noon & 8PM PHT daily).", ephemeral=True)
@@ -370,6 +387,7 @@ class SetupCog(commands.Cog, name="Setup"):
     # ─────────────────────────────────────────────────────────────────────
 
     @setup_group.command(name="sync_xp_roles", description="Bulk-assign the correct XP tier role to ALL users based on their current XP.")
+    @require_admin_auth()
     async def sync_xp_roles(self, inter: discord.Interaction):
         await inter.response.defer(ephemeral=True)
         
@@ -453,6 +471,100 @@ class SetupCog(commands.Cog, name="Setup"):
             color=discord.Color.green() if errors == 0 else discord.Color.orange()
         )
         await inter.followup.send(embed=embed)
+
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Server Wipe System
+    # ─────────────────────────────────────────────────────────────────────
+    
+    @setup_group.command(name="wipe", description="Strictly reset specific bot systems or perform a Full Server Wipe.")
+    @app_commands.describe(category="Which data category to permanently wipe")
+    @app_commands.choices(category=[
+        app_commands.Choice(name="XP & Leveling", value="xp"),
+        app_commands.Choice(name="Event Points (EP) & Placements", value="ep"),
+        app_commands.Choice(name="Active Event Codes", value="event"),
+        app_commands.Choice(name="Economy (Tokens)", value="economy"),
+        app_commands.Choice(name="Social & Streaks", value="social"),
+        app_commands.Choice(name="Server Boosters", value="boosters"),
+        app_commands.Choice(name="Moderation Logs", value="modlogs"),
+        app_commands.Choice(name="⚠️ Verification Data", value="verification"),
+        app_commands.Choice(name="🚨 FULL SERVER WIPE 🚨", value="full"),
+    ])
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    async def setup_wipe(self, inter: discord.Interaction, category: str):
+        """Modular wipe command for admins."""
+        from services.database import db
+        import asyncio
+        
+        class WipeConfirmView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.confirmed = False
+                
+            @discord.ui.button(label="CONFIRM DESTRUCTIVE WIPE", style=discord.ButtonStyle.danger, custom_id="wipe_confirm")
+            async def confirm(self, button_inter: discord.Interaction, button: discord.ui.Button):
+                self.confirmed = True
+                self.stop()
+                await button_inter.response.defer()
+                
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="wipe_cancel")
+            async def cancel(self, button_inter: discord.Interaction, button: discord.ui.Button):
+                self.stop()
+                await button_inter.response.edit_message(content="❌ Wipe operation cancelled.", embed=None, view=None)
+
+        embed = discord.Embed(
+            title="⚠️ DESTRUCTIVE ACTION WARNING",
+            description=f"You are about to permanently wipe the **{category.upper()}** category.\nThis action **cannot be undone** and will reset database records and mass-strip relevant progression roles from all members.",
+            color=discord.Color.red()
+        )
+        
+        view = WipeConfirmView()
+        await inter.response.send_message(embed=embed, view=view, ephemeral=True)
+        
+        await view.wait()
+        if not view.confirmed:
+            return
+            
+        progress_msg = await inter.followup.send(f"🔄 Executing **{category.upper()}** wipe... Please wait.", ephemeral=True)
+        
+        # 1. Database Operations
+        if category in ["xp", "full"]: await db.wipe_xp()
+        if category in ["ep", "full"]: await db.wipe_ep()
+        if category in ["event", "full"]: await db.wipe_event_codes()
+        if category in ["economy", "full"]: await db.wipe_economy()
+        if category in ["social", "full"]: await db.wipe_social()
+        if category in ["boosters", "full"]: await db.wipe_boosters()
+        if category in ["modlogs", "full"]: await db.wipe_modlogs()
+        if category in ["verification", "full"]: await db.wipe_verification()
+        
+        # 2. Bulk Role Stripping
+        roles_to_strip = []
+        if category in ["xp", "full"]:
+            xp_map = await settings_service.get_xp_roles()
+            roles_to_strip.extend([int(rid) for rid in xp_map.values() if rid])
+        if category in ["ep", "full"]:
+            ep_map = await settings_service.get_ep_roles()
+            roles_to_strip.extend([int(rid) for rid in ep_map.values() if rid])
+            peak_map = await settings_service.get_peak_roles()
+            roles_to_strip.extend([int(rid) for rid in peak_map.values() if rid])
+            
+        roles_stripped = 0
+        if roles_to_strip and inter.guild:
+            role_objects = [inter.guild.get_role(rid) for rid in set(roles_to_strip) if inter.guild.get_role(rid)]
+            if role_objects:
+                for member in inter.guild.members:
+                    mem_roles = [r for r in role_objects if r in member.roles]
+                    if mem_roles:
+                        try:
+                            await member.remove_roles(*mem_roles, reason=f"Server Wipe ({category})")
+                            roles_stripped += len(mem_roles)
+                            await asyncio.sleep(0.1) # Ratelimit protection
+                        except discord.Forbidden:
+                            pass
+                            
+        await progress_msg.edit(content=f"✅ **Wipe Complete:** Category `{category.upper()}` was successfully reset.\n*(Stripped {roles_stripped} matching progression roles).*")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))

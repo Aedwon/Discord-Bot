@@ -14,6 +14,7 @@ from services.xp_service import xp_service
 from services.settings_service import settings_service
 from services.verification_service import verification_service
 from utils.embeds import create_leaderboard_embed, create_rank_embed
+from utils.checks import require_admin_auth
 
 
 class XpCog(commands.Cog, name="Leveling"):
@@ -363,6 +364,7 @@ class XpCog(commands.Cog, name="Leveling"):
     # ─────────────────────────────────────────────────────────────────────
     
     @app_commands.command(name="xp-start", description="Start the XP system (enable XP gain)")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_start(self, inter: discord.Interaction):
         """Enable the XP system."""
@@ -380,6 +382,7 @@ class XpCog(commands.Cog, name="Leveling"):
         await inter.response.send_message(embed=embed)
     
     @app_commands.command(name="xp-stop", description="Stop the XP system (disable XP gain)")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_stop(self, inter: discord.Interaction):
         """Disable the XP system."""
@@ -401,6 +404,7 @@ class XpCog(commands.Cog, name="Leveling"):
 
     @app_commands.command(name="xp-add", description="Add XP to a specific user (Admin only)")
     @app_commands.describe(user="The user to grant XP to", amount="Amount of XP to add")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_add(self, inter: discord.Interaction, user: discord.Member, amount: int):
         from services.xp_service import xp_service
@@ -425,6 +429,7 @@ class XpCog(commands.Cog, name="Leveling"):
         
     @app_commands.command(name="xp-set", description="Set a specific user's XP (Admin only)")
     @app_commands.describe(user="The user to modify", amount="Exact XP amount to set")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_set(self, inter: discord.Interaction, user: discord.Member, amount: int):
         from services.xp_service import xp_service
@@ -437,6 +442,7 @@ class XpCog(commands.Cog, name="Leveling"):
         await inter.response.send_message(embed=embed)
     
     @app_commands.command(name="xp-reset", description="Reset all user XP to zero")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_reset(self, inter: discord.Interaction):
         """Reset all XP data. Requires confirmation."""
@@ -481,6 +487,7 @@ class XpCog(commands.Cog, name="Leveling"):
         await inter.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @app_commands.command(name="xp-status", description="Check if the XP system is running")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_status(self, inter: discord.Interaction):
         """Show XP system status."""

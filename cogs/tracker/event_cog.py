@@ -403,6 +403,7 @@ class EventCog(commands.GroupCog, name="event"):
 
     @app_commands.command(name="ep-add", description="Force add Event Points to a user (Admin only)")
     @app_commands.describe(user="The user to grant EP to", amount="Amount of EP to add")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def ep_add(self, interaction: discord.Interaction, user: discord.Member, amount: int):
         from services.ep_service import ep_service
@@ -417,6 +418,7 @@ class EventCog(commands.GroupCog, name="event"):
 
     @app_commands.command(name="ep-set", description="Force set a user's Event Points (Admin only)")
     @app_commands.describe(user="The user to modify", amount="Exact EP amount to set")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def ep_set(self, interaction: discord.Interaction, user: discord.Member, amount: int):
         from services.xp_service import xp_service
@@ -433,6 +435,7 @@ class EventCog(commands.GroupCog, name="event"):
 
     @app_commands.command(name="ep-reset", description="Reset a single user's Event Points to 0 (Admin only)")
     @app_commands.describe(user="The user to reset")
+    @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def ep_reset(self, interaction: discord.Interaction, user: discord.Member):
         from services.xp_service import xp_service

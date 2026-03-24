@@ -462,6 +462,45 @@ class Database:
                 await cur.execute(query, params)
                 return await cur.fetchall()
 
+    # ─────────────────────────────────────────────────────────────────
+    # Destructive Wipe Methods (Modular Wipe System)
+    # ─────────────────────────────────────────────────────────────────
+
+    async def wipe_xp(self):
+        """Reset XP and Leveling related columns."""
+        await self.execute("UPDATE users SET xp = 0, xp_multiplier = 1.0, xp_locked = FALSE, xp_lock_until = NULL")
+
+    async def wipe_ep(self):
+        """Reset Event Points and Placements, clear redemptions history."""
+        await self.execute("UPDATE users SET event_points = 0, consecutive_events_attended = 0")
+        await self.execute("DELETE FROM event_redemptions")
+
+    async def wipe_event_codes(self):
+        """Clear all active event codes."""
+        await self.execute("DELETE FROM event_codes")
+
+    async def wipe_economy(self):
+        """Reset all tokens and shop discounts."""
+        await self.execute("UPDATE users SET tokens = 0, lifetime_tokens = 0, shop_discount = 0.0")
+
+    async def wipe_social(self):
+        """Reset daily streaks, thanks, and badges. Clear thanks history."""
+        await self.execute("UPDATE users SET consecutive_active_days = 0, last_active_date = NULL, thanks_received = 0, badges = '[]'")
+        await self.execute("DELETE FROM thanks_history")
+
+    async def wipe_boosters(self):
+        """Reset booster statuses and raffle history."""
+        await self.execute("UPDATE users SET boost_start_date = NULL")
+        await self.execute("DELETE FROM booster_raffle_history")
+
+    async def wipe_modlogs(self):
+        """Erase moderation logs completely."""
+        await self.execute("DELETE FROM mod_logs")
+
+    async def wipe_verification(self):
+        """Delete all Verification status data (Extreme)."""
+        await self.execute("DELETE FROM verified_users")
+
 
 # Singleton instance
 db = Database()
