@@ -393,13 +393,46 @@ class EventCog(commands.GroupCog, name="event"):
         
         user_data = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (target.id,))
         ep = user_data['event_points'] if user_data else 0
-        rank_data = await db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > (SELECT event_points FROM users WHERE user_id = %s)", (target.id,))
+        rank_data = await db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > (SELECT COALESCE((SELECT event_points FROM users WHERE user_id = %s), 0))", (target.id,))
         rank = (rank_data['pos'] + 1) if rank_data and ep > 0 else "Unranked"
         
-        embed = discord.Embed(title=f"🎟️ {target.display_name}'s Event Profile", color=discord.Color.blurple())
+        # Event count
+        event_data = await db.fetch_one("SELECT COUNT(*) as total FROM event_redemptions WHERE user_id = %s", (target.id,))
+        events_attended = event_data['total'] if event_data else 0
+        
+        # Tier progress
+        from services.ep_service import ep_service
+        current_tier, next_tier, progress = ep_service.get_tier_progress(ep)
+        
+        bar_fill = int(progress * 12)
+        bar = "█" * bar_fill + "░" * (12 - bar_fill)
+        pct = int(progress * 100)
+        
+        embed = discord.Embed(
+            title=f"🎟️ {target.display_name}'s Event Profile",
+            color=0x5865F2
+        )
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.add_field(name="Total Event Points", value=f"**{ep} EP**", inline=True)
-        embed.add_field(name="Server Ranking", value=f"**#{rank}**", inline=True)
+        
+        rank_display = f"#{rank}" if isinstance(rank, int) else rank
+        embed.add_field(name="Server Rank", value=f"**{rank_display}**", inline=True)
+        embed.add_field(name="Total EP", value=f"**{ep:,}**", inline=True)
+        embed.add_field(name="Events Attended", value=f"**{events_attended}**", inline=True)
+        embed.add_field(name="Current Tier", value=f"**{current_tier}**", inline=True)
+        
+        if next_tier is None:
+            embed.add_field(
+                name="Tier Progress",
+                value=f"`{bar}` **MAX**\n👑 You've reached Mythic!",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name=f"Progress → {next_tier}",
+                value=f"`{bar}` **{pct}%**",
+                inline=False
+            )
+        
         await interaction.followup.send(embed=embed)
 
 async def setup(bot: commands.Bot):

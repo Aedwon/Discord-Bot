@@ -55,21 +55,49 @@ def create_rank_embed(member: discord.Member, rank: int | None, xp: int) -> disc
     level = xp_service.get_level(xp)
     tier = xp_service.get_tier_name(level)
     
+    # Progress bar calculation
+    current_level_xp = xp_service.get_xp_for_level(level)
+    next_level_xp = xp_service.get_xp_for_level(level + 1)
+    level_range = next_level_xp - current_level_xp
+    
+    if level >= 101:  # Monarch — maxed out
+        progress = 1.0
+        xp_remaining = 0
+    elif level_range > 0:
+        progress = min((xp - current_level_xp) / level_range, 1.0)
+        xp_remaining = next_level_xp - xp
+    else:
+        progress = 1.0
+        xp_remaining = 0
+    
+    bar_fill = int(progress * 12)
+    bar = "█" * bar_fill + "░" * (12 - bar_fill)
+    pct = int(progress * 100)
+
     embed = discord.Embed(
-        title=f"📊 {member.display_name}'s Stats",
+        title=f"📊 {member.display_name}'s Profile",
         color=member.color if member.color != discord.Color.default() else discord.Color.blue()
     )
-    
-    if rank:
-        embed.add_field(name="Rank", value=f"#{rank}", inline=True)
-    else:
-        embed.add_field(name="Rank", value="Unranked", inline=True)
-    
-    embed.add_field(name="XP", value=f"{xp:,}", inline=True)
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    rank_display = f"#{rank}" if rank else "Unranked"
+    embed.add_field(name="Rank", value=rank_display, inline=True)
+    embed.add_field(name="Total XP", value=f"{xp:,}", inline=True)
     embed.add_field(name="Level", value=str(level), inline=True)
     embed.add_field(name="Tier", value=tier or "None", inline=True)
     
-    embed.set_thumbnail(url=member.display_avatar.url)
+    if level >= 101:
+        embed.add_field(
+            name="Progress",
+            value=f"`{bar}` **MAX**\n👑 You've reached Monarch!",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name=f"Progress to Lv. {level + 1}",
+            value=f"`{bar}` **{pct}%**\n{xp - current_level_xp:,} / {level_range:,} XP — **{xp_remaining:,} XP** to go",
+            inline=False
+        )
     
     return embed
 

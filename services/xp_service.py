@@ -14,6 +14,11 @@ class XpService:
         """Calculate mathematical level using the custom exponential curve 150 * (Lvl^1.9)."""
         if xp <= 0: return 1
         return int((xp / 150) ** (1 / 1.9)) + 1
+    
+    def get_xp_for_level(self, level: int) -> int:
+        """Return the minimum XP needed to reach a given level."""
+        if level <= 1: return 0
+        return int(150 * ((level - 1) ** 1.9))
         
     def get_tier_name(self, level: int) -> str | None:
         """Mathematical Mapping: Level 1-100 to 22 distinctly named Role Tiers."""

@@ -70,23 +70,42 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             
     async def generate_exp_leaderboard(self) -> discord.Embed:
         top_xp = await db.fetch_all("SELECT user_id, xp FROM users WHERE xp > 0 ORDER BY xp DESC LIMIT 10")
-        embed = discord.Embed(title="🌟 Hall of Fame: Experience", color=discord.Color.blue(), timestamp=discord.utils.utcnow())
         
         next_update = int(time.time() + 300)
-        footer_text = f"\n\n*Next update:* <t:{next_update}:R>"
+        embed = discord.Embed(
+            title="🌟 Hall of Fame: Experience",
+            color=0x5865F2,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"Updates every 5 min • Next refresh")
         
         if not top_xp:
-            embed.description = "The server is quiet... no one has earned any XP yet." + footer_text
+            embed.description = "> *The server is quiet... no one has earned any XP yet.*"
             return embed
-            
-        lines = []
-        for i, u in enumerate(top_xp, 1):
-            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
+        
+        # ── Top 3 Podium ──
+        podium = []
+        medals = ["👑", "🥈", "🥉"]
+        for i, u in enumerate(top_xp[:3]):
             level = xp_service.get_level(u['xp'])
             tier = xp_service.get_tier_name(level)
-            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['xp']} XP** | Lv. {level} ({tier})")
-            
-        embed.description = "\n".join(lines) + footer_text
+            podium.append(
+                f"{medals[i]} <@{u['user_id']}>\n"
+                f"╰ **{u['xp']:,} XP** • Lv. {level} ({tier})"
+            )
+        
+        embed.description = "\n\n".join(podium)
+        
+        # ── Runners Up (4-10) ──
+        if len(top_xp) > 3:
+            runners = []
+            for i, u in enumerate(top_xp[3:], 4):
+                level = xp_service.get_level(u['xp'])
+                tier = xp_service.get_tier_name(level)
+                runners.append(f"`{i}.` <@{u['user_id']}> — **{u['xp']:,} XP** • Lv. {level}")
+            embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
+        
+        embed.add_field(name="", value=f"*Next update:* <t:{next_update}:R>", inline=False)
         return embed
 
     async def generate_event_leaderboard(self) -> discord.Embed:
@@ -99,24 +118,44 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             LIMIT 10
         '''
         top_ep = await db.fetch_all(query)
-        embed = discord.Embed(title="🏆 Hall of Fame: Event Points", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
         
         next_update = int(time.time() + 300)
-        footer_text = f"\n\n*Next update:* <t:{next_update}:R>"
+        embed = discord.Embed(
+            title="🏆 Hall of Fame: Event Points",
+            color=0xF5A623,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"Updates every 5 min • Next refresh")
         
         if not top_ep:
-            embed.description = "The event stands are empty... no Event Points have been formally distributed." + footer_text
+            embed.description = "> *The event stands are empty... no Event Points have been distributed.*"
             return embed
-            
-        lines = []
-        for i, u in enumerate(top_ep, 1):
-            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-            events = u['total_events'] or 0
+        
+        # ── Top 3 Podium ──
+        podium = []
+        medals = ["👑", "🥈", "🥉"]
+        for i, u in enumerate(top_ep[:3]):
             ep = u['event_points']
+            events = u['total_events'] or 0
             role_name = ep_service.get_sub_tier(ep)
-            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{ep} EP** | {events} Events ({role_name})")
-            
-        embed.description = "\n".join(lines) + footer_text
+            podium.append(
+                f"{medals[i]} <@{u['user_id']}>\n"
+                f"╰ **{ep:,} EP** • {events} Events ({role_name})"
+            )
+        
+        embed.description = "\n\n".join(podium)
+        
+        # ── Runners Up ──
+        if len(top_ep) > 3:
+            runners = []
+            for i, u in enumerate(top_ep[3:], 4):
+                ep = u['event_points']
+                events = u['total_events'] or 0
+                role_name = ep_service.get_sub_tier(ep)
+                runners.append(f"`{i}.` <@{u['user_id']}> — **{ep:,} EP** • {events} Events ({role_name})")
+            embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
+        
+        embed.add_field(name="", value=f"*Next update:* <t:{next_update}:R>", inline=False)
         return embed
 
     async def generate_quiz_leaderboard(self) -> discord.Embed:
@@ -129,21 +168,40 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             LIMIT 10
         '''
         top_quiz = await db.fetch_all(query)
-        embed = discord.Embed(title="🧠 Weekly Quiz Champions", color=discord.Color.purple(), timestamp=discord.utils.utcnow())
         
         next_update = int(time.time() + 300)
-        footer_text = f"\n\n_Past 7 Days Highlights_ • *Next update:* <t:{next_update}:R>"
+        embed = discord.Embed(
+            title="🧠 Weekly Quiz Champions",
+            description="*Past 7 Days Highlights*",
+            color=0x9B59B6,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"Updates every 5 min • Next refresh")
         
         if not top_quiz:
-            embed.description = "No quiz scores recorded in the last 7 days. Be the first to answer correctly!" + footer_text
+            embed.description = "> *No quiz scores recorded in the last 7 days.*\n> *Be the first to answer correctly!*"
             return embed
-            
-        lines = []
-        for i, u in enumerate(top_quiz, 1):
-            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['total_score']} pts**")
-            
-        embed.description = "\n".join(lines) + footer_text
+        
+        # ── Top 3 Podium ──
+        podium = []
+        medals = ["👑", "🥈", "🥉"]
+        for i, u in enumerate(top_quiz[:3]):
+            score = u['total_score']
+            podium.append(
+                f"{medals[i]} <@{u['user_id']}>\n"
+                f"╰ **{score:,} pts**"
+            )
+        
+        embed.description = "*Past 7 Days Highlights*\n\n" + "\n\n".join(podium)
+        
+        # ── Runners Up ──
+        if len(top_quiz) > 3:
+            runners = []
+            for i, u in enumerate(top_quiz[3:], 4):
+                runners.append(f"`{i}.` <@{u['user_id']}> — **{u['total_score']:,} pts**")
+            embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
+        
+        embed.add_field(name="", value=f"*Next update:* <t:{next_update}:R>", inline=False)
         return embed
 
 async def setup(bot: commands.Bot):

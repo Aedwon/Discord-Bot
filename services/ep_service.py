@@ -86,6 +86,35 @@ class EPService:
 
         return SUB_TIERS[0]["name"]  # Fallback: Warrior V
 
+    def get_tier_progress(self, ep: int) -> tuple[str, str | None, float]:
+        """
+        Get the current sub-tier, next sub-tier, and progress (0.0-1.0) toward the next tier.
+        Returns (current_tier_name, next_tier_name_or_None, progress_float).
+        """
+        if ep >= MYTHIC_FLOOR:
+            return ("Mythic", None, 1.0)
+
+        current_idx = 0
+        for i, tier in enumerate(SUB_TIERS):
+            if ep >= tier["floor"]:
+                current_idx = i
+
+        current = SUB_TIERS[current_idx]
+        tier_range = current["ceiling"] - current["floor"]
+
+        if tier_range <= 0:
+            progress = 1.0
+        else:
+            progress = min((ep - current["floor"]) / tier_range, 1.0)
+
+        # Next tier
+        if current_idx + 1 < len(SUB_TIERS):
+            next_tier = SUB_TIERS[current_idx + 1]["name"]
+        else:
+            next_tier = "Mythic"
+
+        return (current["name"], next_tier, progress)
+
     def get_main_tier(self, ep: int) -> str:
         """
         Get the main tier name (without sub-tier numeral).

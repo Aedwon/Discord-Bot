@@ -295,6 +295,11 @@ class LogCog(commands.Cog, name="Logging"):
             
         if "content" not in payload.data:
             return # Likely just an embed unrolling
+        
+        # Skip bot-authored messages (e.g. leaderboard auto-refresh edits)
+        author_data = payload.data.get("author")
+        if author_data and author_data.get("bot", False):
+            return
             
         from services.database import db
         new_content = payload.data.get("content", "*Unknown*")
