@@ -11,6 +11,7 @@ from discord import app_commands
 from services.mod_service import mod_service
 from services.database import db
 from services.settings_service import settings_service
+from utils.checks import require_admin_auth
 
 
 class ModCog(commands.Cog, name="Moderation"):

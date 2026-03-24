@@ -12,6 +12,7 @@ import logging
 
 from services.database import db
 from services.settings_service import settings_service
+from utils.checks import require_admin_auth
 
 logger = logging.getLogger("mlbb_bot.event_cog")
 

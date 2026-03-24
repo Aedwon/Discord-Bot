@@ -207,12 +207,24 @@ async def load_extensions():
         "cogs.ticket_cog",
     ]
     
+    success_count = 0
+    failed_cogs = []
+    
     for cog in cog_modules:
         try:
             await bot.load_extension(cog)
             logger.info(f'Loaded extension: {cog}')
+            success_count += 1
         except Exception as e:
-            logger.error(f'Failed to load {cog}: {e}')
+            logger.error(f"Extension '{cog}' raised an error: {e}")
+            failed_cogs.append(cog)
+            
+    total = len(cog_modules)
+    if success_count == total:
+        logger.info(f'✅ All {total}/{total} cogs loaded successfully.')
+    else:
+        logger.error(f'⚠️ Only {success_count}/{total} cogs loaded successfully.')
+        logger.error(f'❌ Failed cogs list: {", ".join(failed_cogs)}')
 
 
 @bot.tree.command(name="reload", description="Reload bot cogs (Admin only)")
