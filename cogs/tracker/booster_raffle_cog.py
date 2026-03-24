@@ -161,17 +161,6 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         except Exception as e:
             logger.error(f"Failed to send raffle announcement: {e}")
 
-    # ──────────────────────────────────────────────────────────────────
-    # Admin Override Commands
-    # ──────────────────────────────────────────────────────────────────
-
-    @app_commands.command(name="raffle", description="Forcefully execute the booster raffle (Admin Only)")
-    @app_commands.default_permissions(administrator=True)
-    async def raffle_force(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        await self._execute_raffle(is_manual=True, target_channel=interaction.channel)
-        await interaction.followup.send("✅ Raffle manually executed and forced.", ephemeral=True)
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BoosterRaffleCog(bot))

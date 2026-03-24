@@ -325,6 +325,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/booster color`**", "Choose a custom name color"),
                 ("**`/booster emblem`**", "Choose an emblem badge"),
                 ("**`/booster list`**", "List all server boosters"),
+                ("**`/booster raffle`**", "Force execute weekly raffle"),
             ]
         },
         "verification": {
@@ -382,7 +383,6 @@ async def help_command(inter: discord.Interaction):
                 ("**`/ticket config-category <cat>`**", "Set ticket category"),
                 ("**`/xp start / stop / status`**", "Control XP system"),
                 ("**`/autorole`**", "Bulk-assign auto-role"),
-                ("**`/raffle`**", "Force execute booster raffle"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },
