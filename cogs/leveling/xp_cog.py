@@ -513,50 +513,62 @@ class XpCog(commands.Cog, name="Leveling"):
         )
         await inter.response.send_message(embed=embed)
     
-    @xp_group.command(name="reset", description="Reset all user XP to zero")
+    @xp_group.command(name="reset", description="Reset XP for one user or EVERYONE (Admin only)")
+    @app_commands.describe(user="The user to reset (leave blank to reset EVERYONE)")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
-    async def xp_reset(self, inter: discord.Interaction):
-        """Reset all XP data. Requires confirmation."""
-        from services.database import db
-        
-        # Create confirmation view
-        class ConfirmView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=30)
-                self.confirmed = False
+    async def xp_reset(self, inter: discord.Interaction, user: discord.Member = None):
+        """Reset XP data. Requires confirmation if global."""
+        if user:
+            from services.xp_service import xp_service
+            await inter.response.defer()
+            await xp_service.set_currency(user.id, xp=0)
             
-            @discord.ui.button(label="Confirm Reset", style=discord.ButtonStyle.danger)
-            async def confirm(self, button_inter: discord.Interaction, button: discord.ui.Button):
-                self.confirmed = True
-                self.stop()
+            embed = discord.Embed(
+                title="🔄 XP Reset",
+                description=f"Successfully reset {user.mention}'s XP to **0**.",
+                color=discord.Color.red()
+            )
+            await inter.followup.send(embed=embed)
+        else:
+            from services.database import db
+            # Create confirmation view
+            class ConfirmView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=30)
+                    self.confirmed = False
                 
-                # Reset all XP
-                await db.execute("UPDATE users SET xp = 0")
+                @discord.ui.button(label="Confirm Global Reset", style=discord.ButtonStyle.danger)
+                async def confirm(self, button_inter: discord.Interaction, button: discord.ui.Button):
+                    self.confirmed = True
+                    self.stop()
+                    
+                    # Reset all XP
+                    await db.execute("UPDATE users SET xp = 0")
+                    
+                    embed = discord.Embed(
+                        title="🚨 GLOBAL XP RESET",
+                        description="**ALL user XP has been wiped to 0.**",
+                        color=discord.Color.dark_red()
+                    )
+                    await button_inter.response.edit_message(embed=embed, view=None)
                 
-                embed = discord.Embed(
-                    title="🔄 XP Reset Complete",
-                    description="All user XP has been reset to 0.",
-                    color=discord.Color.red()
-                )
-                await button_inter.response.edit_message(embed=embed, view=None)
+                @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+                async def cancel(self, button_inter: discord.Interaction, button: discord.ui.Button):
+                    self.stop()
+                    await button_inter.response.edit_message(
+                        content="❌ Global XP reset cancelled.",
+                        embed=None,
+                        view=None
+                    )
             
-            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, button_inter: discord.Interaction, button: discord.ui.Button):
-                self.stop()
-                await button_inter.response.edit_message(
-                    content="❌ XP reset cancelled.",
-                    embed=None,
-                    view=None
-                )
-        
-        view = ConfirmView()
-        embed = discord.Embed(
-            title="⚠️ Confirm XP Reset",
-            description="**This will reset ALL user XP to 0.**\n\nThis action cannot be undone!",
-            color=discord.Color.red()
-        )
-        await inter.response.send_message(embed=embed, view=view, ephemeral=True)
+            view = ConfirmView()
+            embed = discord.Embed(
+                title="⚠️ Confirm Global XP Reset",
+                description="**This will reset EVERYONE'S XP to 0.**\n\nThis action cannot be undone!",
+                color=discord.Color.red()
+            )
+            await inter.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @xp_group.command(name="status", description="Check if the XP system is running")
     @require_admin_auth()

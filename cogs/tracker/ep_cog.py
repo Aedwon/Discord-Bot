@@ -222,21 +222,50 @@ class EPCog(commands.Cog, name="event_points_core"):
         )
         await interaction.followup.send(embed=embed)
 
-    @ep_group.command(name="reset", description="Reset a single user's Event Points to 0 (Admin only)")
-    @app_commands.describe(user="The user to reset")
+    @ep_group.command(name="reset", description="Reset Event Points for one user or EVERYONE (Admin only)")
+    @app_commands.describe(user="The user to reset (leave blank to reset EVERYONE)")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
-    async def ep_reset(self, interaction: discord.Interaction, user: discord.Member):
-        from services.xp_service import xp_service
-        await interaction.response.defer()
-        await xp_service.set_currency(user.id, ep=0)
-        await ep_service.process_ep_update(interaction.guild, user.id, 0, bypass_verification=True)
-        embed = discord.Embed(
-            title="🔄 EP Reset",
-            description=f"Successfully reset {user.mention}'s EP to **0**.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed)
+    async def ep_reset(self, interaction: discord.Interaction, user: discord.Member = None):
+        if user:
+            from services.xp_service import xp_service
+            await interaction.response.defer()
+            await xp_service.set_currency(user.id, ep=0)
+            await ep_service.process_ep_update(interaction.guild, user.id, 0, bypass_verification=True)
+            embed = discord.Embed(
+                title="🔄 EP Reset",
+                description=f"Successfully reset {user.mention}'s EP to **0**.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+        else:
+            class ConfirmView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=30)
+                    self.confirmed = False
+                
+                @discord.ui.button(label="Confirm Global EP Reset", style=discord.ButtonStyle.danger)
+                async def confirm(self, button_inter: discord.Interaction, button: discord.ui.Button):
+                    self.confirmed = True
+                    self.stop()
+                    await db.execute("UPDATE users SET event_points = 0")
+                    embed = discord.Embed(
+                        title="🚨 GLOBAL EP RESET",
+                        description="**ALL user Event Points have been wiped to 0.**",
+                        color=discord.Color.dark_red()
+                    )
+                    await button_inter.response.edit_message(content="✅ Reset complete.", embed=embed, view=None)
+                    
+            view = ConfirmView()
+            await interaction.response.send_message(
+                "⚠️ **WARNING:** You are about to reset Event Points for **EVERYONE** in the database.\nAre you absolutely sure?",
+                view=view,
+                ephemeral=True
+            )
+            await view.wait()
+            if not view.confirmed:
+                try: await interaction.edit_original_response(content="❌ Global EP reset cancelled.", view=None)
+                except Exception: pass
 
 
 async def setup(bot: commands.Bot):
