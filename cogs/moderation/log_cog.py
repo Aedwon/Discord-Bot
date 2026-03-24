@@ -227,6 +227,74 @@ class LogCog(commands.Cog, name="Logging"):
                 logger.error(f"Failed to log bulk delete batch: {e}")
 
     @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        """Catch bulk deletions of messages that are NOT in the bot's active RAM cache anymore."""
+        uncached_ids = payload.message_ids - payload.cached_message_ids
+        if not uncached_ids:
+            return # Everything was handled natively by on_bulk_message_delete
+            
+        channel = await self.get_log_channel()
+        if not channel:
+            return
+            
+        from services.database import db
+        
+        placeholders = ','.join(['%s'] * len(uncached_ids))
+        rows = await db.fetch_all(f"SELECT * FROM message_cache WHERE message_id IN ({placeholders})", tuple(uncached_ids))
+        
+        if not rows:
+            return # We have absolutely zero record of these extremely old messages
+            
+        # Chronological sort magically via Snowflakes
+        rows.sort(key=lambda r: r['message_id'])
+        
+        embeds = []
+        for r in rows:
+            if not r['content'] and not r['media_urls']:
+                continue
+                
+            embed = discord.Embed(
+                description=r['content'][:4000] if r['content'] else "*No text*",
+                color=discord.Color.dark_orange()
+            )
+            embed.set_author(name=f"{r['author_name']} ({r['author_id']})", icon_url=r['author_avatar'] if r['author_avatar'] else None)
+            
+            if r['media_urls']:
+                embed.add_field(name="Media", value=r['media_urls'], inline=False)
+                
+            embed.set_footer(text=f"Msg ID: {r['message_id']} [DB Recovered]")
+            embeds.append(embed)
+            
+        if not embeds:
+            return
+            
+        purge_title = discord.Embed(
+            title=f"🧹 Purge Log (Database Recovery): {len(rows)} Messages",
+            description=f"Channel: <#{payload.channel_id}>\n*These messages fell out of RAM but were successfully recovered from the long-term SQL Cache.*",
+            color=discord.Color.orange(),
+            timestamp=discord.utils.utcnow()
+        )
+        
+        try:
+            await channel.send(embed=purge_title)
+        except Exception:
+            return
+            
+        for i in range(0, len(embeds), 10):
+            batch = embeds[i:i+10]
+            try:
+                await channel.send(embeds=batch)
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Failed to log DB-recovered bulk delete batch: {e}")
+                
+        # Clean up the DB
+        try:
+            await db.execute(f"DELETE FROM message_cache WHERE message_id IN ({placeholders})", tuple(uncached_ids))
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if before.author.bot:
             return
