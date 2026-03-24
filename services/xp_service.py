@@ -76,13 +76,17 @@ class XpService:
                 return False
         return True
     
-    async def add_xp(self, user_id: int, amount: int) -> int:
+    async def add_xp(self, user_id: int, amount: int, bypass_lock: bool = False, bypass_verification: bool = False) -> int:
         """
         Add XP to a user (with multiplier applied) and return new total.
-        Returns 0 if user is XP locked.
+        Returns 0 if user is XP locked or unverified without a bypass.
         """
+        from services.verification_service import verification_service
+        if not bypass_verification and not verification_service.is_verified(user_id):
+            return 0
+
         # Check XP lock
-        if await self.is_xp_locked(user_id):
+        if not bypass_lock and await self.is_xp_locked(user_id):
             return 0
         
         # Get user's multiplier
@@ -218,8 +222,11 @@ class XpService:
             }
         return {'xp_multiplier': 1.0, 'shop_discount': 0.0, 'boost_start_date': None}
         
-    async def award_currency(self, user_id: int, xp: int = 0, tokens: int = 0, ep: int = 0):
+    async def award_currency(self, user_id: int, xp: int = 0, tokens: int = 0, ep: int = 0, bypass_verification: bool = False):
         """Award arbitrary currency to a user (Event System)."""
+        from services.verification_service import verification_service
+        if not bypass_verification and not verification_service.is_verified(user_id):
+            return
         await db.execute('''
             INSERT INTO users (user_id, xp, tokens, event_points, lifetime_tokens) 
             VALUES (%s, %s, %s, %s, %s)

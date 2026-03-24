@@ -147,7 +147,7 @@ class EPService:
 
     # ─── EP UPDATE PROCESSING ──────────────────────────────────────────
 
-    async def process_ep_update(self, guild: discord.Guild, user_id: int, ep_change: int) -> int:
+    async def process_ep_update(self, guild: discord.Guild, user_id: int, ep_change: int, bypass_verification: bool = False) -> int:
         """
         Process an EP change for a user: update DB, assign correct sub-tier role,
         and send rank-up notifications.
@@ -156,8 +156,8 @@ class EPService:
         if not guild:
             return 0
 
-        # Verification gate — unverified users earn no EP
-        if not verification_service.is_verified(user_id):
+        # Verification gate — unverified users earn no EP unless bypassed by admin
+        if not bypass_verification and not verification_service.is_verified(user_id):
             return 0
 
         # 0. Capture old EP for tier-change detection

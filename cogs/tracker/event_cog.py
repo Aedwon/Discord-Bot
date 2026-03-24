@@ -279,7 +279,7 @@ class EventCog(commands.Cog, name="Event"):
         try:
             await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", (event_id_int, user.id, placement, bonus_to_award))
             from services.ep_service import ep_service
-            await ep_service.process_ep_update(interaction.guild, user.id, bonus_to_award)
+            await ep_service.process_ep_update(interaction.guild, user.id, bonus_to_award, bypass_verification=True)
             
             discord_event = interaction.guild.get_scheduled_event(event_id_int)
             event_name = discord_event.name if discord_event else f"Event Profile {event_id}"
@@ -311,7 +311,7 @@ class EventCog(commands.Cog, name="Event"):
             
         await db.execute("DELETE FROM guild_event_rewards WHERE event_id = %s AND user_id = %s", (event_id_int, user.id))
         from services.ep_service import ep_service
-        await ep_service.process_ep_update(interaction.guild, user.id, -total_revoked)
+        await ep_service.process_ep_update(interaction.guild, user.id, -total_revoked, bypass_verification=True)
         
         await self.send_audit_log(interaction, "Payout UNDO", f"**Admin:** {interaction.user.mention}\n**Target:** {user.mention}\n**Erased:** `{total_revoked} EP`", discord.Color.red())
         await interaction.followup.send(f"🚨 **Revocation Complete:** Stripped `{total_revoked} EP` from {user.mention}.")

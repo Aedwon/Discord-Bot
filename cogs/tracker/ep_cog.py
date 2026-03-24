@@ -198,7 +198,7 @@ class EPCog(commands.Cog, name="event_points_core"):
     @app_commands.default_permissions(administrator=True)
     async def ep_add(self, interaction: discord.Interaction, user: discord.Member, amount: int):
         await interaction.response.defer()
-        new_total = await ep_service.process_ep_update(interaction.guild, user.id, amount)
+        new_total = await ep_service.process_ep_update(interaction.guild, user.id, amount, bypass_verification=True)
         embed = discord.Embed(
             title="🎟️ EP Granted",
             description=f"Successfully added {amount} EP to {user.mention}.\nNew Total: **{new_total} EP**",
@@ -214,7 +214,7 @@ class EPCog(commands.Cog, name="event_points_core"):
         from services.xp_service import xp_service
         await interaction.response.defer()
         await xp_service.set_currency(user.id, ep=amount)
-        new_total = await ep_service.process_ep_update(interaction.guild, user.id, 0)
+        new_total = await ep_service.process_ep_update(interaction.guild, user.id, 0, bypass_verification=True)
         embed = discord.Embed(
             title="⚙️ EP Overridden",
             description=f"Successfully set {user.mention}'s EP to **{new_total}**.",
@@ -230,7 +230,7 @@ class EPCog(commands.Cog, name="event_points_core"):
         from services.xp_service import xp_service
         await interaction.response.defer()
         await xp_service.set_currency(user.id, ep=0)
-        await ep_service.process_ep_update(interaction.guild, user.id, 0)
+        await ep_service.process_ep_update(interaction.guild, user.id, 0, bypass_verification=True)
         embed = discord.Embed(
             title="🔄 EP Reset",
             description=f"Successfully reset {user.mention}'s EP to **0**.",

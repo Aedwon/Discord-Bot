@@ -483,7 +483,7 @@ class XpCog(commands.Cog, name="Leveling"):
         await inter.response.defer()
         
         old_xp = await xp_service.get_xp(user.id)
-        new_total = await xp_service.add_xp(user.id, amount)
+        new_total = await xp_service.add_xp(user.id, amount, bypass_lock=True, bypass_verification=True)
         
         embed = discord.Embed(
             title="✨ XP Granted",
