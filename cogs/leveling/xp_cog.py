@@ -197,21 +197,22 @@ class XpCog(commands.Cog, name="Leveling"):
             if target:
                 try: await target.send(content=member.mention, embed=rank_embed)
                 except Exception: pass
-        else:
-            # LEVEL UP (same tier) → chat channel
+            # LEVEL UP (same tier) → alert channel
             lvl_embed = discord.Embed(
-                description=f"⬆️ Reached **Level {new_lvl}**! ({new_xp:,} XP)",
+                title="🎉 Level Up!",
+                description=f"Reached **Level {new_lvl}**!\nTotal XP: `{new_xp:,}` ✨",
                 color=discord.Color.green()
             )
             lvl_embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+            lvl_embed.set_thumbnail(url=member.display_avatar.url)
             
+            target = alert_channel or notify_channel
             if interaction:
                 try: await interaction.followup.send(content=member.mention, embed=lvl_embed)
                 except Exception: pass
-            elif notify_channel:
-                try: await notify_channel.send(content=member.mention, embed=lvl_embed)
+            elif target:
+                try: await target.send(content=member.mention, embed=lvl_embed)
                 except Exception: pass
-
 
     async def _is_xp_enabled(self) -> bool:
         """Check if the XP system is enabled."""
