@@ -29,6 +29,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.reactions = True
+intents.presences = True
 
 # Create bot instance
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -199,6 +200,7 @@ async def load_extensions():
         "cogs.tracker.analytics_cog",
         "cogs.tracker.quiz_cog",
         "cogs.tracker.social_cog",
+        "cogs.tracker.promo_cog",
         "cogs.setup.setup_cog",
         "cogs.setup.auth_cog",
         "cogs.setup.test_cog",
@@ -253,6 +255,8 @@ async def reload(inter: discord.Interaction, cog: str = None):
         "metrics": "cogs.tracker.analytics_cog",
         "quiz": "cogs.tracker.quiz_cog",
         "trivia": "cogs.tracker.quiz_cog",
+        "promo": "cogs.tracker.promo_cog",
+        "promotion": "cogs.tracker.promo_cog",
         "setup": "cogs.setup.setup_cog",
         "embeds": "cogs.embed_cog",
         "voice": "cogs.voice_cog",

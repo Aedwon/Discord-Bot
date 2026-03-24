@@ -64,6 +64,8 @@ class Database:
             ("lifetime_tokens", "INT DEFAULT 0"),
             ("consecutive_events_attended", "INT DEFAULT 0"),
             ("last_ep_update", "DATETIME DEFAULT CURRENT_TIMESTAMP"),
+            ("has_promo_status", "BOOLEAN DEFAULT FALSE"),
+            ("ep_multiplier", "FLOAT DEFAULT 1.0"),
         ]
         
         for col_name, col_def in new_columns:

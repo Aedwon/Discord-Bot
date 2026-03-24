@@ -7,6 +7,7 @@ dynamic Top-50 Mythic ladder assignments, and database interactions.
 from services.database import db
 from services.settings_service import settings_service
 from services.verification_service import verification_service
+from services.promo_service import promo_service
 import discord
 import logging
 
@@ -147,10 +148,18 @@ class EPService:
 
     # ─── EP UPDATE PROCESSING ──────────────────────────────────────────
 
-    async def process_ep_update(self, guild: discord.Guild, user_id: int, ep_change: int, bypass_verification: bool = False) -> int:
+    async def process_ep_update(
+        self, guild: discord.Guild, user_id: int, ep_change: int,
+        bypass_verification: bool = False, is_placement: bool = False
+    ) -> int:
         """
         Process an EP change for a user: update DB, assign correct sub-tier role,
         and send rank-up notifications.
+        
+        Args:
+            is_placement: If True, this is a placement/bonus award — skip EP multiplier.
+                          Only participation EP (is_placement=False, ep_change > 0) gets multiplied.
+        
         Returns the user's new EP total.
         """
         if not guild:
@@ -159,6 +168,16 @@ class EPService:
         # Verification gate — unverified users earn no EP unless bypassed by admin
         if not bypass_verification and not verification_service.is_verified(user_id):
             return 0
+
+        # Apply EP multiplier for positive, non-placement EP changes only
+        final_ep_change = ep_change
+        if ep_change > 0 and not is_placement:
+            multiplier = await promo_service.get_ep_multiplier(user_id)
+            if multiplier != 1.0:
+                final_ep_change = int(ep_change * multiplier)
+                logger.info(
+                    f"EP multiplier applied for {user_id}: {ep_change} × {multiplier} = {final_ep_change}"
+                )
 
         # 0. Capture old EP for tier-change detection
         old_row = await db.fetch_one(
@@ -174,7 +193,7 @@ class EPService:
             ON DUPLICATE KEY UPDATE 
                 event_points = GREATEST(0, users.event_points + %s),
                 last_ep_update = CURRENT_TIMESTAMP
-        ''', (user_id, ep_change, ep_change))
+        ''', (user_id, final_ep_change, final_ep_change))
 
         row = await db.fetch_one(
             "SELECT event_points FROM users WHERE user_id = %s", (user_id,)

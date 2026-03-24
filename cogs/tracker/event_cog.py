@@ -279,7 +279,7 @@ class EventCog(commands.Cog, name="Event"):
         try:
             await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", (event_id_int, user.id, placement, bonus_to_award))
             from services.ep_service import ep_service
-            await ep_service.process_ep_update(interaction.guild, user.id, bonus_to_award, bypass_verification=True)
+            await ep_service.process_ep_update(interaction.guild, user.id, bonus_to_award, bypass_verification=True, is_placement=True)
             
             discord_event = interaction.guild.get_scheduled_event(event_id_int)
             event_name = discord_event.name if discord_event else f"Event Profile {event_id}"

@@ -391,6 +391,18 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         embed.add_field(name="📥 New Joins", value=f"**{stats['joins']}**", inline=True)
         embed.add_field(name="📤 Leaves", value=f"**{stats['leaves']}**", inline=True)
         embed.add_field(name="⭐ Reactions", value=f"**{stats['reactions']:,}**", inline=True)
+
+        # Promo adoption stats
+        from services.promo_service import promo_service
+        promo_stats = await promo_service.get_promo_stats()
+        total_members = interaction.guild.member_count or 1
+        promo_pct = round(promo_stats['promoters'] / total_members * 100, 1)
+        embed.add_field(
+            name="📣 Status Promoters",
+            value=f"**{promo_stats['promoters']}** ({promo_pct}% of server)",
+            inline=True
+        )
+
         await interaction.followup.send(embed=embed)
 
     @analytics_group.command(name="active_users", description="DAU, WAU, MAU with trends and stickiness ratio.")

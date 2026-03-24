@@ -198,7 +198,7 @@ class EPCog(commands.Cog, name="event_points_core"):
     @app_commands.default_permissions(administrator=True)
     async def ep_add(self, interaction: discord.Interaction, user: discord.Member, amount: int):
         await interaction.response.defer()
-        new_total = await ep_service.process_ep_update(interaction.guild, user.id, amount, bypass_verification=True)
+        new_total = await ep_service.process_ep_update(interaction.guild, user.id, amount, bypass_verification=True, is_placement=True)
         embed = discord.Embed(
             title="🎟️ EP Granted",
             description=f"Successfully added {amount} EP to {user.mention}.\nNew Total: **{new_total} EP**",

@@ -21,7 +21,7 @@ class TestCog(commands.Cog, name="Test Commands"):
     @test_group.command(name="add-ep", description="Force add Event Points")
     async def add_ep(self, interaction: discord.Interaction, member: discord.Member, amount: int):
         from services.ep_service import ep_service
-        await ep_service.process_ep_update(interaction.guild, member.id, amount)
+        await ep_service.process_ep_update(interaction.guild, member.id, amount, is_placement=True)
         await interaction.response.send_message(f"✅ Added {amount} EP to {member.mention}.", ephemeral=True)
 
     @test_group.command(name="add-tokens", description="Force add Economy Tokens (Triggers Mogul evaluation)")
