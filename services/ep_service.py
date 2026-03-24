@@ -255,10 +255,10 @@ class EPService:
                 return
 
             embed = discord.Embed(
-                title="🏅 EP Rank Up!",
+                title="🏅 EP Tier Rank Up! 🏅",
                 description=(
-                    f"**{old_tier or 'Unranked'}** → **{new_tier}**\n"
-                    f"`{new_ep:,}` Event Points"
+                    f"**{old_tier or 'Unranked'}** ➔ **{new_tier}**\n\n"
+                    f"**Total EP:** `{new_ep:,}`"
                 ),
                 color=discord.Color.purple()
             )

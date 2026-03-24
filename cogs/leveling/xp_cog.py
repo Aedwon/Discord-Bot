@@ -180,10 +180,11 @@ class XpCog(commands.Cog, name="Leveling"):
             await self._assign_tier_role(guild, member, new_tier, old_tier)
             
             rank_embed = discord.Embed(
-                title="⚔️ EXP Rank Up!",
+                title="✨ Tier Rank Up! ✨",
                 description=(
-                    f"**{old_tier or 'Unranked'}** → **{new_tier}**\n"
-                    f"Level **{new_lvl}** • `{new_xp:,}` XP"
+                    f"**{old_tier or 'Unranked'}** ➔ **{new_tier}**\n\n"
+                    f"**Level Reached:** `{new_lvl}`\n"
+                    f"**Total XP:** `{new_xp:,}`"
                 ),
                 color=discord.Color.gold()
             )
@@ -194,13 +195,14 @@ class XpCog(commands.Cog, name="Leveling"):
             if interaction:
                 try: await interaction.followup.send(content=member.mention, embed=rank_embed)
                 except Exception: pass
-            if target:
+            elif target:
                 try: await target.send(content=member.mention, embed=rank_embed)
                 except Exception: pass
+        else:
             # LEVEL UP (same tier) → alert channel
             lvl_embed = discord.Embed(
                 title="🎉 Level Up!",
-                description=f"Reached **Level {new_lvl}**!\nTotal XP: `{new_xp:,}` ✨",
+                description=f"Reached **Level {new_lvl}**!\n\n**Total XP:** `{new_xp:,}`",
                 color=discord.Color.green()
             )
             lvl_embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
