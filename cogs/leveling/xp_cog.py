@@ -384,7 +384,7 @@ class XpCog(commands.Cog, name="Leveling"):
         rank, xp = await xp_service.get_rank(target.id)
         level = xp_service.get_level(xp)
         xp_tier = xp_service.get_tier_name(level)
-        rank_display = f"#{rank}" if rank > 0 else "Unranked"
+        rank_display = f"#{rank}" if rank is not None and rank > 0 else "Unranked"
             
         # Events
         from services.database import db
