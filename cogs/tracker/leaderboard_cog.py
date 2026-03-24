@@ -73,7 +73,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         embed = discord.Embed(title="🌟 Hall of Fame: Experience", color=discord.Color.blue(), timestamp=discord.utils.utcnow())
         
         next_update = int(time.time() + 300)
-        footer_text = f"\\n\\n*Next update: <t:{next_update}:R>*"
+        footer_text = f"\n\n*Next update:* <t:{next_update}:R>"
         
         if not top_xp:
             embed.description = "The server is quiet... no one has earned any XP yet." + footer_text
@@ -86,7 +86,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             tier = xp_service.get_tier_name(level)
             lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['xp']} XP** | Lv. {level} ({tier})")
             
-        embed.description = "\\n".join(lines) + footer_text
+        embed.description = "\n".join(lines) + footer_text
         return embed
 
     async def generate_event_leaderboard(self) -> discord.Embed:
@@ -102,7 +102,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         embed = discord.Embed(title="🏆 Hall of Fame: Event Points", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
         
         next_update = int(time.time() + 300)
-        footer_text = f"\\n\\n*Next update: <t:{next_update}:R>*"
+        footer_text = f"\n\n*Next update:* <t:{next_update}:R>"
         
         if not top_ep:
             embed.description = "The event stands are empty... no Event Points have been formally distributed." + footer_text
@@ -116,7 +116,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             role_name = ep_service.get_sub_tier(ep)
             lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{ep} EP** | {events} Events ({role_name})")
             
-        embed.description = "\\n".join(lines) + footer_text
+        embed.description = "\n".join(lines) + footer_text
         return embed
 
     async def generate_quiz_leaderboard(self) -> discord.Embed:
@@ -132,7 +132,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         embed = discord.Embed(title="🧠 Weekly Quiz Champions", color=discord.Color.purple(), timestamp=discord.utils.utcnow())
         
         next_update = int(time.time() + 300)
-        footer_text = f"\\n\\n_Past 7 Days Highlights_ • *Next update: <t:{next_update}:R>*"
+        footer_text = f"\n\n_Past 7 Days Highlights_ • *Next update:* <t:{next_update}:R>"
         
         if not top_quiz:
             embed.description = "No quiz scores recorded in the last 7 days. Be the first to answer correctly!" + footer_text
@@ -143,7 +143,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
             lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['total_score']} pts**")
             
-        embed.description = "\\n".join(lines) + footer_text
+        embed.description = "\n".join(lines) + footer_text
         return embed
 
 async def setup(bot: commands.Bot):
