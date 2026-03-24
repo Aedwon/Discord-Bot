@@ -808,6 +808,9 @@ async def _finish_closure(interaction: discord.Interaction, reason: str, remarks
 # ────────────────────────────────────────────────────────────────
 
 class TicketCog(commands.Cog, name="Tickets"):
+    
+    ticket_group = app_commands.Group(name="ticket", description="Support ticket management", default_permissions=discord.Permissions(administrator=True))
+    
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.check_reminders.start()
@@ -850,7 +853,7 @@ class TicketCog(commands.Cog, name="Tickets"):
 
     # ── Admin Commands ─────────────────────────────────────────
 
-    @app_commands.command(name="setup-tickets", description="Post the ticket panel in a channel.")
+    @ticket_group.command(name="deploy", description="Post the ticket panel in a channel.")
     @app_commands.default_permissions(administrator=True)
     async def setup_tickets(self, interaction: discord.Interaction, channel: discord.TextChannel | None = None):
         target = channel or interaction.channel
@@ -871,7 +874,7 @@ class TicketCog(commands.Cog, name="Tickets"):
         await target.send(embed=embed, view=TicketCreateView())
         await interaction.response.send_message(f"✅ Ticket panel posted in {target.mention}.", ephemeral=True)
 
-    @app_commands.command(name="setup-ticket-category", description="Set the channel category for new tickets.")
+    @ticket_group.command(name="config-category", description="Set the channel category for new tickets.")
     @app_commands.default_permissions(administrator=True)
     async def setup_ticket_category(self, interaction: discord.Interaction, category: discord.CategoryChannel):
         await settings_service.set("ticket_category_id", str(category.id))
@@ -879,7 +882,7 @@ class TicketCog(commands.Cog, name="Tickets"):
             f"✅ Ticket category set to **{category.name}**.", ephemeral=True
         )
 
-    @app_commands.command(name="setup-ticket-roles", description="Map roles to ticket categories.")
+    @ticket_group.command(name="config-roles", description="Map roles to ticket categories.")
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
         category="Which ticket category",
@@ -907,7 +910,7 @@ class TicketCog(commands.Cog, name="Tickets"):
             if current.lower() in data["label"].lower()
         ]
 
-    @app_commands.command(name="ticket-test", description="Toggle test mode for this ticket.")
+    @ticket_group.command(name="test", description="Toggle test mode for this ticket.")
     @app_commands.default_permissions(administrator=True)
     async def ticket_test(self, interaction: discord.Interaction, enabled: bool):
         await interaction.response.defer(ephemeral=True)
@@ -923,7 +926,7 @@ class TicketCog(commands.Cog, name="Tickets"):
         else:
             await interaction.followup.send("✅ **Test Mode DISABLED** — ratings WILL be recorded.", ephemeral=True)
 
-    @app_commands.command(name="ticket-stats", description="View ticket rating statistics.")
+    @ticket_group.command(name="stats", description="View ticket rating statistics.")
     @app_commands.default_permissions(administrator=True)
     async def ticket_stats(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

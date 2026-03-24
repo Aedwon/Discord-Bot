@@ -89,6 +89,8 @@ def discohook_to_view(components_data):
 class EmbedsCog(commands.Cog, name="Embeds"):
     """Discohook embed manager with scheduling capabilities."""
     
+    embed_group = app_commands.Group(name="embed", description="Discohook embed manager", default_permissions=discord.Permissions(administrator=True))
+    
     def __init__(self, bot: commands.Bot):
         self.bot = bot
     
@@ -203,8 +205,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     # Slash Commands
     # ─────────────────────────────────────────────────────────────────────
     
-    @app_commands.command(name="send_embed", description="Send an embed from a Discohook link")
-    @app_commands.default_permissions(administrator=True)
+    @embed_group.command(name="send", description="Send an embed from a Discohook link")
     @app_commands.describe(
         channel="Channel to send the embed to",
         link="Discohook share link (if under 512 chars)",
@@ -304,8 +305,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     log_embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
                     await log_channel.send(embed=log_embed)
     
-    @app_commands.command(name="edit_embed", description="Edit an existing message using a Discohook link.")
-    @app_commands.default_permissions(administrator=True)
+    @embed_group.command(name="edit", description="Edit an existing message using a Discohook link.")
     @app_commands.describe(
         message_link="The message link to edit",
         link="Short Discohook link (if under 512 characters)",
@@ -372,8 +372,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         except Exception as e:
             await interaction.followup.send(f"❌ Error: `{e}`", ephemeral=True)
 
-    @app_commands.command(name="dl_embed", description="Generate a Discohook link from a Discord message.")
-    @app_commands.default_permissions(administrator=True)
+    @embed_group.command(name="download", description="Generate a Discohook link from a Discord message.")
     @app_commands.describe(message_link="Link to the Discord message containing the embed.")
     async def dl_embed(self, interaction: discord.Interaction, message_link: str):
         try:
@@ -421,7 +420,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: `{e}`", ephemeral=True)
 
-    @app_commands.command(name="manage_embeds", description="View, preview, and manage your scheduled embeds")
+    @embed_group.command(name="manage", description="View, preview, and manage your scheduled embeds")
     @app_commands.default_permissions(administrator=True)
     async def manage_embeds(self, interaction: discord.Interaction):
         """Manage pending scheduled embeds."""
@@ -525,8 +524,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             logger.error(f"Failed to force post embed {identifier}: {e}")
             await interaction.response.edit_message(content=f"❌ Error posting embed: `{e}`", embeds=[], view=None)
     
-    @app_commands.command(name="set_embed_log", description="Set the channel for scheduled embed logs")
-    @app_commands.default_permissions(administrator=True)
+    @embed_group.command(name="logs", description="Set the channel for scheduled embed logs")
     @app_commands.describe(channel="Channel for embed logs")
     async def set_embed_log(self, interaction: discord.Interaction, channel: discord.TextChannel):
         """Configure where scheduled embed logs are sent."""

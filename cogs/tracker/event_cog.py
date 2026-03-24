@@ -228,7 +228,7 @@ class EventCog(commands.GroupCog, name="event"):
             await msg.delete()
             await interaction.followup.send("❌ **Database Failure:** Kiosk aborted securely.", ephemeral=True)
 
-    @app_commands.command(name="cap_placement", description="Discord Managers: Lock a strict Budget limit on an Event's Placements.")
+    @app_commands.command(name="cap-placement", description="Lock a strict Budget limit on an Event's Placements.")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def cap_placement(self, interaction: discord.Interaction, event_id: str, total_budget: int):
@@ -400,55 +400,6 @@ class EventCog(commands.GroupCog, name="event"):
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="Total Event Points", value=f"**{ep} EP**", inline=True)
         embed.add_field(name="Server Ranking", value=f"**#{rank}**", inline=True)
-        await interaction.followup.send(embed=embed)
-
-    @app_commands.command(name="ep-add", description="Force add Event Points to a user (Admin only)")
-    @app_commands.describe(user="The user to grant EP to", amount="Amount of EP to add")
-    @require_admin_auth()
-    @app_commands.default_permissions(administrator=True)
-    async def ep_add(self, interaction: discord.Interaction, user: discord.Member, amount: int):
-        from services.ep_service import ep_service
-        await interaction.response.defer()
-        new_total = await ep_service.process_ep_update(interaction.guild, user.id, amount)
-        embed = discord.Embed(
-            title="🎟️ EP Granted",
-            description=f"Successfully added {amount} EP to {user.mention}.\nNew Total: **{new_total} EP**",
-            color=discord.Color.green()
-        )
-        await interaction.followup.send(embed=embed)
-
-    @app_commands.command(name="ep-set", description="Force set a user's Event Points (Admin only)")
-    @app_commands.describe(user="The user to modify", amount="Exact EP amount to set")
-    @require_admin_auth()
-    @app_commands.default_permissions(administrator=True)
-    async def ep_set(self, interaction: discord.Interaction, user: discord.Member, amount: int):
-        from services.xp_service import xp_service
-        from services.ep_service import ep_service
-        await interaction.response.defer()
-        await xp_service.set_currency(user.id, ep=amount)
-        new_total = await ep_service.process_ep_update(interaction.guild, user.id, 0)
-        embed = discord.Embed(
-            title="⚙️ EP Overridden",
-            description=f"Successfully set {user.mention}'s EP to **{new_total}**.",
-            color=discord.Color.orange()
-        )
-        await interaction.followup.send(embed=embed)
-
-    @app_commands.command(name="ep-reset", description="Reset a single user's Event Points to 0 (Admin only)")
-    @app_commands.describe(user="The user to reset")
-    @require_admin_auth()
-    @app_commands.default_permissions(administrator=True)
-    async def ep_reset(self, interaction: discord.Interaction, user: discord.Member):
-        from services.xp_service import xp_service
-        from services.ep_service import ep_service
-        await interaction.response.defer()
-        await xp_service.set_currency(user.id, ep=0)
-        await ep_service.process_ep_update(interaction.guild, user.id, 0)
-        embed = discord.Embed(
-            title="🔄 EP Reset",
-            description=f"Successfully reset {user.mention}'s EP to **0**.",
-            color=discord.Color.red()
-        )
         await interaction.followup.send(embed=embed)
 
 async def setup(bot: commands.Bot):

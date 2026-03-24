@@ -20,6 +20,8 @@ from utils.checks import require_admin_auth
 class XpCog(commands.Cog, name="Leveling"):
     """XP and Leveling system for the server."""
     
+    xp_group = app_commands.Group(name="xp", description="XP & Leveling system commands")
+    
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         
@@ -358,14 +360,14 @@ class XpCog(commands.Cog, name="Leveling"):
     # Slash Commands
     # ─────────────────────────────────────────────────────────────────────
     
-    @app_commands.command(name="leaderboard", description="Show the server XP leaderboard")
+    @xp_group.command(name="leaderboard", description="Show the server XP leaderboard")
     async def leaderboard(self, inter: discord.Interaction):
         """Show the server XP leaderboard."""
         top_users = await xp_service.get_leaderboard(limit=10)
         embed = create_leaderboard_embed(inter.guild, top_users)
         await inter.response.send_message(embed=embed)
     
-    @app_commands.command(name="rank", description="Show your or another user's rank")
+    @xp_group.command(name="profile", description="Show your or another user's rank and level")
     async def rank(self, inter: discord.Interaction, member: discord.Member = None):
         """Show your or another user's rank."""
         target = member or inter.user
@@ -377,7 +379,7 @@ class XpCog(commands.Cog, name="Leveling"):
     # Admin Commands - XP System Control
     # ─────────────────────────────────────────────────────────────────────
     
-    @app_commands.command(name="xp-start", description="Start the XP system (enable XP gain)")
+    @xp_group.command(name="start", description="Start the XP system (enable XP gain)")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_start(self, inter: discord.Interaction):
@@ -395,7 +397,7 @@ class XpCog(commands.Cog, name="Leveling"):
         )
         await inter.response.send_message(embed=embed)
     
-    @app_commands.command(name="xp-stop", description="Stop the XP system (disable XP gain)")
+    @xp_group.command(name="stop", description="Stop the XP system (disable XP gain)")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_stop(self, inter: discord.Interaction):
@@ -416,7 +418,7 @@ class XpCog(commands.Cog, name="Leveling"):
         )
         await inter.response.send_message(embed=embed)
 
-    @app_commands.command(name="xp-add", description="Add XP to a specific user (Admin only)")
+    @xp_group.command(name="add", description="Add XP to a specific user (Admin only)")
     @app_commands.describe(user="The user to grant XP to", amount="Amount of XP to add")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
@@ -441,7 +443,7 @@ class XpCog(commands.Cog, name="Leveling"):
                 interaction=inter
             )
         
-    @app_commands.command(name="xp-set", description="Set a specific user's XP (Admin only)")
+    @xp_group.command(name="set", description="Set a specific user's XP (Admin only)")
     @app_commands.describe(user="The user to modify", amount="Exact XP amount to set")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
@@ -455,7 +457,7 @@ class XpCog(commands.Cog, name="Leveling"):
         )
         await inter.response.send_message(embed=embed)
     
-    @app_commands.command(name="xp-reset", description="Reset all user XP to zero")
+    @xp_group.command(name="reset", description="Reset all user XP to zero")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_reset(self, inter: discord.Interaction):
@@ -500,7 +502,7 @@ class XpCog(commands.Cog, name="Leveling"):
         )
         await inter.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    @app_commands.command(name="xp-status", description="Check if the XP system is running")
+    @xp_group.command(name="status", description="Check if the XP system is running")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
     async def xp_status(self, inter: discord.Interaction):

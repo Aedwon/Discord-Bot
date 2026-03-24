@@ -310,8 +310,11 @@ async def help_command(inter: discord.Interaction):
             "commands": [
                 ("**`/help`**", "Show this help menu"),
                 ("**`/ping`**", "Check bot response time"),
-                ("**`/rank [user]`**", "View XP and server rank"),
-                ("**`/leaderboard`**", "View top 10 XP earners"),
+                ("**`/xp profile [user]`**", "View XP and server rank"),
+                ("**`/xp leaderboard`**", "View top 10 XP earners"),
+                ("**`/event profile [user]`**", "View your Event Points"),
+                ("**`/event leaderboard`**", "View top event attendees"),
+                ("**`/thank <user>`**", "Thank someone (+10 XP)"),
             ]
         },
         "booster": {
@@ -319,26 +322,28 @@ async def help_command(inter: discord.Interaction):
             "title": "Booster Perks",
             "commands": [
                 ("**`/boostperks`**", "View your tier and multipliers"),
-                ("**`/colorpick`**", "Choose a custom name color"),
-                ("**`/emblempick`**", "Choose an emblem badge"),
-                ("**`/pouch`**", "Claim daily token pouch"),
+                ("**`/booster-color`**", "Choose a custom name color"),
+                ("**`/booster-emblem`**", "Choose an emblem badge"),
+                ("**`/boosters`**", "List all server boosters"),
             ]
         },
         "admin_voice": {
             "emoji": "🎤",
             "title": "Voice Channels",
             "commands": [
-                ("**`/autocreate_setup <channel>`**", "Set up auto-create VC"),
-                ("**`/autocreate_remove <channel>`**", "Remove auto-create"),
+                ("**`/voice setup <channel>`**", "Set up auto-create VC"),
+                ("**`/voice remove <channel>`**", "Remove auto-create"),
             ]
         },
         "admin_embeds": {
             "emoji": "📝",
             "title": "Embeds",
             "commands": [
-                ("**`/send_embed <channel> <link> [mins]`**", "Send/schedule embed"),
-                ("**`/cancel_embed`**", "Cancel scheduled embed"),
-                ("**`/set_embed_log <channel>`**", "Set embed log channel"),
+                ("**`/embed send <channel> <link>`**", "Send/schedule embed"),
+                ("**`/embed edit <link>`**", "Edit existing embed"),
+                ("**`/embed download <link>`**", "Extract to Discohook"),
+                ("**`/embed manage`**", "Manage scheduled embeds"),
+                ("**`/embed logs <channel>`**", "Set embed log channel"),
             ]
         },
         "admin_mod": {
@@ -357,12 +362,14 @@ async def help_command(inter: discord.Interaction):
         },
         "admin_setup": {
             "emoji": "⚙️",
-            "title": "Setup",
+            "title": "Setup & Admin",
             "commands": [
                 ("**`/setup view`**", "View all current settings"),
                 ("**`/setup channel <type> <#ch>`**", "Set channels"),
                 ("**`/setup role <type> <@role>`**", "Set roles"),
-                ("**`/boosters`**", "List all boosters"),
+                ("**`/ticket deploy [channel]`**", "Post ticket panel"),
+                ("**`/ticket config-category <cat>`**", "Set ticket category"),
+                ("**`/xp start / stop / status`**", "Control XP system"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },

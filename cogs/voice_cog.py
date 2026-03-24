@@ -18,6 +18,8 @@ logger = logging.getLogger('mlbb_bot')
 class VoiceCog(commands.Cog, name="Voice"):
     """Auto-create voice channel management."""
     
+    voice_group = app_commands.Group(name="voice", description="Voice channel management commands", default_permissions=discord.Permissions(administrator=True))
+    
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.config_cache = {}  # {voice_channel_id: category_id}
@@ -33,8 +35,7 @@ class VoiceCog(commands.Cog, name="Voice"):
         except Exception as e:
             logger.error(f"Failed to load autocreate configs: {e}")
     
-    @app_commands.command(name="autocreate_setup", description="Setup a voice channel that duplicates when joined")
-    @app_commands.default_permissions(administrator=True)
+    @voice_group.command(name="setup", description="Setup a voice channel that auto-creates when joined")
     @app_commands.describe(channel="The master voice channel to use")
     async def autocreate_setup(self, interaction: discord.Interaction, channel: discord.VoiceChannel):
         """Set up a master voice channel for auto-creation."""
@@ -59,8 +60,7 @@ class VoiceCog(commands.Cog, name="Voice"):
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
     
-    @app_commands.command(name="autocreate_remove", description="Remove autocreate from a voice channel")
-    @app_commands.default_permissions(administrator=True)
+    @voice_group.command(name="remove", description="Remove autocreate from a voice channel")
     @app_commands.describe(channel="The voice channel to remove autocreate from")
     async def autocreate_remove(self, interaction: discord.Interaction, channel: discord.VoiceChannel):
         """Remove a master voice channel."""
