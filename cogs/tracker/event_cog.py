@@ -435,5 +435,193 @@ class EventCog(commands.GroupCog, name="event"):
         
         await interaction.followup.send(embed=embed)
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Raffle Subgroup
+    # ─────────────────────────────────────────────────────────────────────
+
+    raffle_group = app_commands.Group(name="raffle", description="Create and manage event raffles")
+
+    @raffle_group.command(name="create", description="Create and deploy a new event raffle")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        title="Name of the raffle",
+        prize="What the winner(s) receive",
+        channel="Channel to post the raffle in",
+        winners="Number of winners (default: 1)",
+        duration_minutes="Auto-draw after N minutes (leave empty for manual draw)",
+        hosted_by="Community member hosting this raffle (optional)",
+        requirements="Social media requirements, e.g. 'Like & Share on FB' (optional)"
+    )
+    async def raffle_create(
+        self, interaction: discord.Interaction,
+        title: str, prize: str, channel: discord.TextChannel,
+        winners: int = 1,
+        duration_minutes: int = None,
+        hosted_by: discord.Member = None,
+        requirements: str = None
+    ):
+        from cogs.tracker.event_raffle_cog import PersistentRaffleView
+        from datetime import datetime, timedelta
+
+        await interaction.response.defer(ephemeral=True)
+
+        ends_at = None
+        if duration_minutes and duration_minutes > 0:
+            ends_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
+
+        # Build embed
+        host_display = hosted_by.mention if hosted_by else interaction.user.mention
+        embed = discord.Embed(
+            title=f"🎟️ {title}",
+            description=f"**Prize:** {prize}",
+            color=0xFFD700,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="Hosted By", value=host_display, inline=True)
+        embed.add_field(name="Winners", value=f"**{winners}**", inline=True)
+        embed.add_field(name="Participants", value="**0**", inline=True)
+
+        if requirements:
+            embed.add_field(
+                name="📋 Requirements",
+                value=f"> {requirements}\n*You'll be added to a proof thread upon joining.*",
+                inline=False
+            )
+
+        if ends_at:
+            embed.add_field(
+                name="⏰ Ends",
+                value=discord.utils.format_dt(ends_at, style="R"),
+                inline=False
+            )
+        else:
+            embed.add_field(name="⏰ Draw", value="Manual — an admin will draw when ready", inline=False)
+
+        embed.set_footer(text="Click 🎟️ Join Raffle to enter!")
+
+        # Send embed
+        msg = await channel.send(embed=embed, view=PersistentRaffleView())
+
+        # Create proof thread if requirements exist
+        proof_thread_id = None
+        if requirements:
+            try:
+                proof_thread = await msg.create_thread(
+                    name=f"📸 Proof: {title[:80]}",
+                    auto_archive_duration=4320
+                )
+                proof_thread_id = proof_thread.id
+                await proof_thread.send(
+                    f"📋 **Raffle Requirements:**\n> {requirements}\n\n"
+                    f"When you join the raffle, you'll be added here. "
+                    f"Please post a screenshot proving you've completed the requirements."
+                )
+            except Exception as e:
+                logger.error(f"Failed to create proof thread: {e}")
+
+        # Save to database
+        await db.execute('''
+            INSERT INTO event_raffles 
+                (host_id, hosted_by, title, prize, requirements, winner_count,
+                 message_id, channel_id, proof_thread_id, ends_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (
+            interaction.user.id,
+            hosted_by.id if hosted_by else None,
+            title, prize, requirements, winners,
+            msg.id, channel.id, proof_thread_id, ends_at
+        ))
+
+        await interaction.followup.send(
+            f"✅ Raffle **{title}** deployed in {channel.mention}!", ephemeral=True
+        )
+
+    @raffle_group.command(name="draw", description="Manually draw winners for a raffle")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(raffle_id="The raffle ID (shown in /event raffle list)")
+    async def raffle_draw(self, interaction: discord.Interaction, raffle_id: int):
+        await interaction.response.defer(ephemeral=True)
+
+        raffle = await db.fetch_one(
+            "SELECT * FROM event_raffles WHERE id = %s AND status = 'active'", (raffle_id,)
+        )
+        if not raffle:
+            return await interaction.followup.send(
+                f"❌ Raffle #{raffle_id} not found or already drawn.", ephemeral=True
+            )
+
+        raffle_cog = self.bot.get_cog("Event Raffle")
+        if not raffle_cog:
+            return await interaction.followup.send("❌ Raffle engine not loaded.", ephemeral=True)
+
+        await raffle_cog.execute_draw(raffle, interaction.guild)
+        await interaction.followup.send(
+            f"✅ Raffle **{raffle['title']}** drawn! Check the channel for results.",
+            ephemeral=True
+        )
+
+    @raffle_group.command(name="cancel", description="Cancel an active raffle")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(raffle_id="The raffle ID to cancel")
+    async def raffle_cancel(self, interaction: discord.Interaction, raffle_id: int):
+        await interaction.response.defer(ephemeral=True)
+
+        raffle = await db.fetch_one(
+            "SELECT * FROM event_raffles WHERE id = %s AND status = 'active'", (raffle_id,)
+        )
+        if not raffle:
+            return await interaction.followup.send(
+                f"❌ Raffle #{raffle_id} not found or not active.", ephemeral=True
+            )
+
+        await db.execute("UPDATE event_raffles SET status = 'cancelled' WHERE id = %s", (raffle_id,))
+
+        # Update the embed to show cancelled
+        try:
+            channel = interaction.guild.get_channel(raffle['channel_id'])
+            if channel:
+                msg = await channel.fetch_message(raffle['message_id'])
+                embed = msg.embeds[0]
+                embed.color = 0x95A5A6
+                embed.title = f"~~{embed.title}~~ — Cancelled"
+                embed.set_footer(text=f"Cancelled by {interaction.user.display_name}")
+                await msg.edit(embed=embed, view=None)
+        except Exception as e:
+            logger.warning(f"Could not update cancelled raffle embed: {e}")
+
+        await interaction.followup.send(f"✅ Raffle **{raffle['title']}** cancelled.", ephemeral=True)
+
+    @raffle_group.command(name="list", description="Show all active raffles")
+    async def raffle_list(self, interaction: discord.Interaction):
+        raffles = await db.fetch_all(
+            "SELECT id, title, prize, winner_count, ends_at, created_at "
+            "FROM event_raffles WHERE status = 'active' ORDER BY created_at DESC"
+        )
+
+        if not raffles:
+            return await interaction.response.send_message(
+                "📭 No active raffles right now.", ephemeral=True
+            )
+
+        embed = discord.Embed(title="🎟️ Active Raffles", color=0xFFD700)
+
+        for r in raffles[:10]:
+            count = await db.fetch_one(
+                "SELECT COUNT(*) as total FROM event_raffle_entries WHERE raffle_id = %s",
+                (r['id'],)
+            )
+            participants = count['total'] if count else 0
+            ends = discord.utils.format_dt(r['ends_at'], style="R") if r['ends_at'] else "Manual"
+            embed.add_field(
+                name=f"#{r['id']} — {r['title']}",
+                value=f"🎁 {r['prize']}\n👥 {participants} joined • 🏆 {r['winner_count']} winner(s) • ⏰ {ends}",
+                inline=False
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(EventCog(bot))

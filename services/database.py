@@ -430,6 +430,35 @@ class Database:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Event Raffles
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_raffles (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                host_id BIGINT NOT NULL,
+                hosted_by BIGINT NULL,
+                title VARCHAR(200) NOT NULL,
+                prize TEXT NOT NULL,
+                requirements TEXT NULL,
+                winner_count INT NOT NULL DEFAULT 1,
+                message_id BIGINT NULL,
+                channel_id BIGINT NOT NULL,
+                proof_thread_id BIGINT NULL,
+                ends_at DATETIME NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'active',
+                winners TEXT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_raffle_entries (
+                raffle_id INT NOT NULL,
+                user_id BIGINT NOT NULL,
+                entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (raffle_id, user_id)
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""

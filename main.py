@@ -193,6 +193,7 @@ async def load_extensions():
         "cogs.tracker.boost_cog",
         "cogs.tracker.booster_raffle_cog",
         "cogs.tracker.event_cog",
+        "cogs.tracker.event_raffle_cog",
         "cogs.tracker.leaderboard_cog",
         "cogs.tracker.ep_cog",
         "cogs.tracker.analytics_cog",
@@ -314,6 +315,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/xp leaderboard`**", "View top 10 XP earners"),
                 ("**`/event profile [user]`**", "View your Event Points"),
                 ("**`/event leaderboard`**", "View top event attendees"),
+                ("**`/event raffle list`**", "View active raffles"),
                 ("**`/social thank <user>`**", "Thank someone (+10 XP)"),
             ]
         },
@@ -383,6 +385,9 @@ async def help_command(inter: discord.Interaction):
                 ("**`/ticket config-category <cat>`**", "Set ticket category"),
                 ("**`/xp start / stop / status`**", "Control XP system"),
                 ("**`/autorole`**", "Bulk-assign auto-role"),
+                ("**`/event raffle create`**", "Deploy a new event raffle"),
+                ("**`/event raffle draw <id>`**", "Manually draw raffle winners"),
+                ("**`/event raffle cancel <id>`**", "Cancel an active raffle"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },
