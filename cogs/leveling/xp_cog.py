@@ -20,7 +20,7 @@ from utils.checks import require_admin_auth
 class XpCog(commands.Cog, name="Leveling"):
     """XP and Leveling system for the server."""
     
-    xp_group = app_commands.Group(name="xp", description="XP & Leveling system commands")
+    xp_group = app_commands.Group(name="xp", description="XP & Leveling system commands", default_permissions=discord.Permissions(administrator=True))
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -360,20 +360,74 @@ class XpCog(commands.Cog, name="Leveling"):
     # Slash Commands
     # ─────────────────────────────────────────────────────────────────────
     
-    @xp_group.command(name="leaderboard", description="Show the server XP leaderboard")
+    @app_commands.command(name="levels-leaderboard", description="Show the top 10 server XP leaderboard")
     async def leaderboard(self, inter: discord.Interaction):
         """Show the server XP leaderboard."""
+        await inter.response.defer()
         top_users = await xp_service.get_leaderboard(limit=10)
         embed = create_leaderboard_embed(inter.guild, top_users)
-        await inter.response.send_message(embed=embed)
+        
+        # Calculate invoker rank
+        rank, xp = await xp_service.get_rank(inter.user.id)
+        rank_str = f"#{rank}" if rank > 0 else "Unranked"
+        embed.set_footer(text=f"Your Server-Wide Level Rank: {rank_str} | {xp:,} XP", icon_url=inter.user.display_avatar.url)
+        
+        await inter.followup.send(embed=embed)
     
-    @xp_group.command(name="profile", description="Show your or another user's rank and level")
-    async def rank(self, inter: discord.Interaction, member: discord.Member = None):
-        """Show your or another user's rank."""
+    @app_commands.command(name="profile", description="Show your unified Community Profile (XP, Events, Verification)")
+    async def profile(self, inter: discord.Interaction, member: discord.Member = None):
+        """Show unified Community Profile."""
+        await inter.response.defer()
         target = member or inter.user
+        
+        # XP
         rank, xp = await xp_service.get_rank(target.id)
-        embed = create_rank_embed(target, rank, xp)
-        await inter.response.send_message(embed=embed)
+        level = xp_service.get_level(xp)
+        xp_tier = xp_service.get_tier_name(level)
+        rank_display = f"#{rank}" if rank > 0 else "Unranked"
+            
+        # Events
+        from services.database import db
+        user_data = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (target.id,))
+        ep = user_data['event_points'] if user_data else 0
+        
+        ep_rank_data = await db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > %s", (ep,))
+        ep_rank = (ep_rank_data['pos'] + 1) if ep_rank_data and ep > 0 else "Unranked"
+        ep_rank_display = f"#{ep_rank}" if isinstance(ep_rank, int) else ep_rank
+        
+        event_data = await db.fetch_one("SELECT COUNT(*) as total FROM event_redemptions WHERE user_id = %s", (target.id,))
+        events_attended = event_data['total'] if event_data else 0
+        
+        from services.ep_service import ep_service
+        current_ep_tier, next_ep_tier, ep_progress = ep_service.get_tier_progress(ep)
+        
+        # Verification
+        is_verified = verification_service.is_verified(target.id)
+        is_msl = False
+        if is_verified:
+            uid = verification_service.get_uid(target.id)
+            if hasattr(verification_service, 'is_msl') and uid:
+                is_msl = verification_service.is_msl(uid)
+                
+        ver_status = "✅ Verified" if is_verified else "❌ Unverified"
+        if is_msl:
+            ver_status += " 🎓 MSL"
+            
+        # Build Embed
+        embed = discord.Embed(title=f"👤 Community Profile: {target.display_name}", color=target.color or discord.Color.blue())
+        embed.set_thumbnail(url=target.display_avatar.url)
+        
+        # XP Field
+        embed.add_field(name="Experience (XP)", value=f"**Level {level}** • `{xp:,} XP`\nGlobal Rank: **{rank_display}**\nTier: **{xp_tier or 'None'}**", inline=True)
+        
+        # Events Field
+        embed.add_field(name="Event Points (EP)", value=f"**{ep:,} EP**\nGlobal Rank: **{ep_rank_display}**\nAttended: **{events_attended} Events**\nTier: **{current_ep_tier}**", inline=True)
+        
+        # Verification Field
+        embed.add_field(name="MLBB Verification", value=f"**Status:** {ver_status}", inline=False)
+        
+        embed.set_footer(text=f"Requested by {inter.user.display_name}", icon_url=inter.user.display_avatar.url)
+        await inter.followup.send(embed=embed)
     
     # ─────────────────────────────────────────────────────────────────────
     # Admin Commands - XP System Control

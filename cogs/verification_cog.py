@@ -239,7 +239,7 @@ class VerificationCog(commands.Cog, name="verification"):
     async def before_msl_refresh(self):
         await self.bot.wait_until_ready()
 
-    verify_group = app_commands.Group(name="verify", description="MLBB verification system")
+    verify_group = app_commands.Group(name="verify", description="MLBB verification system", default_permissions=discord.Permissions(administrator=True))
 
     # ─── SETUP COMMANDS ─────────────────────────────────────────────────
 
@@ -272,29 +272,6 @@ class VerificationCog(commands.Cog, name="verification"):
 
     # ─── ADMIN LOOKUP COMMANDS ──────────────────────────────────────────
 
-    @verify_group.command(name="status", description="Check a user's verification status.")
-    @app_commands.default_permissions(administrator=True)
-    async def verified(self, interaction: discord.Interaction, user: discord.Member):
-        info = await verification_service.get_user_info(user.id)
-        if not info:
-            return await interaction.response.send_message(
-                f"❌ {user.mention} is **not verified**.", ephemeral=True
-            )
-
-        embed = discord.Embed(
-            title=f"📋 Verification — {user.display_name}",
-            color=discord.Color.green(),
-        )
-        embed.add_field(name="Full Name", value=info['full_name'], inline=False)
-        embed.add_field(name="MLBB UID", value=str(info['mlbb_uid']), inline=True)
-        embed.add_field(name="Server", value=str(info['mlbb_server']), inline=True)
-        embed.add_field(
-            name="Verified At",
-            value=discord.utils.format_dt(info['verified_at'], style="F"),
-            inline=False,
-        )
-        embed.set_thumbnail(url=user.display_avatar.url)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @verify_group.command(name="whois", description="Look up a Discord user by their MLBB UID.")
     @app_commands.default_permissions(administrator=True)

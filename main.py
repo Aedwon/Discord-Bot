@@ -311,11 +311,11 @@ async def help_command(inter: discord.Interaction):
             "commands": [
                 ("**`/help`**", "Show this help menu"),
                 ("**`/ping`**", "Check bot response time"),
-                ("**`/xp profile [user]`**", "View XP and server rank"),
-                ("**`/xp leaderboard`**", "View top 10 XP earners"),
-                ("**`/event profile [user]`**", "View your Event Points"),
-                ("**`/event leaderboard`**", "View top event attendees"),
-                ("**`/event raffle list`**", "View active raffles"),
+                ("**`/profile [user]`**", "View unified MLBB profile and ranks"),
+                ("**`/levels-leaderboard`**", "View top 10 XP earners"),
+                ("**`/event-leaderboard`**", "View top event attendees"),
+                ("**`/raffles`**", "View active raffles"),
+                ("**`/quiz-leaderboard`**", "View top MLBB quiz scorers"),
                 ("**`/social thank <user>`**", "Thank someone (+10 XP)"),
             ]
         },
@@ -327,7 +327,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/booster color`**", "Choose a custom name color"),
                 ("**`/booster emblem`**", "Choose an emblem badge"),
                 ("**`/booster list`**", "List all server boosters"),
-                ("**`/booster raffle`**", "Force execute weekly raffle"),
+                ("**`/force-booster-raffle`**", "Force execute weekly raffle (Admin)"),
             ]
         },
         "verification": {

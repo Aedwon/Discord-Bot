@@ -574,7 +574,7 @@ class QuizCog(commands.Cog, name="quiz"):
         embed.add_field(name="Rounds/Session", value=f"**{ROUNDS_PER_SESSION}**", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @quiz_group.command(name="leaderboard", description="View all-time quiz EP earnings.")
+    @app_commands.command(name="quiz-leaderboard", description="View all-time quiz EP earnings.")
     async def quiz_leaderboard(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         top = await db.fetch_all('''

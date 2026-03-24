@@ -58,8 +58,12 @@ class PersistentEventView(discord.ui.View):
             logger.error(f"Critical error during EP claim for user {user_id}: {e}")
             await interaction.followup.send("❌ A critical database error occurred while processing your claim.")
 
-class EventCog(commands.GroupCog, name="event"):
+class EventCog(commands.Cog, name="Event"):
     """Native Discord Event Points ecosystem."""
+    
+    event_group = app_commands.Group(name="event", description="Manage Event Points ecosystem", default_permissions=discord.Permissions(administrator=True))
+    overflow_group = app_commands.Group(name="overflow", description="Manage Overflow voice channels", parent=event_group)
+    raffle_group = app_commands.Group(name="raffle", description="Create and manage event raffles", parent=event_group)
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -194,7 +198,7 @@ class EventCog(commands.GroupCog, name="event"):
 
     # --- CLI COMMANDS ---
 
-    @app_commands.command(name="kiosk", description="Spawn a Participation Button for a Native Discord Event.")
+    @event_group.command(name="kiosk", description="Spawn a Participation Button for a Native Discord Event.")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def event_kiosk(self, interaction: discord.Interaction, event_id: str, ep: int, description: str = "Click the button below to claim your participation points!"):
@@ -228,7 +232,7 @@ class EventCog(commands.GroupCog, name="event"):
             await msg.delete()
             await interaction.followup.send("❌ **Database Failure:** Kiosk aborted securely.", ephemeral=True)
 
-    @app_commands.command(name="cap-placement", description="Lock a strict Budget limit on an Event's Placements.")
+    @event_group.command(name="cap-placement", description="Lock a strict Budget limit on an Event's Placements.")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def cap_placement(self, interaction: discord.Interaction, event_id: str, total_budget: int):
@@ -245,7 +249,7 @@ class EventCog(commands.GroupCog, name="event"):
         await self.send_audit_log(interaction, "Placement Budget Locked", f"**Event ID:** `{event_id}`\n**Total Budget Set:** `{total_budget} EP`", discord.Color.teal())
         await interaction.response.send_message(f"🔒 **Event Budget Locked:** Budget capped at **{total_budget} EP**.", ephemeral=True)
 
-    @app_commands.command(name="placement", description="Award a Winner's Placement (Strict Check against Event Budgets).")
+    @event_group.command(name="placement", description="Award a Winner's Placement (Strict Check against Event Budgets).")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def event_placement(self, interaction: discord.Interaction, event_id: str, user: discord.Member, placement: str, total_ep_value: int):
@@ -293,7 +297,7 @@ class EventCog(commands.GroupCog, name="event"):
             logger.error(f"Failed to award placement: {e}")
             await interaction.followup.send("❌ **Fatal DB Error**.", ephemeral=True)
 
-    @app_commands.command(name="revoke", description="Senior Admins: Erase a false payout entirely.")
+    @event_group.command(name="revoke", description="Senior Admins: Erase a false payout entirely.")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def event_revoke(self, interaction: discord.Interaction, event_id: str, user: discord.Member):
@@ -312,7 +316,7 @@ class EventCog(commands.GroupCog, name="event"):
         await self.send_audit_log(interaction, "Payout UNDO", f"**Admin:** {interaction.user.mention}\n**Target:** {user.mention}\n**Erased:** `{total_revoked} EP`", discord.Color.red())
         await interaction.followup.send(f"🚨 **Revocation Complete:** Stripped `{total_revoked} EP` from {user.mention}.")
 
-    @app_commands.command(name="status", description="Generate a Live Dashboard measuring Event Health and Peak VC Trackers.")
+    @event_group.command(name="status", description="Generate a Live Dashboard measuring Event Health and Peak VC Trackers.")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def event_status(self, interaction: discord.Interaction, event_id: str):
@@ -348,7 +352,6 @@ class EventCog(commands.GroupCog, name="event"):
         await interaction.response.send_message(embed=embed)
 
     # --- OVERFLOW CATEGORY ---
-    overflow_group = app_commands.Group(name="overflow", description="Manage Overflow voice channels for highly massive server events.")
     
     @overflow_group.command(name="add", description="Link an additional overflow Voice Channel instantly to a scheduled event.")
     @app_commands.autocomplete(event_id=event_autocomplete)
@@ -375,7 +378,7 @@ class EventCog(commands.GroupCog, name="event"):
         
         await interaction.response.send_message(f"✂️ **Overflow Severed:** {channel.mention} has been cleanly detached from the Peak Voice Tracker.", ephemeral=True)
 
-    @app_commands.command(name="leaderboard", description="Show the Top 10 most active Event attendees!")
+    @app_commands.command(name="event-leaderboard", description="Show the Top 10 most active Event attendees!")
     async def event_leaderboard(self, interaction: discord.Interaction):
         await interaction.response.defer()
         top_users = await db.fetch_all("SELECT user_id, event_points FROM users WHERE event_points > 0 ORDER BY event_points DESC LIMIT 10")
@@ -384,55 +387,17 @@ class EventCog(commands.GroupCog, name="event"):
         embed = discord.Embed(title="🏆 Event Participation Leaderboard", description="The most dedicated community event attendees currently residing in the server!", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
         lines = [f"**{i}.** {'🥇' if i==1 else '🥈' if i==2 else '🥉' if i==3 else '🏅'} <@{u['user_id']}> — **{u['event_points']} EP**" for i, u in enumerate(top_users, 1)]
         embed.add_field(name="Top 10 Attendees", value="\n".join(lines), inline=False)
-        await interaction.followup.send(embed=embed)
-
-    @app_commands.command(name="profile", description="Check how many Event Points you currently possess.")
-    async def event_profile(self, interaction: discord.Interaction, user: discord.Member = None):
-        await interaction.response.defer()
-        target = user or interaction.user
         
-        user_data = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (target.id,))
+        # Calculate Invoker's Server-Wide Rank
+        user_data = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (interaction.user.id,))
         ep = user_data['event_points'] if user_data else 0
-        rank_data = await db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > (SELECT COALESCE((SELECT event_points FROM users WHERE user_id = %s), 0))", (target.id,))
-        rank = (rank_data['pos'] + 1) if rank_data and ep > 0 else "Unranked"
-        
-        # Event count
-        event_data = await db.fetch_one("SELECT COUNT(*) as total FROM event_redemptions WHERE user_id = %s", (target.id,))
-        events_attended = event_data['total'] if event_data else 0
-        
-        # Tier progress
-        from services.ep_service import ep_service
-        current_tier, next_tier, progress = ep_service.get_tier_progress(ep)
-        
-        bar_fill = int(progress * 12)
-        bar = "█" * bar_fill + "░" * (12 - bar_fill)
-        pct = int(progress * 100)
-        
-        embed = discord.Embed(
-            title=f"🎟️ {target.display_name}'s Event Profile",
-            color=0x5865F2
-        )
-        embed.set_thumbnail(url=target.display_avatar.url)
-        
-        rank_display = f"#{rank}" if isinstance(rank, int) else rank
-        embed.add_field(name="Server Rank", value=f"**{rank_display}**", inline=True)
-        embed.add_field(name="Total EP", value=f"**{ep:,}**", inline=True)
-        embed.add_field(name="Events Attended", value=f"**{events_attended}**", inline=True)
-        embed.add_field(name="Current Tier", value=f"**{current_tier}**", inline=True)
-        
-        if next_tier is None:
-            embed.add_field(
-                name="Tier Progress",
-                value=f"`{bar}` **MAX**\n👑 You've reached Mythic!",
-                inline=False
-            )
+        if ep > 0:
+            rank_data = await db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > %s", (ep,))
+            rank = (rank_data['pos'] + 1) if rank_data else 1
+            embed.set_footer(text=f"Your Server-Wide Event Rank: #{rank} | {ep} EP", icon_url=interaction.user.display_avatar.url)
         else:
-            embed.add_field(
-                name=f"Progress → {next_tier}",
-                value=f"`{bar}` **{pct}%**",
-                inline=False
-            )
-        
+            embed.set_footer(text="Your Server-Wide Event Rank: Unranked | 0 EP", icon_url=interaction.user.display_avatar.url)
+            
         await interaction.followup.send(embed=embed)
 
     # ─────────────────────────────────────────────────────────────────────
@@ -594,7 +559,7 @@ class EventCog(commands.GroupCog, name="event"):
 
         await interaction.followup.send(f"✅ Raffle **{raffle['title']}** cancelled.", ephemeral=True)
 
-    @raffle_group.command(name="list", description="Show all active raffles")
+    @app_commands.command(name="raffles", description="Show all active raffles")
     async def raffle_list(self, interaction: discord.Interaction):
         raffles = await db.fetch_all(
             "SELECT id, title, prize, winner_count, ends_at, created_at "

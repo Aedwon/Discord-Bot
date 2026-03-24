@@ -805,7 +805,7 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
         embed.add_field(name="Members", value="\n".join(lines), inline=False)
         await inter.response.send_message(embed=embed)
     
-    @booster_group.command(name="raffle", description="Forcefully execute the booster raffle (Admin Only)")
+    @app_commands.command(name="force-booster-raffle", description="Forcefully execute the booster raffle (Admin Only)")
     @app_commands.default_permissions(administrator=True)
     async def raffle_force(self, inter: discord.Interaction):
         """Delegate to the BoosterRaffleCog's raffle logic."""
