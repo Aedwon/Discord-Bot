@@ -7,9 +7,12 @@ Updates dynamically every 5 minutes to bypass rate-limits and heavily optimize p
 import discord
 from discord.ext import commands, tasks
 import logging
+import time
 
 from services.database import db
 from services.settings_service import settings_service
+from services.xp_service import xp_service
+from services.ep_service import ep_service
 
 logger = logging.getLogger("mlbb_bot.leaderboard")
 
@@ -41,7 +44,8 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                 # 2. Generate the dynamic UX embeds
                 exp_embed = await self.generate_exp_leaderboard()
                 ep_embed = await self.generate_event_leaderboard()
-                embeds = [exp_embed, ep_embed]
+                quiz_embed = await self.generate_quiz_leaderboard()
+                embeds = [exp_embed, ep_embed, quiz_embed]
                 
                 # 3. Pull the physical Message ID
                 msg_id_str = await settings_service.get(f"leaderboard_msg_{guild.id}")
@@ -68,34 +72,78 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         top_xp = await db.fetch_all("SELECT user_id, xp FROM users WHERE xp > 0 ORDER BY xp DESC LIMIT 10")
         embed = discord.Embed(title="🌟 Hall of Fame: Experience", color=discord.Color.blue(), timestamp=discord.utils.utcnow())
         
+        next_update = int(time.time() + 300)
+        footer_text = f"\\n\\n*Next update: <t:{next_update}:R>*"
+        
         if not top_xp:
-            embed.description = "The server is quiet... no one has earned any XP yet."
+            embed.description = "The server is quiet... no one has earned any XP yet." + footer_text
             return embed
             
         lines = []
         for i, u in enumerate(top_xp, 1):
             emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['xp']} XP**")
+            level = xp_service.get_level(u['xp'])
+            tier = xp_service.get_tier_name(level)
+            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['xp']} XP** | Lv. {level} ({tier})")
             
-        embed.description = "\n".join(lines)
-        embed.set_footer(text="Updates every 5 minutes")
+        embed.description = "\\n".join(lines) + footer_text
         return embed
 
     async def generate_event_leaderboard(self) -> discord.Embed:
-        top_ep = await db.fetch_all("SELECT user_id, event_points FROM users WHERE event_points > 0 ORDER BY event_points DESC LIMIT 10")
+        query = '''
+            SELECT u.user_id, u.event_points, 
+                   (SELECT COUNT(*) FROM event_redemptions e WHERE e.user_id = u.user_id) as total_events
+            FROM users u 
+            WHERE u.event_points > 0 
+            ORDER BY u.event_points DESC 
+            LIMIT 10
+        '''
+        top_ep = await db.fetch_all(query)
         embed = discord.Embed(title="🏆 Hall of Fame: Event Points", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
         
+        next_update = int(time.time() + 300)
+        footer_text = f"\\n\\n*Next update: <t:{next_update}:R>*"
+        
         if not top_ep:
-            embed.description = "The event stands are empty... no Event Points have been formally distributed."
+            embed.description = "The event stands are empty... no Event Points have been formally distributed." + footer_text
             return embed
             
         lines = []
         for i, u in enumerate(top_ep, 1):
             emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
-            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['event_points']} EP**")
+            events = u['total_events'] or 0
+            ep = u['event_points']
+            role_name = ep_service.get_sub_tier(ep)
+            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{ep} EP** | {events} Events ({role_name})")
             
-        embed.description = "\n".join(lines)
-        embed.set_footer(text="Updates every 5 minutes")
+        embed.description = "\\n".join(lines) + footer_text
+        return embed
+
+    async def generate_quiz_leaderboard(self) -> discord.Embed:
+        query = '''
+            SELECT user_id, SUM(score) as total_score
+            FROM quiz_history
+            WHERE earned_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            GROUP BY user_id
+            ORDER BY total_score DESC
+            LIMIT 10
+        '''
+        top_quiz = await db.fetch_all(query)
+        embed = discord.Embed(title="🧠 Weekly Quiz Champions", color=discord.Color.purple(), timestamp=discord.utils.utcnow())
+        
+        next_update = int(time.time() + 300)
+        footer_text = f"\\n\\n_Past 7 Days Highlights_ • *Next update: <t:{next_update}:R>*"
+        
+        if not top_quiz:
+            embed.description = "No quiz scores recorded in the last 7 days. Be the first to answer correctly!" + footer_text
+            return embed
+            
+        lines = []
+        for i, u in enumerate(top_quiz, 1):
+            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🏅"
+            lines.append(f"**{i}.** {emoji} <@{u['user_id']}> — **{u['total_score']} pts**")
+            
+        embed.description = "\\n".join(lines) + footer_text
         return embed
 
 async def setup(bot: commands.Bot):

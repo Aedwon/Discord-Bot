@@ -181,6 +181,19 @@ class Database:
             )
         ''')
         
+        # Quiz History table (for weekly leaderboards)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                score INT NOT NULL,
+                earned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_qh_user_earned (user_id, earned_at)
+            )
+        ''')
+            )
+        ''')
+        
         # Message Cache for moderation logs
         await self.execute('''
             CREATE TABLE IF NOT EXISTS message_cache (
@@ -484,9 +497,10 @@ class Database:
         await self.execute("UPDATE users SET tokens = 0, lifetime_tokens = 0, shop_discount = 0.0")
 
     async def wipe_social(self):
-        """Reset daily streaks, thanks, and badges. Clear thanks history."""
+        """Reset daily streaks, thanks, and badges. Clear thanks history & quiz history."""
         await self.execute("UPDATE users SET consecutive_active_days = 0, last_active_date = NULL, thanks_received = 0, badges = '[]'")
         await self.execute("DELETE FROM thanks_history")
+        await self.execute("DELETE FROM quiz_history")
 
     async def wipe_boosters(self):
         """Reset booster statuses and raffle history."""

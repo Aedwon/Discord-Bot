@@ -476,6 +476,17 @@ class QuizCog(commands.Cog, name="quiz"):
         )
         final_embed.set_footer(text="Next session runs automatically. Daily EP cap: 1 payout per user per day.")
         await self._safe_send(channel, embed=final_embed)
+        
+        # ─── PHASE 4: Record Raw Scores for Weekly Leaderboard ───────────
+        try:
+            for user_id, score in sorted_board:
+                if score > 0:
+                    await db.execute(
+                        "INSERT INTO quiz_history (user_id, score) VALUES (%s, %s)",
+                        (user_id, score)
+                    )
+        except Exception as e:
+            logger.error(f"Failed to record quiz_history: {e}")
 
     # ─── CHANNEL LOCK/UNLOCK ────────────────────────────────────────
 
