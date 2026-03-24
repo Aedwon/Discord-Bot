@@ -240,9 +240,7 @@ class QuizCog(commands.Cog, name="quiz"):
                     content=f"⚠️ Round {round_num} encountered an error. Skipping to next round."
                 )
 
-            # Delay between rounds (except after last round)
-            if round_num < ROUNDS_PER_SESSION:
-                await asyncio.sleep(DELAY_BETWEEN_ROUNDS)
+            # Delay and cleanup for each round is now handled internally by _run_round.
 
         # ─── LOCK CHANNEL ────────────────────────────────────────────
         await self._lock_channel(channel, locked=True)
@@ -344,6 +342,7 @@ class QuizCog(commands.Cog, name="quiz"):
         await collect_answers()
 
         # ─── ANNOUNCE RESULTS ────────────────────────────────────────
+        win_msg = None
         if round_scorers:
             # Sort by time taken (fastest first)
             round_scorers.sort(key=lambda x: x['time_taken'])
@@ -361,21 +360,42 @@ class QuizCog(commands.Cog, name="quiz"):
             if extra > 0:
                 lines.append(f"*...and {extra} more also scored!*")
 
-            description = "\n".join(lines) + f"\n\nAnswer: **{question['answer']}**"
+            description = "\n".join(lines)
 
             win_embed = discord.Embed(
                 title=f"✅ Round {round_num} — {len(round_scorers)} correct!",
                 description=description,
                 color=discord.Color.green()
             )
-            await self._safe_send(channel, embed=win_embed)
+            win_msg = await self._safe_send(channel, embed=win_embed)
         else:
             timeout_embed = discord.Embed(
                 title=f"⏰ Round {round_num} — Time's Up!",
-                description=f"Nobody got it!\n\nThe answer was: **{question['answer']}**",
+                description="Nobody got it!",
                 color=discord.Color.red()
             )
-            await self._safe_send(channel, embed=timeout_embed)
+            win_msg = await self._safe_send(channel, embed=timeout_embed)
+
+        # Send the exact answer separately
+        ans_msg = await self._safe_send(channel, content=f"🤫 **The correct answer was:** `{question['answer']}`")
+
+        # ─── ROUND CLEANUP (PURGE) ───────────────────────────────────
+        # Wait the standard delay so players can read the winner and answer before it vanishes
+        await asyncio.sleep(DELAY_BETWEEN_ROUNDS)
+
+        try:
+            # Delete q_msg, the users' guesses, and ans_msg. Keep only win_msg.
+            from datetime import timedelta
+            after_time = q_msg.created_at - timedelta(seconds=1)
+            
+            def check_purge(m: discord.Message) -> bool:
+                if win_msg and m.id == win_msg.id:
+                    return False
+                return True
+
+            await channel.purge(limit=300, after=after_time, check=check_purge)
+        except Exception as e:
+            logger.error(f"Error purging round {round_num} messages: {e}")
 
     # ─── FINALIZE & PAYOUT ──────────────────────────────────────────
 
