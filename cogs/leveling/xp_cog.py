@@ -389,7 +389,7 @@ class XpCog(commands.Cog, name="Leveling"):
         # Events
         from services.database import db
         user_data = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (target.id,))
-        ep = user_data['event_points'] if user_data else 0
+        ep = (user_data['event_points'] or 0) if user_data else 0
         
         ep_rank_data = await db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > %s", (ep,))
         ep_rank = (ep_rank_data['pos'] + 1) if ep_rank_data and ep > 0 else "Unranked"
@@ -405,7 +405,8 @@ class XpCog(commands.Cog, name="Leveling"):
         is_verified = verification_service.is_verified(target.id)
         is_msl = False
         if is_verified:
-            uid = verification_service.get_uid(target.id)
+            user_info = await verification_service.get_user_info(target.id)
+            uid = user_info['mlbb_uid'] if user_info else None
             if hasattr(verification_service, 'is_msl') and uid:
                 is_msl = verification_service.is_msl(uid)
                 
