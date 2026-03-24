@@ -142,12 +142,12 @@ class VerificationService:
             reader = csv.reader(io.StringIO(text))
             rows = list(reader)
 
-            # Data starts at row 4 (index 3), columns: A=Nickname, B=UID, C=Server
+            # Data starts at row 4 (index 3), columns: A=Nickname, B=Server, C=UID
             for row in rows[3:]:
-                if len(row) < 2:
+                if len(row) < 3:
                     continue
                 nickname = row[0].strip()
-                uid_str = row[1].strip()
+                uid_str = row[2].strip()
                 if not uid_str:
                     continue
                 # Handle UIDs that might have non-numeric chars
