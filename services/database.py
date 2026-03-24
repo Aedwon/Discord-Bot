@@ -191,8 +191,6 @@ class Database:
                 INDEX idx_qh_user_earned (user_id, earned_at)
             )
         ''')
-            )
-        ''')
         
         # Message Cache for moderation logs
         await self.execute('''
