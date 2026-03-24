@@ -1198,6 +1198,43 @@ class ModCog(commands.Cog, name="Moderation"):
         await inter.response.send_message(embed=embed)
         await self._log_to_channel(inter.guild, embed)
 
+    @app_commands.command(name="purge", description="Bulk delete messages in the current channel")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(
+        amount="Number of messages to delete (max 1000). Default: 10.",
+        user="Optional: Only delete messages from this specific user"
+    )
+    async def purge(self, inter: discord.Interaction, amount: app_commands.Range[int, 1, 1000] = 10, user: discord.Member = None):
+        """Purge messages in bulk, optionally filtered by user."""
+        await inter.response.defer(ephemeral=True)
+        
+        def check(m):
+            if user:
+                return m.author.id == user.id
+            return True
+            
+        try:
+            # Add 1 if filtering to ensure we capture enough history efficiently
+            search_limit = amount + 50 if user else amount
+            deleted = await inter.channel.purge(limit=search_limit, check=check, bulk=True)
+            
+            # If we deleted more than requested due to the search limit padding, standard API behavior
+            if len(deleted) > amount:
+                deleted = deleted[:amount]
+                
+            reason = f"Purged {len(deleted)} messages"
+            if user:
+                reason += f" from {user}"
+                
+            # Log action against the channel structurally since there is no specific single offended user ID
+            await mod_service.log_action("purge", inter.user.id, inter.channel.id, reason)
+            
+            await inter.followup.send(f"✅ Successfully deleted **{len(deleted)}** messages.")
+        except discord.Forbidden:
+            await inter.followup.send("❌ I lack the `Manage Messages` permission in this channel.", ephemeral=True)
+        except discord.HTTPException as e:
+            await inter.followup.send(f"❌ Failed to purge messages. Note: Discord prevents bulk-deleting messages older than 14 days.\nError: `{e}`", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ModCog(bot))
