@@ -229,7 +229,8 @@ class LogCog(commands.Cog, name="Logging"):
     @commands.Cog.listener()
     async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
         """Catch bulk deletions of messages that are NOT in the bot's active RAM cache anymore."""
-        uncached_ids = payload.message_ids - payload.cached_message_ids
+        cached_ids = {m.id for m in payload.cached_messages}
+        uncached_ids = payload.message_ids - cached_ids
         if not uncached_ids:
             return # Everything was handled natively by on_bulk_message_delete
             
