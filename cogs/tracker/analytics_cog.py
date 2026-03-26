@@ -405,6 +405,59 @@ class AnalyticsCog(commands.Cog, name="analytics"):
 
         await interaction.followup.send(embed=embed)
 
+    @analytics_group.command(name="notifications", description="Notification role subscription analytics.")
+    async def analytics_notifications(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        # Query each notification column count
+        notif_columns = [
+            ("📅 Server Events",  "notif_server_event"),
+            ("🧠 Quiz",           "notif_quiz"),
+            ("🎁 Giveaways",      "notif_giveaway"),
+            ("📋 Surveys",        "notif_survey"),
+            ("⚔️ Tournaments",   "notif_tournament"),
+            ("🤝 Partner Events", "notif_partner_event"),
+        ]
+
+        total_members = interaction.guild.member_count or 1
+        results = []
+
+        for label, col in notif_columns:
+            row = await db.fetch_one(
+                f"SELECT COUNT(*) as c FROM users WHERE {col} = TRUE"
+            )
+            count = row['c'] if row else 0
+            pct = round(count / total_members * 100, 1)
+            results.append((label, count, pct))
+
+        # Sort by count descending for the bar chart
+        results.sort(key=lambda x: x[1], reverse=True)
+        max_count = results[0][1] if results[0][1] > 0 else 1
+
+        embed = discord.Embed(
+            title="🔔 Notification Subscription Analytics",
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow(),
+        )
+
+        # Summary field
+        lines = []
+        for label, count, pct in results:
+            bar_len = int((count / max_count) * 10)
+            bar = "█" * bar_len + "░" * (10 - bar_len)
+            lines.append(f"{label}\n`{bar}` **{count}** ({pct}%)")
+
+        embed.add_field(
+            name="Subscriptions by Category",
+            value="\n\n".join(lines),
+            inline=False,
+        )
+
+        total_subs = sum(r[1] for r in results)
+        embed.set_footer(text=f"Total subscriptions: {total_subs} | Server members: {total_members}")
+
+        await interaction.followup.send(embed=embed)
+
     @analytics_group.command(name="active_users", description="DAU, WAU, MAU with trends and stickiness ratio.")
     async def analytics_active_users(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

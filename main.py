@@ -77,6 +77,10 @@ async def on_ready():
     await db.get_pool()
     logger.info('Database connected')
     
+    # Register persistent views (must be done before sync)
+    from cogs.tracker.notification_cog import NotificationPanelView
+    bot.add_view(NotificationPanelView())
+    
     # Check for missing settings
     await check_missing_settings()
     
@@ -201,6 +205,7 @@ async def load_extensions():
         "cogs.tracker.quiz_cog",
         "cogs.tracker.social_cog",
         "cogs.tracker.promo_cog",
+        "cogs.tracker.notification_cog",
         "cogs.setup.setup_cog",
         "cogs.setup.auth_cog",
         "cogs.setup.test_cog",
@@ -257,6 +262,8 @@ async def reload(inter: discord.Interaction, cog: str = None):
         "trivia": "cogs.tracker.quiz_cog",
         "promo": "cogs.tracker.promo_cog",
         "promotion": "cogs.tracker.promo_cog",
+        "notification": "cogs.tracker.notification_cog",
+        "notifications": "cogs.tracker.notification_cog",
         "setup": "cogs.setup.setup_cog",
         "embeds": "cogs.embed_cog",
         "voice": "cogs.voice_cog",
@@ -395,6 +402,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/verify msl setup`**", "Configure MSL sheet & role"),
                 ("**`/verify msl refresh`**", "Force refresh MSL cache"),
                 ("**`/verify msl check <user>`**", "Check if user is MSL"),
+                ("**`/notification deploy [channel]`**", "Post notification role panel"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },

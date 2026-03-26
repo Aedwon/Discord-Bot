@@ -108,58 +108,71 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     @tasks.loop(minutes=1)
     async def schedule_loop(self):
         """Check and send pending scheduled embeds."""
-        query = """
-            SELECT identifier, channel_id, user_id, content, embed_json 
-            FROM scheduled_embeds 
-            WHERE status = 'pending' AND schedule_for <= UTC_TIMESTAMP()
-        """
-        rows = await db.fetch_all(query)
-        
-        for row in rows:
-            try:
-                channel = self.bot.get_channel(row['channel_id'])
-                if not channel:
-                    channel = await self.bot.fetch_channel(row['channel_id'])
-                
-                data = json.loads(row['embed_json'])
-                embeds = [discord.Embed.from_dict(e) for e in data.get("embeds", [])]
-                view = discohook_to_view(data.get("components", []))
-                content = row['content']
-                
-                sent_msg = await channel.send(content=content, embeds=embeds, view=view)
-                message_link = f"https://discord.com/channels/{channel.guild.id}/{channel.id}/{sent_msg.id}"
-                
-                # Mark as sent
-                await db.execute(
-                    "UPDATE scheduled_embeds SET status = 'sent' WHERE identifier = %s",
-                    (row['identifier'],)
-                )
-                
-                # Log success
-                log_row = await db.fetch_one(
-                    "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
-                    (channel.guild.id,)
-                )
-                if log_row and log_row.get('embed_log_channel_id'):
-                    log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
-                    if log_channel:
-                        embed = discord.Embed(
-                            title="✅ Scheduled Embed Sent",
-                            color=0x00FF00,
-                            timestamp=datetime.datetime.now(TZ_MANILA)
-                        )
-                        embed.add_field(name="Identifier", value=f"`{row['identifier']}`")
-                        embed.add_field(name="Channel", value=channel.mention)
-                        embed.add_field(name="User", value=f"<@{row['user_id']}>")
-                        embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
-                        await log_channel.send(content=f"<@{row['user_id']}>", embed=embed)
+        try:
+            now_utc = datetime.datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+            query = """
+                SELECT identifier, channel_id, user_id, content, embed_json 
+                FROM scheduled_embeds 
+                WHERE status = 'pending' AND schedule_for <= %s
+            """
+            rows = await db.fetch_all(query, (now_utc,))
             
-            except Exception as e:
-                logger.error(f"Failed to send scheduled embed {row['identifier']}: {e}")
-                await db.execute(
-                    "UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s",
-                    (row['identifier'],)
-                )
+            for row in rows:
+                try:
+                    channel = self.bot.get_channel(row['channel_id'])
+                    if not channel:
+                        channel = await self.bot.fetch_channel(row['channel_id'])
+                    
+                    data = json.loads(row['embed_json'])
+                    embeds = [discord.Embed.from_dict(e) for e in data.get("embeds", [])]
+                    view = discohook_to_view(data.get("components", []))
+                    content = row['content']
+                    
+                    sent_msg = await channel.send(content=content, embeds=embeds, view=view)
+                    message_link = f"https://discord.com/channels/{channel.guild.id}/{channel.id}/{sent_msg.id}"
+                    
+                    # Mark as sent
+                    await db.execute(
+                        "UPDATE scheduled_embeds SET status = 'sent' WHERE identifier = %s",
+                        (row['identifier'],)
+                    )
+                    
+                    # Log success
+                    log_row = await db.fetch_one(
+                        "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                        (channel.guild.id,)
+                    )
+                    if log_row and log_row.get('embed_log_channel_id'):
+                        log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
+                        if log_channel:
+                            embed = discord.Embed(
+                                title="✅ Scheduled Embed Sent",
+                                color=0x00FF00,
+                                timestamp=datetime.datetime.now(TZ_MANILA)
+                            )
+                            embed.add_field(name="Identifier", value=f"`{row['identifier']}`")
+                            embed.add_field(name="Channel", value=channel.mention)
+                            embed.add_field(name="User", value=f"<@{row['user_id']}>")
+                            embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
+                            await log_channel.send(content=f"<@{row['user_id']}>", embed=embed)
+                
+                except discord.HTTPException as e:
+                    logger.error(f"HTTPException sending scheduled embed {row['identifier']}: {e.status} - {e.text}")
+                    if e.status >= 500 or e.status == 429:
+                        logger.warning(f"Transient error for embed {row['identifier']}, will retry next minute.")
+                    else:
+                        await db.execute(
+                            "UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s",
+                            (row['identifier'],)
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send scheduled embed {row['identifier']}: {e}")
+                    await db.execute(
+                        "UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s",
+                        (row['identifier'],)
+                    )
+        except Exception as e:
+            logger.error(f"Critical error in schedule_loop: {e}")
     
     @schedule_loop.before_loop
     async def before_loop(self):

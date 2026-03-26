@@ -66,6 +66,12 @@ class Database:
             ("last_ep_update", "DATETIME DEFAULT CURRENT_TIMESTAMP"),
             ("has_promo_status", "BOOLEAN DEFAULT FALSE"),
             ("ep_multiplier", "FLOAT DEFAULT 1.0"),
+            ("notif_server_event", "BOOLEAN DEFAULT FALSE"),
+            ("notif_quiz", "BOOLEAN DEFAULT FALSE"),
+            ("notif_giveaway", "BOOLEAN DEFAULT FALSE"),
+            ("notif_survey", "BOOLEAN DEFAULT FALSE"),
+            ("notif_tournament", "BOOLEAN DEFAULT FALSE"),
+            ("notif_partner_event", "BOOLEAN DEFAULT FALSE"),
         ]
         
         for col_name, col_def in new_columns:
