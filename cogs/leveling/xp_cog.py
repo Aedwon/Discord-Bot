@@ -9,6 +9,8 @@ from random import randint
 from discord.ext import commands, tasks
 from discord import app_commands
 
+import logging
+
 from config import XP_CONFIG, BATCH_UPDATE_INTERVAL
 from services.xp_service import xp_service
 from services.settings_service import settings_service
@@ -33,6 +35,9 @@ class XpCog(commands.Cog, name="Leveling"):
         self.message_reaction_xp = {}
         self.user_reacted_to_message = set()
         self.daily_reaction_cache = {}
+        
+        # Voice XP daily cap tracking
+        self.daily_voice_time = {}  # {user_id: {"date": "YYYY-MM-DD", "seconds": int}}
         
         # Track which channel each user last chatted in (for level-up messages)
         self._last_message_channel = {}
@@ -232,6 +237,8 @@ class XpCog(commands.Cog, name="Leveling"):
         guild = self.bot.guilds[0]
         afk_channel = guild.afk_channel
         voice_config = XP_CONFIG["voice"]
+        daily_cap = voice_config.get("daily_cap_seconds", 14400)  # 4 hours default
+        today = str(datetime.date.today())
         
         for vc in guild.voice_channels:
             if afk_channel and vc.id == afk_channel.id:
@@ -248,7 +255,15 @@ class XpCog(commands.Cog, name="Leveling"):
                     # Skip stage listeners who are suppressed
                     if member.voice.suppress:
                         continue
-                        
+                    
+                    # ── Daily voice cap check ──
+                    user_voice = self.daily_voice_time.get(member.id, {"date": today, "seconds": 0})
+                    if user_voice["date"] != today:
+                        user_voice = {"date": today, "seconds": 0}
+                    
+                    if user_voice["seconds"] >= daily_cap:
+                        continue  # Capped for today
+                    
                     # Tier 1: Streaming or Video (Highest)
                     if member.voice.self_stream or member.voice.self_video:
                         xp_amt = voice_config.get("xp_stream_video", 4)
@@ -263,6 +278,9 @@ class XpCog(commands.Cog, name="Leveling"):
                         xp_amt = voice_config.get("xp_unmuted", 2)
                         
                     if xp_amt > 0:
+                        # Increment daily voice time and award XP
+                        user_voice["seconds"] += BATCH_UPDATE_INTERVAL
+                        self.daily_voice_time[member.id] = user_voice
                         self.pending_xp[member.id] = (
                             self.pending_xp.get(member.id, 0) + xp_amt
                         )

@@ -49,6 +49,7 @@ XP_CONFIG = {
         "xp_deafened": 1,           # Minimal XP for deafened/AFK
         "min_members": 2,           # Minimum active members in VC
         "cycle_seconds": 10,
+        "daily_cap_seconds": 14400, # 4 hours max voice XP per day
     },
 }
 
