@@ -1,8 +1,9 @@
 """
-Confessions Cog - Anonymous confessions system.
-Users submit confessions via /confess, which are posted anonymously
-to a configured confessions channel. Only verified users may confess.
-Confession identity is logged in the command log channel (via main.py on_interaction).
+Confessions Cog - Anonymous confessions via persistent button.
+A "Confess" button is attached to the initial panel and to every
+posted confession, so users can always click to submit a new one.
+Only verified users may confess.
+Confession identity is logged via the global command log (main.py on_interaction).
 """
 
 import discord
@@ -18,6 +19,9 @@ logger = logging.getLogger("mlbb_bot.confessions")
 
 # In-memory confession counter per guild (resets on bot restart, purely cosmetic)
 _confession_counters: dict[int, int] = {}
+
+
+# ─── Persistent View & Modal ────────────────────────────────────────
 
 
 class ConfessionModal(discord.ui.Modal, title="📝 Submit a Confession"):
@@ -60,12 +64,12 @@ class ConfessionModal(discord.ui.Modal, title="📝 Submit a Confession"):
         )
         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
         embed.set_author(name="Anonymous Confession", icon_url=guild_icon)
-        embed.set_footer(text="Use /confess to submit your own")
+        embed.set_footer(text="Click the button below to submit your own")
 
         try:
-            await self.target_channel.send(embed=embed)
+            # Post the confession WITH the confess button attached
+            await self.target_channel.send(embed=embed, view=ConfessButtonView())
         except discord.Forbidden:
-            # Roll back counter on failure
             _confession_counters[guild_id] -= 1
             return await interaction.response.send_message(
                 "❌ I don't have permission to send messages in the confessions channel. "
@@ -102,16 +106,26 @@ class ConfessionModal(discord.ui.Modal, title="📝 Submit a Confession"):
             pass
 
 
-class ConfessionsCog(commands.Cog, name="Confessions"):
-    """Anonymous confessions system."""
+class ConfessButtonView(discord.ui.View):
+    """Persistent view with a single 'Confess' button. Survives bot restarts."""
 
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    @app_commands.command(name="confess", description="Submit an anonymous confession")
-    @app_commands.guild_only()
-    async def confess(self, interaction: discord.Interaction):
-        """Open the confession modal. Requires verification."""
+    @discord.ui.button(
+        label="Confess",
+        style=discord.ButtonStyle.secondary,
+        emoji="✉️",
+        custom_id="confessions:confess_button",
+    )
+    async def confess_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle confess button click — validate, then open modal."""
+
+        # Guild-only guard
+        if not interaction.guild:
+            return await interaction.response.send_message(
+                "❌ This can only be used in a server.", ephemeral=True
+            )
 
         # Verification gate
         if not verification_service.is_verified(interaction.user.id):
@@ -121,24 +135,22 @@ class ConfessionsCog(commands.Cog, name="Confessions"):
                 ephemeral=True,
             )
 
-        # Check that the confessions channel is configured
+        # Get the confessions channel
         channel_id = await settings_service.get_int("confessions_channel_id")
         if not channel_id:
             return await interaction.response.send_message(
-                "❌ Confessions channel has not been set up yet. "
-                "Ask an admin to configure it with `/setup channel confessions`.",
+                "❌ Confessions channel has not been configured. Ask an admin.",
                 ephemeral=True,
             )
 
         channel = interaction.guild.get_channel(channel_id)
         if not channel:
             return await interaction.response.send_message(
-                "❌ The configured confessions channel no longer exists. "
-                "Ask an admin to reconfigure it.",
+                "❌ The configured confessions channel no longer exists. Ask an admin.",
                 ephemeral=True,
             )
 
-        # Verify bot can send in that channel
+        # Permission pre-check
         bot_member = interaction.guild.me
         permissions = channel.permissions_for(bot_member)
         if not permissions.send_messages or not permissions.embed_links:
@@ -149,6 +161,86 @@ class ConfessionsCog(commands.Cog, name="Confessions"):
             )
 
         await interaction.response.send_modal(ConfessionModal(channel))
+
+
+# ─── Cog ─────────────────────────────────────────────────────────────
+
+
+class ConfessionsCog(commands.Cog, name="Confessions"):
+    """Anonymous confessions system via persistent button."""
+
+    confess_group = app_commands.Group(
+        name="confessions",
+        description="Anonymous confessions system",
+        default_permissions=discord.Permissions(administrator=True),
+    )
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    async def cog_load(self):
+        """Register the persistent view so buttons survive restarts."""
+        self.bot.add_view(ConfessButtonView())
+        logger.info("Confessions: Persistent view registered.")
+
+    @confess_group.command(name="deploy", description="Post the confessions panel in the configured channel")
+    @app_commands.default_permissions(administrator=True)
+    async def deploy_panel(self, interaction: discord.Interaction):
+        """Post the initial confessions panel with the Confess button."""
+        await interaction.response.defer(ephemeral=True)
+
+        channel_id = await settings_service.get_int("confessions_channel_id")
+        if not channel_id:
+            return await interaction.followup.send(
+                "❌ Confessions channel is not configured. "
+                "Use `/setup channel confessions <#channel>` first.",
+                ephemeral=True,
+            )
+
+        channel = interaction.guild.get_channel(channel_id)
+        if not channel:
+            return await interaction.followup.send(
+                "❌ The configured confessions channel no longer exists. Please reconfigure it.",
+                ephemeral=True,
+            )
+
+        # Permission pre-check
+        bot_member = interaction.guild.me
+        permissions = channel.permissions_for(bot_member)
+        if not permissions.send_messages or not permissions.embed_links:
+            return await interaction.followup.send(
+                "❌ I don't have permission to send embeds in that channel.",
+                ephemeral=True,
+            )
+
+        embed = discord.Embed(
+            title="🤫 Anonymous Confessions",
+            description=(
+                "Have something on your mind? Share it anonymously!\n\n"
+                "Click the button below to submit your confession. "
+                "Your identity will **never** be shown publicly.\n\n"
+                "**Rules:**\n"
+                "• Be respectful — no harassment or threats\n"
+                "• Must be verified to confess\n"
+                "• Minimum 10 characters"
+            ),
+            color=discord.Color.dark_grey(),
+        )
+        guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
+        if guild_icon:
+            embed.set_thumbnail(url=guild_icon)
+        embed.set_footer(text="All confessions are anonymous")
+
+        try:
+            await channel.send(embed=embed, view=ConfessButtonView())
+            await interaction.followup.send(
+                f"✅ Confessions panel deployed in {channel.mention}.", ephemeral=True
+            )
+        except discord.HTTPException as e:
+            logger.error(f"Failed to deploy confessions panel: {e}")
+            await interaction.followup.send(
+                f"❌ Failed to send the panel: `{e}`", ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot):
