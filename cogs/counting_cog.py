@@ -39,11 +39,22 @@ class CountingCog(commands.Cog, name="Counting"):
     async def cog_load(self):
         """Load counting state from DB into RAM cache."""
         try:
-            rows = await db.fetch_all("SELECT guild_id, current_count, last_user_id FROM counting_state")
+            # Safe migration: add high score columns if missing
+            for col, col_def in [("high_score", "INT NOT NULL DEFAULT 0"), ("high_score_broken_by", "BIGINT DEFAULT NULL")]:
+                try:
+                    await db.execute(f"ALTER TABLE counting_state ADD COLUMN {col} {col_def}")
+                except Exception:
+                    pass  # Column already exists
+
+            rows = await db.fetch_all(
+                "SELECT guild_id, current_count, last_user_id, high_score, high_score_broken_by FROM counting_state"
+            )
             for row in rows:
                 self._state[row["guild_id"]] = {
                     "count": row["current_count"],
                     "last_user_id": row["last_user_id"],
+                    "high_score": row.get("high_score", 0) or 0,
+                    "high_score_broken_by": row.get("high_score_broken_by"),
                 }
             logger.info(f"Counting: Loaded state for {len(rows)} guild(s).")
         except Exception as e:
@@ -60,18 +71,26 @@ class CountingCog(commands.Cog, name="Counting"):
     def _get_state(self, guild_id: int) -> dict:
         """Get or initialise the counting state for a guild."""
         if guild_id not in self._state:
-            self._state[guild_id] = {"count": 0, "last_user_id": None}
+            self._state[guild_id] = {
+                "count": 0,
+                "last_user_id": None,
+                "high_score": 0,
+                "high_score_broken_by": None,
+            }
         return self._state[guild_id]
 
     async def _save_state(self, guild_id: int, count: int, last_user_id: int | None):
         """Persist counting state to DB."""
+        state = self._get_state(guild_id)
         try:
             await db.execute(
-                """INSERT INTO counting_state (guild_id, current_count, last_user_id)
-                   VALUES (%s, %s, %s)
+                """INSERT INTO counting_state (guild_id, current_count, last_user_id, high_score, high_score_broken_by)
+                   VALUES (%s, %s, %s, %s, %s)
                    ON DUPLICATE KEY UPDATE current_count = VALUES(current_count),
-                                           last_user_id = VALUES(last_user_id)""",
-                (guild_id, count, last_user_id),
+                                           last_user_id = VALUES(last_user_id),
+                                           high_score = VALUES(high_score),
+                                           high_score_broken_by = VALUES(high_score_broken_by)""",
+                (guild_id, count, last_user_id, state["high_score"], state["high_score_broken_by"]),
             )
         except Exception as e:
             logger.error(f"Counting: Failed to save state for guild {guild_id}: {e}")
@@ -95,9 +114,16 @@ class CountingCog(commands.Cog, name="Counting"):
             logger.warning(f"Counting: Reply failed ({e.status}): {e.text}")
 
     async def _break_chain(self, message: discord.Message, guild_id: int, reason: str):
-        """Break the chain: react ❌, reply, reset count to 0, clear warnings."""
+        """Break the chain: check high score, react ❌, reply, reset count."""
         state = self._get_state(guild_id)
         old_count = state["count"]
+        new_record = False
+
+        # Check if this was a new high score
+        if old_count > state["high_score"]:
+            state["high_score"] = old_count
+            state["high_score_broken_by"] = message.author.id
+            new_record = True
 
         # Reset state
         state["count"] = 0
@@ -111,6 +137,8 @@ class CountingCog(commands.Cog, name="Counting"):
             f"💥 **{message.author.display_name}** broke the chain at **{old_count}**! "
             f"{reason} The count resets to **1**."
         )
+        if new_record and old_count > 0:
+            reply_text += f"\n🏆 **New record!** Previous best was beaten — highest streak is now **{old_count}**!"
         await self._reply_safe(message, reply_text)
 
     async def _warn_user(self, message: discord.Message, guild_id: int, warning: str):

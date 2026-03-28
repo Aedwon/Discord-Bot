@@ -45,7 +45,8 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                 exp_embed = await self.generate_exp_leaderboard()
                 ep_embed = await self.generate_event_leaderboard()
                 quiz_embed = await self.generate_quiz_leaderboard()
-                embeds = [exp_embed, ep_embed, quiz_embed]
+                counting_embed = await self.generate_counting_embed()
+                embeds = [exp_embed, ep_embed, quiz_embed, counting_embed]
                 
                 # 3. Pull the physical Message ID
                 msg_id_str = await settings_service.get(f"leaderboard_msg_{guild.id}")
@@ -201,6 +202,40 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                 runners.append(f"`{i}.` <@{u['user_id']}> — **{u['total_score']:,} pts**")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
         
+        embed.add_field(name="", value=f"*Next update:* <t:{next_update}:R>", inline=False)
+        return embed
+
+    async def generate_counting_embed(self) -> discord.Embed:
+        row = await db.fetch_one(
+            "SELECT current_count, high_score, high_score_broken_by FROM counting_state LIMIT 1"
+        )
+
+        next_update = int(time.time() + 300)
+        embed = discord.Embed(
+            title="🔢 Counting Challenge",
+            color=0x2ECC71,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text="Updates every 5 min • Next refresh")
+
+        if not row:
+            embed.description = "> *The counting game hasn't started yet!*"
+            return embed
+
+        current = row["current_count"] or 0
+        high = row.get("high_score", 0) or 0
+        broken_by = row.get("high_score_broken_by")
+
+        lines = [f"**Current Streak:** `{current}`"]
+
+        if high > 0:
+            lines.append(f"\n🏆 **All-Time Record:** `{high}`")
+            if broken_by:
+                lines.append(f"╰ Broken by <@{broken_by}>")
+        else:
+            lines.append("\n*No record set yet — start counting!*")
+
+        embed.description = "\n".join(lines)
         embed.add_field(name="", value=f"*Next update:* <t:{next_update}:R>", inline=False)
         return embed
 
