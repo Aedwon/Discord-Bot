@@ -216,6 +216,7 @@ async def load_extensions():
         "cogs.confession_cog",
         "cogs.counting_cog",
         "cogs.anon_message_cog",
+        "cogs.pomodoro_cog",
     ]
     
     success_count = 0
@@ -275,6 +276,7 @@ async def reload(inter: discord.Interaction, cog: str = None):
         "counting": "cogs.counting_cog",
         "anon": "cogs.anon_message_cog",
         "anon_messages": "cogs.anon_message_cog",
+        "pomodoro": "cogs.pomodoro_cog",
     }
     
     if cog:
