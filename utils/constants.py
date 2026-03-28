@@ -24,6 +24,7 @@ SETUP_SCHEMA = {
         {"key": "event_log_channel_id", "name": "Event Logs", "type": "channel", "cmd": "`/setup channel event_log <#channel>`"},
         {"key": "giveaway_log_channel_id", "name": "Giveaway Logs", "type": "channel", "cmd": "`/setup channel giveaway_log <#channel>`"},
         {"key": "leaderboard_channel_id", "name": "Leaderboard", "type": "channel", "cmd": "`/setup channel leaderboard <#channel>`"},
+        {"key": "confessions_channel_id", "name": "Confessions", "type": "channel", "cmd": "`/setup channel confessions <#channel>`"},
     ],
     "💎 Boost Channels": [
         {"key": "boost_public_channel_id", "name": "Boost Public", "type": "channel", "cmd": "`/setup channel boost_public <#channel>`"},
