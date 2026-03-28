@@ -27,6 +27,7 @@ SETUP_SCHEMA = {
         {"key": "confessions_channel_id", "name": "Confessions", "type": "channel", "cmd": "`/setup channel confessions <#channel>`"},
         {"key": "counting_channel_id", "name": "Counting", "type": "channel", "cmd": "`/setup channel counting <#channel>`"},
         {"key": "anon_messages_channel_id", "name": "Anonymous Messages", "type": "channel", "cmd": "`/setup channel anon_messages <#channel>`"},
+        {"key": "anon_log_channel_id", "name": "Anonymous Log", "type": "channel", "cmd": "`/setup channel anon_log <#channel>`"},
     ],
     "💎 Boost Channels": [
         {"key": "boost_public_channel_id", "name": "Boost Public", "type": "channel", "cmd": "`/setup channel boost_public <#channel>`"},

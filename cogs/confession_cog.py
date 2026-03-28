@@ -14,6 +14,7 @@ import logging
 
 from services.settings_service import settings_service
 from services.verification_service import verification_service
+from utils.anon_log import log_anonymous_action
 
 logger = logging.getLogger("mlbb_bot.confessions")
 
@@ -87,6 +88,16 @@ class ConfessionModal(discord.ui.Modal, title="📝 Submit a Confession"):
         await interaction.response.send_message(
             f"✅ Your confession (#{confession_number}) has been posted anonymously!",
             ephemeral=True,
+        )
+
+        # Log to admin channel
+        await log_anonymous_action(
+            interaction.client,
+            user=interaction.user,
+            action_type="Confession",
+            content=text,
+            channel=self.target_channel,
+            reference_label=f"Confession #{confession_number}",
         )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):

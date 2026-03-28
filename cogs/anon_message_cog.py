@@ -16,6 +16,7 @@ import logging
 
 from services.settings_service import settings_service
 from services.verification_service import verification_service
+from utils.anon_log import log_anonymous_action
 
 logger = logging.getLogger("mlbb_bot.anon_messages")
 
@@ -84,6 +85,16 @@ class AnonMessageModal(discord.ui.Modal, title="📨 Send Anonymous Message"):
         await interaction.response.send_message(
             f"✅ Your anonymous message (#{msg_number}) has been posted!",
             ephemeral=True,
+        )
+
+        # Log to admin channel
+        await log_anonymous_action(
+            interaction.client,
+            user=interaction.user,
+            action_type="Anon Message",
+            content=text,
+            channel=self.target_channel,
+            reference_label=f"Message #{msg_number}",
         )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
@@ -156,6 +167,16 @@ class AnonReplyModal(discord.ui.Modal, title="💬 Anonymous Reply"):
 
         await interaction.response.send_message(
             "✅ Your anonymous reply has been posted!", ephemeral=True
+        )
+
+        # Log to admin channel
+        await log_anonymous_action(
+            interaction.client,
+            user=interaction.user,
+            action_type="Anon Reply",
+            content=text,
+            channel=self.target_channel,
+            reference_label=f"Reply to message in #{self.target_channel.name}",
         )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
