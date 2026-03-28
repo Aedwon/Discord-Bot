@@ -436,6 +436,116 @@ class LogCog(commands.Cog, name="Logging"):
                     await channel.send(embeds=batch)
                 except Exception:
                     pass
+    # ─── Voice Logging ─────────────────────────────────────────────────
+
+    async def get_voice_log_channel(self) -> discord.TextChannel | None:
+        """Helper to get the configured voice log channel."""
+        channel_id = await settings_service.get_int("voice_log_channel_id")
+        if not channel_id:
+            return None
+        return self.bot.get_channel(channel_id)
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        """Log voice channel joins, leaves, and moves."""
+        if member.bot:
+            return
+
+        channel = await self.get_voice_log_channel()
+        if not channel:
+            return
+
+        timestamp = discord.utils.utcnow()
+        avatar_url = member.display_avatar.url if member.display_avatar else None
+
+        try:
+            # User joined a VC (was not in one before)
+            if before.channel is None and after.channel is not None:
+                embed = discord.Embed(
+                    title="🎙️ Voice Channel Join",
+                    color=discord.Color.green(),
+                    timestamp=timestamp,
+                )
+                embed.set_author(name=f"{member.name} ({member.id})", icon_url=avatar_url)
+                embed.add_field(name="Channel", value=after.channel.mention, inline=True)
+                embed.add_field(name="Members", value=str(len(after.channel.members)), inline=True)
+                await channel.send(embed=embed)
+
+            # User left a VC (not in one after)
+            elif before.channel is not None and after.channel is None:
+                embed = discord.Embed(
+                    title="🔇 Voice Channel Leave",
+                    color=discord.Color.red(),
+                    timestamp=timestamp,
+                )
+                embed.set_author(name=f"{member.name} ({member.id})", icon_url=avatar_url)
+                embed.add_field(name="Channel", value=before.channel.mention, inline=True)
+                embed.add_field(name="Members Left", value=str(len(before.channel.members)), inline=True)
+                await channel.send(embed=embed)
+
+            # User moved between VCs
+            elif before.channel is not None and after.channel is not None and before.channel.id != after.channel.id:
+                embed = discord.Embed(
+                    title="🔀 Voice Channel Move",
+                    color=discord.Color.blue(),
+                    timestamp=timestamp,
+                )
+                embed.set_author(name=f"{member.name} ({member.id})", icon_url=avatar_url)
+                embed.add_field(name="From", value=before.channel.mention, inline=True)
+                embed.add_field(name="To", value=after.channel.mention, inline=True)
+                await channel.send(embed=embed)
+
+        except discord.HTTPException as e:
+            logger.warning(f"Failed to log voice state update: {e}")
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, created_channel: discord.abc.GuildChannel):
+        """Log voice channel creation."""
+        if not isinstance(created_channel, discord.VoiceChannel):
+            return
+
+        channel = await self.get_voice_log_channel()
+        if not channel:
+            return
+
+        embed = discord.Embed(
+            title="🔊 Voice Channel Created",
+            color=discord.Color.teal(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Channel", value=f"{created_channel.mention} (`{created_channel.name}`)", inline=True)
+        if created_channel.category:
+            embed.add_field(name="Category", value=created_channel.category.name, inline=True)
+
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            logger.warning(f"Failed to log VC creation: {e}")
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, deleted_channel: discord.abc.GuildChannel):
+        """Log voice channel deletion."""
+        if not isinstance(deleted_channel, discord.VoiceChannel):
+            return
+
+        channel = await self.get_voice_log_channel()
+        if not channel:
+            return
+
+        embed = discord.Embed(
+            title="🔈 Voice Channel Deleted",
+            color=discord.Color.dark_grey(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Channel", value=f"`{deleted_channel.name}`", inline=True)
+        if deleted_channel.category:
+            embed.add_field(name="Category", value=deleted_channel.category.name, inline=True)
+
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            logger.warning(f"Failed to log VC deletion: {e}")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LogCog(bot))
