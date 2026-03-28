@@ -214,6 +214,7 @@ async def load_extensions():
         "cogs.verification_cog",
         "cogs.ticket_cog",
         "cogs.confession_cog",
+        "cogs.counting_cog",
     ]
     
     success_count = 0
@@ -270,6 +271,7 @@ async def reload(inter: discord.Interaction, cog: str = None):
         "voice": "cogs.voice_cog",
         "confessions": "cogs.confession_cog",
         "confession": "cogs.confession_cog",
+        "counting": "cogs.counting_cog",
     }
     
     if cog:

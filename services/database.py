@@ -467,6 +467,15 @@ class Database:
                 PRIMARY KEY (raffle_id, user_id)
             )
         ''')
+        
+        # Counting game persistent state
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS counting_state (
+                guild_id BIGINT PRIMARY KEY,
+                current_count INT NOT NULL DEFAULT 0,
+                last_user_id BIGINT DEFAULT NULL
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""

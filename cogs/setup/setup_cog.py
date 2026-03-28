@@ -89,7 +89,7 @@ class SetupCog(commands.Cog, name="Setup"):
             "boost_public", "boost_admin",
             "modlog", "cmdlog", "event_log",
             "leaderboard", "bot", "booster_chat", "level_alerts",
-            "confessions"
+            "confessions", "counting"
         ],
         channel: discord.TextChannel
     ):
@@ -114,6 +114,7 @@ class SetupCog(commands.Cog, name="Setup"):
             "level_alerts": "level_alerts_channel_id",
             # Community
             "confessions": "confessions_channel_id",
+            "counting": "counting_channel_id",
         }
         await settings_service.set(key_map[setting], str(channel.id))
         await inter.response.send_message(f"✅ **{setting}** channel set to {channel.mention}", ephemeral=True)
