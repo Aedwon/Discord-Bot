@@ -338,6 +338,10 @@ async def help_command(inter: discord.Interaction):
                 ("**`/raffles`**", "View active raffles"),
                 ("**`/quiz-leaderboard`**", "View top MLBB quiz scorers"),
                 ("**`/social thank <user>`**", "Thank someone (+10 XP)"),
+                ("**`/pomodoro start [users]`**", "Start a Pomodoro timer in your VC"),
+                ("**`/pomodoro add <user>`**", "Add someone to your Pomodoro session"),
+                ("**`/pomodoro leave`**", "Leave the Pomodoro session"),
+                ("**`/pomodoro stop`**", "End Pomodoro for everyone (creator only)"),
             ]
         },
         "booster": {
@@ -413,6 +417,8 @@ async def help_command(inter: discord.Interaction):
                 ("**`/verify msl refresh`**", "Force refresh MSL cache"),
                 ("**`/verify msl check <user>`**", "Check if user is MSL"),
                 ("**`/notification deploy [channel]`**", "Post notification role panel"),
+                ("**`/confessions deploy`**", "Post confessions panel with button"),
+                ("**`/anon deploy`**", "Post anonymous messages panel"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },

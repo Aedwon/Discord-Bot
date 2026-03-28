@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MSL Bot — Admin Command Reference</title>
+    <meta name="description" content="Comprehensive admin command reference for the MSL Discord Bot. All commands, parameters, usage examples, and setup guides.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0b0e14;
+            --bg-secondary: #111620;
+            --bg-card: #161b27;
+            --bg-card-hover: #1c2233;
+            --bg-code: #1e2536;
+            --border: #252d3f;
+            --border-glow: #5865f2;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent: #5865f2;
+            --accent-soft: rgba(88, 101, 242, 0.15);
+            --green: #43b581;
+            --green-soft: rgba(67, 181, 129, 0.15);
+            --yellow: #faa61a;
+            --yellow-soft: rgba(250, 166, 26, 0.15);
+            --red: #f04747;
+            --red-soft: rgba(240, 71, 71, 0.15);
+            --purple: #9b59b6;
+            --purple-soft: rgba(155, 89, 182, 0.15);
+            --teal: #1abc9c;
+            --teal-soft: rgba(26, 188, 156, 0.15);
+            --orange: #e67e22;
+            --orange-soft: rgba(230, 126, 34, 0.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        /* ── Header ── */
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(11, 14, 20, 0.85);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            padding: 0.75rem 2rem;
+        }
+
+        .header-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .header-title .badge {
+            font-size: 0.65rem;
+            font-weight: 500;
+            padding: 0.2rem 0.5rem;
+            border-radius: 9999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .search-wrapper {
+            position: relative;
+            width: 320px;
+        }
+
+        .search-wrapper input {
+            width: 100%;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .search-wrapper input::placeholder { color: var(--text-muted); }
+        .search-wrapper input:focus { border-color: var(--accent); }
+
+        .search-wrapper .search-icon {
+            position: absolute;
+            left: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        /* ── Layout ── */
+        .layout {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            gap: 2rem;
+            padding: 2rem;
+        }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            position: sticky;
+            top: 5rem;
+            width: 220px;
+            flex-shrink: 0;
+            height: fit-content;
+            max-height: calc(100vh - 6rem);
+            overflow-y: auto;
+        }
+
+        .sidebar-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            padding: 0.5rem 0.75rem;
+        }
+
+        .sidebar a {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.45rem 0.75rem;
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            font-weight: 450;
+            transition: all 0.15s;
+        }
+
+        .sidebar a:hover { background: var(--bg-card); color: var(--text-primary); }
+        .sidebar a.active { background: var(--accent-soft); color: var(--accent); }
+
+        /* ── Main ── */
+        .main { flex: 1; min-width: 0; }
+
+        .hero {
+            padding: 2rem 0 2.5rem;
+        }
+
+        .hero h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            max-width: 600px;
+        }
+
+        .stat-bar {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1.5rem;
+        }
+
+        .stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* ── Sections ── */
+        .section {
+            margin-bottom: 3rem;
+            scroll-margin-top: 5rem;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-header .emoji { font-size: 1.25rem; }
+
+        .section-header h2 {
+            font-size: 1.15rem;
+            font-weight: 600;
+        }
+
+        .section-header .count {
+            margin-left: auto;
+            font-size: 0.7rem;
+            font-weight: 500;
+            padding: 0.15rem 0.45rem;
+            border-radius: 9999px;
+            background: var(--bg-card);
+            color: var(--text-muted);
+        }
+
+        /* ── Command Cards ── */
+        .cmd-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 0.75rem;
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        .cmd-card:hover {
+            border-color: var(--border-glow);
+            background: var(--bg-card-hover);
+        }
+
+        .cmd-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .cmd-syntax {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.88rem;
+            font-weight: 500;
+            color: #fff;
+            background: var(--bg-code);
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            display: inline-block;
+        }
+
+        .cmd-tag {
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        .tag-admin { background: var(--red-soft); color: var(--red); }
+        .tag-general { background: var(--green-soft); color: var(--green); }
+        .tag-booster { background: var(--purple-soft); color: var(--purple); }
+
+        .cmd-desc {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            margin-bottom: 0.75rem;
+            line-height: 1.55;
+        }
+
+        .cmd-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .cmd-param {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 0.72rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            background: var(--bg-code);
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .cmd-param.required { border-left: 2px solid var(--yellow); }
+        .cmd-param.optional { border-left: 2px solid var(--text-muted); }
+
+        .cmd-notes {
+            margin-top: 0.75rem;
+            padding: 0.6rem 0.8rem;
+            background: var(--accent-soft);
+            border-radius: 6px;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .cmd-notes strong { color: var(--text-primary); }
+
+        /* ── Legend ── */
+        .legend {
+            display: flex;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+            padding: 0.75rem 1rem;
+            background: var(--bg-card);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .legend-swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        /* ── No Results ── */
+        .no-results {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-muted);
+            display: none;
+        }
+
+        .no-results.visible { display: block; }
+
+        /* ── Responsive ── */
+        @media (max-width: 900px) {
+            .layout { flex-direction: column; padding: 1rem; }
+            .sidebar {
+                position: static;
+                width: 100%;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.25rem;
+                max-height: none;
+            }
+            .sidebar-label { width: 100%; }
+            .search-wrapper { width: 200px; }
+        }
+
+        @media (max-width: 600px) {
+            .header-inner { flex-direction: column; align-items: flex-start; }
+            .search-wrapper { width: 100%; }
+            .stat-bar { gap: 1.25rem; }
+            .cmd-top { flex-direction: column; gap: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-inner">
+            <div class="header-title">
+                ⚙️ MSL Bot Docs
+                <span class="badge">Admin Reference</span>
+            </div>
+            <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="search" placeholder="Search commands..." autocomplete="off">
+            </div>
+        </div>
+    </header>
+
+    <div class="layout">
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-label">Categories</div>
+        </nav>
+
+        <main class="main">
+            <div class="hero">
+                <h1>Command Reference</h1>
+                <p>Complete admin documentation for the MSL Discord Bot. Every command, parameter, and usage note in one place.</p>
+                <div class="stat-bar">
+                    <div class="stat"><span class="stat-value" id="totalCmds">0</span><span class="stat-label">Commands</span></div>
+                    <div class="stat"><span class="stat-value" id="totalCats">0</span><span class="stat-label">Categories</span></div>
+                </div>
+            </div>
+
+            <div class="legend">
+                <div class="legend-item"><div class="legend-swatch" style="background:var(--yellow)"></div> Required param</div>
+                <div class="legend-item"><div class="legend-swatch" style="background:var(--text-muted)"></div> Optional param</div>
+                <div class="legend-item"><span class="cmd-tag tag-admin" style="font-size:0.6rem">Admin</span></div>
+                <div class="legend-item"><span class="cmd-tag tag-general" style="font-size:0.6rem">Everyone</span></div>
+                <div class="legend-item"><span class="cmd-tag tag-booster" style="font-size:0.6rem">Booster</span></div>
+            </div>
+
+            <div id="content"></div>
+            <div class="no-results" id="noResults">No commands match your search.</div>
+        </main>
+    </div>
+
+<script>
+const COMMANDS = [
+    {
+        category: "General",
+        emoji: "🎯",
+        id: "general",
+        commands: [
+            {
+                syntax: "/help",
+                desc: "Display the in-Discord help menu. Shows commands based on the user's permission level — general users see basic commands, admins see the full list.",
+                access: "general",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/ping",
+                desc: "Returns the bot's current WebSocket latency in milliseconds. Useful for checking if the bot is responsive.",
+                access: "general",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/profile [user]",
+                desc: "View a unified MLBB profile card showing verified MLBB account info, server XP & level, event points, tier, and moderation history summary.",
+                access: "general",
+                params: [{ name: "user", type: "@mention", required: false, desc: "User to look up. Defaults to yourself." }],
+                notes: "Only shows MLBB data if the user has verified their account."
+            },
+            {
+                syntax: "/levels-leaderboard",
+                desc: "Display the top 10 XP earners in the server with their levels and tier names.",
+                access: "general",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/event-leaderboard",
+                desc: "Display the top event point holders ranked by total EP earned across all events.",
+                access: "general",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/raffles",
+                desc: "List all currently active raffles with their end times and entry counts.",
+                access: "general",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/quiz-leaderboard",
+                desc: "Show the top quiz scorers for the past 7 days.",
+                access: "general",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/social thank <user>",
+                desc: "Thank another user, granting them +10 XP. Has a per-user cooldown to prevent spam.",
+                access: "general",
+                params: [{ name: "user", type: "@mention", required: true, desc: "The user to thank." }],
+                notes: "Cannot thank yourself. Cooldown applies per thanker."
+            }
+        ]
+    },
+    {
+        category: "Pomodoro Timer",
+        emoji: "🍅",
+        id: "pomodoro",
+        commands: [
+            {
+                syntax: "/pomodoro start [user1] [user2] [user3] [user4]",
+                desc: "Start a Pomodoro session in your current auto-created voice channel. Cycles through 25 min work → 5 min break. Every 4th pomodoro triggers a 15 min long break. The VC is renamed to show current phase, and all participants are pinged at transitions.",
+                access: "general",
+                params: [
+                    { name: "user1–4", type: "@mention", required: false, desc: "Up to 4 additional users to include. Must be in the same VC." }
+                ],
+                notes: "Only works in auto-created temp VCs. Additional users not in the VC are silently skipped. The session runs indefinitely until manually stopped."
+            },
+            {
+                syntax: "/pomodoro add <user>",
+                desc: "Add a user to the active Pomodoro session after it has started. Only the session creator can add people.",
+                access: "general",
+                params: [{ name: "user", type: "@mention", required: true, desc: "User to add. Must be in the same VC." }],
+                notes: "Creator-only. The added user gets notified in the VC text chat."
+            },
+            {
+                syntax: "/pomodoro leave",
+                desc: "Remove yourself from the active Pomodoro session. You will no longer receive pings at phase transitions. If the creator leaves, the entire session ends for everyone.",
+                access: "general",
+                params: [],
+                notes: "If you're the creator, this ends the session for all participants."
+            },
+            {
+                syntax: "/pomodoro stop",
+                desc: "Immediately end the Pomodoro session for all participants. The VC name is restored to its original. Only the session creator can use this.",
+                access: "admin",
+                params: [],
+                notes: "Creator-only. Also triggers automatically when the creator leaves the VC or the VC is deleted."
+            }
+        ]
+    },
+    {
+        category: "Booster Perks",
+        emoji: "💎",
+        id: "booster",
+        commands: [
+            {
+                syntax: "/booster perks",
+                desc: "View your current booster tier (Bronze/Silver/Gold/Diamond), XP multiplier, and available perks based on how long you've been boosting.",
+                access: "booster",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/booster color",
+                desc: "Choose a custom name color from the available palette. Higher tiers unlock more color options.",
+                access: "booster",
+                params: [],
+                notes: "Opens a color picker interface."
+            },
+            {
+                syntax: "/booster emblem",
+                desc: "Choose an emblem/badge that appears next to your name. Selection varies by booster tier.",
+                access: "booster",
+                params: [],
+                notes: "Opens an emblem selector."
+            },
+            {
+                syntax: "/booster list",
+                desc: "List all current server boosters with their boost duration and tier.",
+                access: "booster",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/force-booster-raffle",
+                desc: "Manually trigger the weekly booster raffle draw outside of its scheduled time.",
+                access: "admin",
+                params: [],
+                notes: "Admin-only override. The automatic weekly raffle runs on its own schedule."
+            }
+        ]
+    },
+    {
+        category: "Verification",
+        emoji: "📋",
+        id: "verification",
+        commands: [
+            {
+                syntax: "/verify deploy <channel>",
+                desc: "Post the verification panel with a 'Verify' button in the specified channel. Users click the button to open a modal where they enter their MLBB UID for verification.",
+                access: "admin",
+                params: [{ name: "channel", type: "#channel", required: true, desc: "Channel to post the panel in." }],
+                notes: "Only one panel is needed. The button persists across bot restarts."
+            },
+            {
+                syntax: "/verify status <user>",
+                desc: "Check whether a Discord user has verified their MLBB account and view their linked MLBB UID, IGN, and verification date.",
+                access: "admin",
+                params: [{ name: "user", type: "@mention", required: true, desc: "The user to check." }],
+                notes: null
+            },
+            {
+                syntax: "/verify whois <uid>",
+                desc: "Reverse lookup: find which Discord user is linked to a given MLBB UID.",
+                access: "admin",
+                params: [{ name: "uid", type: "number", required: true, desc: "The MLBB UID to search." }],
+                notes: null
+            },
+            {
+                syntax: "/verify update <user>",
+                desc: "Edit a user's verification info (UID, IGN, etc.) without requiring them to re-verify.",
+                access: "admin",
+                params: [{ name: "user", type: "@mention", required: true, desc: "User to update." }],
+                notes: null
+            },
+            {
+                syntax: "/verify remove <user>",
+                desc: "Remove a user's verification, unlinking their Discord account from their MLBB UID.",
+                access: "admin",
+                params: [{ name: "user", type: "@mention", required: true, desc: "User to un-verify." }],
+                notes: "This does NOT kick or ban the user. It only removes verification data."
+            },
+            {
+                syntax: "/verify msl setup",
+                desc: "Configure the Google Sheets integration for MSL (MLBB Streamer League) member tracking. Sets the sheet ID and the role granted to verified MSL members.",
+                access: "admin",
+                params: [],
+                notes: "Requires a Google Sheets URL with MSL member data."
+            },
+            {
+                syntax: "/verify msl refresh",
+                desc: "Force refresh the MSL member cache from the configured Google Sheet.",
+                access: "admin",
+                params: [],
+                notes: "Normally auto-refreshes periodically."
+            },
+            {
+                syntax: "/verify msl check <user>",
+                desc: "Check if a user is recognized as an MSL member from the cached sheet data.",
+                access: "admin",
+                params: [{ name: "user", type: "@mention", required: true, desc: "User to check." }],
+                notes: null
+            }
+        ]
+    },
+    {
+        category: "Voice Channels",
+        emoji: "🎤",
+        id: "voice",
+        commands: [
+            {
+                syntax: "/voice setup <channel>",
+                desc: "Designate a voice channel as a 'master' auto-create channel. When users join it, a personal VC is created for them under the same category with owner controls.",
+                access: "admin",
+                params: [{ name: "channel", type: "voice channel", required: true, desc: "The master VC." }],
+                notes: "The temp VCs auto-delete when empty. The owner gets a control panel with +1/-1/Set/Unlimited/Transfer buttons."
+            },
+            {
+                syntax: "/voice remove <channel>",
+                desc: "Remove auto-create functionality from a master voice channel.",
+                access: "admin",
+                params: [{ name: "channel", type: "voice channel", required: true, desc: "The channel to un-configure." }],
+                notes: null
+            }
+        ]
+    },
+    {
+        category: "Embeds",
+        emoji: "📝",
+        id: "embeds",
+        commands: [
+            {
+                syntax: "/embed send <channel> <link>",
+                desc: "Send an embed from a Discohook share link to the specified channel. Supports scheduling for future delivery.",
+                access: "admin",
+                params: [
+                    { name: "channel", type: "#channel", required: true, desc: "Destination channel." },
+                    { name: "link", type: "URL", required: true, desc: "Discohook share URL." }
+                ],
+                notes: null
+            },
+            {
+                syntax: "/embed edit <link>",
+                desc: "Edit an existing bot-sent embed by providing a new Discohook link. The bot replaces the old embed content.",
+                access: "admin",
+                params: [{ name: "link", type: "URL", required: true, desc: "New Discohook share URL." }],
+                notes: null
+            },
+            {
+                syntax: "/embed download <link>",
+                desc: "Extract an existing embed from a message and generate a Discohook URL for editing.",
+                access: "admin",
+                params: [{ name: "link", type: "URL", required: true, desc: "Message link containing the embed." }],
+                notes: null
+            },
+            {
+                syntax: "/embed manage",
+                desc: "View and manage all scheduled embeds. Cancel or reschedule pending sends.",
+                access: "admin",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/embed logs <channel>",
+                desc: "Set the channel where embed send/edit audit logs are posted.",
+                access: "admin",
+                params: [{ name: "channel", type: "#channel", required: true, desc: "Log channel." }],
+                notes: null
+            }
+        ]
+    },
+    {
+        category: "Moderation",
+        emoji: "🛡️",
+        id: "moderation",
+        commands: [
+            {
+                syntax: "/warn <user> <reason>",
+                desc: "Issue a formal warning to a user. Applies a 24-hour XP lock as punishment and logs the warning to mod history.",
+                access: "admin",
+                params: [
+                    { name: "user", type: "@mention", required: true, desc: "User to warn." },
+                    { name: "reason", type: "text", required: true, desc: "Reason for the warning." }
+                ],
+                notes: "The 24h XP lock prevents the user from earning any XP. Warning is recorded in /history."
+            },
+            {
+                syntax: "/mute <user> <duration> [reason]",
+                desc: "Assign the Muted role to a user for a specified duration. Prevents them from sending messages in most channels.",
+                access: "admin",
+                params: [
+                    { name: "user", type: "@mention", required: true, desc: "User to mute." },
+                    { name: "duration", type: "duration", required: true, desc: "e.g. 1h, 30m, 1d" },
+                    { name: "reason", type: "text", required: false, desc: "Reason for muting." }
+                ],
+                notes: "Requires a 'Muted' role to be configured via /setup role."
+            },
+            {
+                syntax: "/unmute <user>",
+                desc: "Remove the Muted role from a user, restoring their messaging permissions.",
+                access: "admin",
+                params: [{ name: "user", type: "@mention", required: true, desc: "User to unmute." }],
+                notes: null
+            },
+            {
+                syntax: "/restrict <user> <duration> [reason]",
+                desc: "Restrict a user from posting images, embeds, and attachments for a specified duration.",
+                access: "admin",
+                params: [
+                    { name: "user", type: "@mention", required: true, desc: "User to restrict." },
+                    { name: "duration", type: "duration", required: true, desc: "e.g. 1h, 30m, 1d" },
+                    { name: "reason", type: "text", required: false, desc: "Reason for restriction." }
+                ],
+                notes: null
+            },
+            {
+                syntax: "/unrestrict <user>",
+                desc: "Remove media restrictions from a user, restoring their ability to post images and attachments.",
+                access: "admin",
+                params: [{ name: "user", type: "@mention", required: true, desc: "User to unrestrict." }],
+                notes: null
+            },
+            {
+                syntax: "/kick <user> [reason]",
+                desc: "Kick a user from the server. They can rejoin with a new invite.",
+                access: "admin",
+                params: [
+                    { name: "user", type: "@mention", required: true, desc: "User to kick." },
+                    { name: "reason", type: "text", required: false, desc: "Reason for kick." }
+                ],
+                notes: "Logged in mod history and mod log channel."
+            },
+            {
+                syntax: "/ban <user> [duration] [reason]",
+                desc: "Ban a user from the server. A permanent ban wipes all their data (XP, verification, etc.). Timed bans preserve data.",
+                access: "admin",
+                params: [
+                    { name: "user", type: "@mention", required: true, desc: "User to ban." },
+                    { name: "duration", type: "duration", required: false, desc: "Omit for permanent. e.g. 7d for temp ban." },
+                    { name: "reason", type: "text", required: false, desc: "Reason for ban." }
+                ],
+                notes: "⚠️ Permanent bans WIPE all user data. Temp bans preserve it."
+            },
+            {
+                syntax: "/history <user>",
+                desc: "View the complete moderation history of a user: warnings, mutes, restricts, kicks, bans, with timestamps and reasons.",
+                access: "admin",
+                params: [{ name: "user", type: "@mention", required: true, desc: "User to look up." }],
+                notes: null
+            }
+        ]
+    },
+    {
+        category: "Community Features",
+        emoji: "💬",
+        id: "community",
+        commands: [
+            {
+                syntax: "/confessions deploy",
+                desc: "Post the anonymous confessions panel in the configured confessions channel. The panel includes a 'Confess' button that opens a modal for anonymous submission. Each posted confession also has a Confess button for chaining.",
+                access: "admin",
+                params: [],
+                notes: "Requires /setup channel confessions first. Buttons persist across restarts. Identity logged to the anon log channel."
+            },
+            {
+                syntax: "/anon deploy",
+                desc: "Deploy the anonymous messages sticky panel in the configured channel. The panel auto-reposts every 10 minutes to stay at the bottom. Users click 'Send Message' to type anonymously, and each posted message has a 'Reply Anonymously' button.",
+                access: "admin",
+                params: [],
+                notes: "Requires /setup channel anon_messages first. The sticky panel refreshes every 10 min. Replies appear as Discord reply threads. Identity logged to the anon log channel."
+            }
+        ]
+    },
+    {
+        category: "Setup & Configuration",
+        emoji: "⚙️",
+        id: "setup",
+        commands: [
+            {
+                syntax: "/setup view",
+                desc: "Display a full checklist of all bot settings. Shows which channels and roles are configured and which are missing. Essential for initial bot setup.",
+                access: "admin",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/setup channel <type> <#channel>",
+                desc: "Configure a channel for a specific bot function. Available types: message_log, ticket_log, voice_log, giveaway_log, boost_public, boost_admin, modlog, cmdlog, event_log, leaderboard, bot, booster_chat, level_alerts, confessions, counting, anon_messages, anon_log.",
+                access: "admin",
+                params: [
+                    { name: "type", type: "choice", required: true, desc: "Channel type from the list above." },
+                    { name: "channel", type: "#channel", required: true, desc: "The channel to assign." }
+                ],
+                notes: "Run /setup view to see what's configured and what's missing."
+            },
+            {
+                syntax: "/setup role <type> <@role>",
+                desc: "Configure a role for a specific bot function (e.g. verified role, muted role, etc.).",
+                access: "admin",
+                params: [
+                    { name: "type", type: "choice", required: true, desc: "Role type." },
+                    { name: "role", type: "@role", required: true, desc: "The role to assign." }
+                ],
+                notes: null
+            },
+            {
+                syntax: "/ticket deploy [channel]",
+                desc: "Post the ticket creation panel with category selection buttons.",
+                access: "admin",
+                params: [{ name: "channel", type: "#channel", required: false, desc: "Channel to post in. Defaults to current channel." }],
+                notes: "Panel buttons persist across restarts."
+            },
+            {
+                syntax: "/ticket config-category <category>",
+                desc: "Set the Discord category where new ticket channels are created.",
+                access: "admin",
+                params: [{ name: "category", type: "category", required: true, desc: "The category for ticket channels." }],
+                notes: null
+            },
+            {
+                syntax: "/xp start",
+                desc: "Enable the XP system. Users will start earning XP from messages and voice activity.",
+                access: "admin",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/xp stop",
+                desc: "Disable the XP system globally. No XP will be earned while stopped.",
+                access: "admin",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/xp status",
+                desc: "Check whether the XP system is currently enabled or disabled.",
+                access: "admin",
+                params: [],
+                notes: null
+            },
+            {
+                syntax: "/autorole",
+                desc: "Bulk-assign the configured auto-role to all existing members who don't have it yet.",
+                access: "admin",
+                params: [],
+                notes: "Useful after configuring a new auto-role. Processes in batches to respect rate limits."
+            },
+            {
+                syntax: "/event raffle create",
+                desc: "Create and deploy a new event raffle. Users enter by clicking a button on the raffle embed.",
+                access: "admin",
+                params: [],
+                notes: "Opens a configuration modal for prize, duration, max entries, etc."
+            },
+            {
+                syntax: "/event raffle draw <id>",
+                desc: "Manually draw winners for an active raffle before its scheduled end time.",
+                access: "admin",
+                params: [{ name: "id", type: "number", required: true, desc: "The raffle ID." }],
+                notes: null
+            },
+            {
+                syntax: "/event raffle cancel <id>",
+                desc: "Cancel an active raffle. No winners are drawn and entrants are notified.",
+                access: "admin",
+                params: [{ name: "id", type: "number", required: true, desc: "The raffle ID to cancel." }],
+                notes: null
+            },
+            {
+                syntax: "/notification deploy [channel]",
+                desc: "Post the notification role selection panel. Users can click buttons to opt in/out of notification roles (e.g. event pings, update pings).",
+                access: "admin",
+                params: [{ name: "channel", type: "#channel", required: false, desc: "Defaults to current channel." }],
+                notes: "Panel buttons persist across restarts."
+            },
+            {
+                syntax: "/reload [cog]",
+                desc: "Hot-reload one or all cogs without restarting the bot. Useful for applying code changes to a live bot.",
+                access: "admin",
+                params: [{ name: "cog", type: "text", required: false, desc: "Cog name (e.g. 'pomodoro', 'xp', 'anon'). Omit to reload all." }],
+                notes: "Safe to run while the bot is serving users. Momentary interruption only."
+            }
+        ]
+    }
+];
+
+// ── Render ──
+function render(filter = "") {
+    const content = document.getElementById("content");
+    const sidebar = document.getElementById("sidebar");
+    const noResults = document.getElementById("noResults");
+    const q = filter.toLowerCase();
+
+    let html = "";
+    let sidebarHtml = '<div class="sidebar-label">Categories</div>';
+    let totalCmds = 0;
+    let visibleCats = 0;
+
+    COMMANDS.forEach(cat => {
+        const filtered = cat.commands.filter(cmd =>
+            !q ||
+            cmd.syntax.toLowerCase().includes(q) ||
+            cmd.desc.toLowerCase().includes(q) ||
+            (cmd.notes && cmd.notes.toLowerCase().includes(q))
+        );
+
+        if (filtered.length === 0) return;
+        visibleCats++;
+        totalCmds += filtered.length;
+
+        sidebarHtml += `<a href="#${cat.id}">${cat.emoji} ${cat.category}</a>`;
+
+        html += `<section class="section" id="${cat.id}">`;
+        html += `<div class="section-header">
+            <span class="emoji">${cat.emoji}</span>
+            <h2>${cat.category}</h2>
+            <span class="count">${filtered.length}</span>
+        </div>`;
+
+        filtered.forEach(cmd => {
+            const tagClass = cmd.access === "admin" ? "tag-admin" : cmd.access === "booster" ? "tag-booster" : "tag-general";
+            const tagLabel = cmd.access === "admin" ? "Admin" : cmd.access === "booster" ? "Booster" : "Everyone";
+
+            html += `<div class="cmd-card" data-syntax="${cmd.syntax.toLowerCase()}">`;
+            html += `<div class="cmd-top">
+                <code class="cmd-syntax">${cmd.syntax}</code>
+                <span class="cmd-tag ${tagClass}">${tagLabel}</span>
+            </div>`;
+            html += `<div class="cmd-desc">${cmd.desc}</div>`;
+
+            if (cmd.params.length) {
+                html += '<div class="cmd-meta">';
+                cmd.params.forEach(p => {
+                    const cls = p.required ? "required" : "optional";
+                    html += `<span class="cmd-param ${cls}">${p.required ? "⬤" : "○"} ${p.name}: ${p.type} — ${p.desc}</span>`;
+                });
+                html += '</div>';
+            }
+
+            if (cmd.notes) {
+                html += `<div class="cmd-notes">💡 <strong>Note:</strong> ${cmd.notes}</div>`;
+            }
+
+            html += '</div>';
+        });
+
+        html += '</section>';
+    });
+
+    content.innerHTML = html;
+    sidebar.innerHTML = sidebarHtml;
+    noResults.classList.toggle("visible", totalCmds === 0);
+
+    if (!q) {
+        document.getElementById("totalCmds").textContent = totalCmds;
+        document.getElementById("totalCats").textContent = visibleCats;
+    }
+}
+
+// ── Search ──
+let debounce;
+document.getElementById("search").addEventListener("input", e => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => render(e.target.value), 150);
+});
+
+// ── Active sidebar scroll tracking ──
+function updateActiveSidebar() {
+    const sections = document.querySelectorAll(".section");
+    const links = document.querySelectorAll(".sidebar a");
+    let current = "";
+
+    sections.forEach(s => {
+        if (s.getBoundingClientRect().top <= 120) current = s.id;
+    });
+
+    links.forEach(a => {
+        a.classList.toggle("active", a.getAttribute("href") === `#${current}`);
+    });
+}
+window.addEventListener("scroll", updateActiveSidebar, { passive: true });
+
+// ── Init ──
+render();
+</script>
+</body>
+</html>
