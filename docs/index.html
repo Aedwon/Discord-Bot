@@ -904,10 +904,17 @@ const COMMANDS = [
                 notes: "Panel buttons persist across restarts."
             },
             {
+                syntax: "/manage-quests",
+                desc: "Open the quest definition catalog. View all active quests in a paginated list with Edit and Delete buttons per quest. Click Add to create a new quest via modal (name, description, target goal) followed by tier and task type selection. Quests are the master template list that future quest assignment and reward systems build on.",
+                access: "admin",
+                params: [],
+                notes: "Quests have 3 tiers (Common/Uncommon/Rare) and 3 task types (message count, VC minutes, reaction count). Max 4 quests per page with pagination."
+            },
+            {
                 syntax: "/reload [cog]",
                 desc: "Hot-reload one or all cogs without restarting the bot. Useful for applying code changes to a live bot.",
                 access: "admin",
-                params: [{ name: "cog", type: "text", required: false, desc: "Cog name (e.g. 'pomodoro', 'xp', 'anon'). Omit to reload all." }],
+                params: [{ name: "cog", type: "text", required: false, desc: "Cog name (e.g. 'pomodoro', 'xp', 'anon', 'quests'). Omit to reload all." }],
                 notes: "Safe to run while the bot is serving users. Momentary interruption only."
             }
         ]
