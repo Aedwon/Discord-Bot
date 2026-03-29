@@ -217,6 +217,7 @@ async def load_extensions():
         "cogs.counting_cog",
         "cogs.anon_message_cog",
         "cogs.pomodoro_cog",
+        "cogs.quest_cog",
     ]
     
     success_count = 0
@@ -277,6 +278,8 @@ async def reload(inter: discord.Interaction, cog: str = None):
         "anon": "cogs.anon_message_cog",
         "anon_messages": "cogs.anon_message_cog",
         "pomodoro": "cogs.pomodoro_cog",
+        "quest": "cogs.quest_cog",
+        "quests": "cogs.quest_cog",
     }
     
     if cog:
@@ -419,6 +422,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/notification deploy [channel]`**", "Post notification role panel"),
                 ("**`/confessions deploy`**", "Post confessions panel with button"),
                 ("**`/anon deploy`**", "Post anonymous messages panel"),
+                ("**`/manage-quests`**", "Manage quest definition catalog"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },

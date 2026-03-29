@@ -494,6 +494,7 @@ class SetupCog(commands.Cog, name="Setup"):
         app_commands.Choice(name="Server Boosters", value="boosters"),
         app_commands.Choice(name="Moderation Logs", value="modlogs"),
         app_commands.Choice(name="⚠️ Verification Data", value="verification"),
+        app_commands.Choice(name="Quest Definitions", value="quests"),
         app_commands.Choice(name="🚨 FULL SERVER WIPE 🚨", value="full"),
     ])
     @require_admin_auth()
@@ -543,6 +544,7 @@ class SetupCog(commands.Cog, name="Setup"):
         if category in ["boosters", "full"]: await db.wipe_boosters()
         if category in ["modlogs", "full"]: await db.wipe_modlogs()
         if category in ["verification", "full"]: await db.wipe_verification()
+        if category in ["quests", "full"]: await db.wipe_quests()
         
         # 2. Bulk Role Stripping
         roles_to_strip = []

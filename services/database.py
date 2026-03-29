@@ -476,6 +476,21 @@ class Database:
                 last_user_id BIGINT DEFAULT NULL
             )
         ''')
+        
+        # Quest definition catalog (admin-managed, future progress/reward system builds on this)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quests (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                description TEXT,
+                tier ENUM('common', 'uncommon', 'rare') NOT NULL DEFAULT 'common',
+                task_type ENUM('message_count', 'vc_minutes', 'reaction_count') NOT NULL,
+                target_goal INT NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""
@@ -558,6 +573,10 @@ class Database:
     async def wipe_verification(self):
         """Delete all Verification status data (Extreme)."""
         await self.execute("DELETE FROM verified_users")
+
+    async def wipe_quests(self):
+        """Delete all quest definitions."""
+        await self.execute("DELETE FROM quests")
 
 
 # Singleton instance
