@@ -35,7 +35,7 @@ XP_CONFIG = {
     "message": {
         "min_xp": 10,
         "max_xp": 15,
-        "cooldown_seconds": 10,  # One XP gain per cycle
+        "cooldown_seconds": 60,  # One XP gain per batch cycle
     },
     "reaction": {
         "xp_per_reaction": 5,
@@ -48,13 +48,13 @@ XP_CONFIG = {
         "xp_muted": 1,              # Low XP for just listening
         "xp_deafened": 1,           # Minimal XP for deafened/AFK
         "min_members": 2,           # Minimum active members in VC
-        "cycle_seconds": 10,
+        "cycle_seconds": 60,
         "daily_cap_seconds": 14400, # 4 hours max voice XP per day
     },
 }
 
 # Batch update interval (seconds)
-BATCH_UPDATE_INTERVAL = 10
+BATCH_UPDATE_INTERVAL = 60
 
 # ─────────────────────────────────────────────────────────────────────
 # Booster Tier Configuration (role IDs stored in database via !setup)

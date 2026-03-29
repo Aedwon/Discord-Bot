@@ -3,34 +3,75 @@ XP Service - Business logic for XP/Leveling system.
 Handles all XP calculations and database operations.
 """
 
+import bisect
 from datetime import datetime
 from services.database import db
+
+
+# ─── Precomputed Cumulative XP Table ────────────────────────────────────
+# Cost from level k to k+1 = 150 * k^1.9
+# Cumulative XP to reach level L = sum(int(150 * k**1.9) for k in 1..L-1)
+#
+# _LEVEL_THRESHOLDS[i] = cumulative XP required to reach level (i + 1).
+# So _LEVEL_THRESHOLDS[0] = 0 (level 1), _LEVEL_THRESHOLDS[1] = 150 (level 2), etc.
+_MAX_PRECOMPUTED = 200
+
+def _build_level_thresholds(max_level: int = _MAX_PRECOMPUTED) -> list[int]:
+    """Build cumulative XP thresholds for levels 1 through max_level."""
+    thresholds = [0]  # Level 1 requires 0 XP
+    cumulative = 0
+    for k in range(1, max_level):
+        cumulative += int(150 * (k ** 1.9))
+        thresholds.append(cumulative)
+    return thresholds
+
+_LEVEL_THRESHOLDS = _build_level_thresholds()
 
 
 class XpService:
     """Handles XP-related business logic."""
     
     def get_level(self, xp: int) -> int:
-        """Calculate mathematical level using the custom exponential curve 150 * (Lvl^1.9)."""
-        if xp <= 0: return 1
-        return int((xp / 150) ** (1 / 1.9)) + 1
+        """Determine level from cumulative XP using precomputed thresholds.
+        
+        Uses bisect on the sorted threshold table for O(log n) lookup.
+        Handles XP values beyond the precomputed range via dynamic extension.
+        """
+        if xp <= 0:
+            return 1
+        
+        # bisect_right returns the insertion point; the level is that index.
+        # e.g. xp=150 → bisect finds index 2 → level 2
+        idx = bisect.bisect_right(_LEVEL_THRESHOLDS, xp) - 1
+        
+        # If XP exceeds precomputed range, extend dynamically
+        if idx >= len(_LEVEL_THRESHOLDS) - 1 and xp >= _LEVEL_THRESHOLDS[-1]:
+            level = len(_LEVEL_THRESHOLDS)
+            cumulative = _LEVEL_THRESHOLDS[-1]
+            while cumulative <= xp:
+                cumulative += int(150 * (level ** 1.9))
+                level += 1
+            return level - 1
+        
+        return max(1, idx + 1)
     
     def get_xp_for_level(self, level: int) -> int:
-        """Return the minimum XP needed to reach a given level."""
-        if level <= 1: return 0
-        return int(150 * ((level - 1) ** 1.9))
+        """Return the cumulative XP required to reach a given level.
         
-    def get_tier_name(self, level: int) -> str | None:
-        """Mathematical Mapping: Level 1-100 to 22 distinctly named Role Tiers."""
-        if level <= 0: return None
-        if level >= 101: return "Monarch"
+        Cost from level k to k+1 = 150 * k^1.9.
+        Total to level L = sum(int(150 * k**1.9) for k in 1..L-1).
+        """
+        if level <= 1:
+            return 0
         
-        ranks = ["Commoner", "Vassal", "Noble", "High Noble"]
-        rank_idx = min((level - 1) // 25, 3)
-        tier = ((level - 1) % 25) // 5 
-        numerals = ["V", "IV", "III", "II", "I"]
+        if level <= len(_LEVEL_THRESHOLDS):
+            return _LEVEL_THRESHOLDS[level - 1]
         
-        return f"{ranks[rank_idx]} {numerals[tier]}"
+        # Dynamic computation for levels beyond precomputed range
+        cumulative = _LEVEL_THRESHOLDS[-1]
+        for k in range(len(_LEVEL_THRESHOLDS), level):
+            cumulative += int(150 * (k ** 1.9))
+        return cumulative
         
     def get_tier_name(self, level: int) -> str | None:
         """Mathematical Mapping: Level 1-100 to 22 distinctly named Role Tiers."""
