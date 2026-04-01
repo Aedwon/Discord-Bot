@@ -401,13 +401,32 @@ class XpCog(commands.Cog, name="Leveling"):
         await inter.response.defer()
         target = member or inter.user
         
-        # XP
+        # ── XP Data ──
         rank, xp = await xp_service.get_rank(target.id)
         level = xp_service.get_level(xp)
         xp_tier = xp_service.get_tier_name(level)
         rank_display = f"#{rank}" if rank is not None and rank > 0 else "Unranked"
-            
-        # Events
+        
+        # XP progress bar
+        current_level_xp = xp_service.get_xp_for_level(level)
+        next_level_xp = xp_service.get_xp_for_level(level + 1)
+        xp_level_range = next_level_xp - current_level_xp
+        
+        if level >= 101:
+            xp_progress = 1.0
+            xp_remaining = 0
+        elif xp_level_range > 0:
+            xp_progress = min((xp - current_level_xp) / xp_level_range, 1.0)
+            xp_remaining = next_level_xp - xp
+        else:
+            xp_progress = 1.0
+            xp_remaining = 0
+        
+        xp_bar_fill = int(xp_progress * 16)
+        xp_bar = "▰" * xp_bar_fill + "▱" * (16 - xp_bar_fill)
+        xp_pct = int(xp_progress * 100)
+        
+        # ── EP Data ──
         from services.database import db
         user_data = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (target.id,))
         ep = (user_data['event_points'] or 0) if user_data else 0
@@ -422,7 +441,12 @@ class XpCog(commands.Cog, name="Leveling"):
         from services.ep_service import ep_service
         current_ep_tier, next_ep_tier, ep_progress = ep_service.get_tier_progress(ep)
         
-        # Verification
+        # EP progress bar
+        ep_bar_fill = int(ep_progress * 16)
+        ep_bar = "▰" * ep_bar_fill + "▱" * (16 - ep_bar_fill)
+        ep_pct = int(ep_progress * 100)
+        
+        # ── Verification ──
         is_verified = verification_service.is_verified(target.id)
         is_msl = False
         if is_verified:
@@ -430,25 +454,104 @@ class XpCog(commands.Cog, name="Leveling"):
             uid = user_info['mlbb_uid'] if user_info else None
             if hasattr(verification_service, 'is_msl') and uid:
                 is_msl = verification_service.is_msl(uid)
-                
-        ver_status = "✅ Verified" if is_verified else "❌ Unverified"
-        if is_msl:
-            ver_status += " 🎓 MSL"
-            
-        # Build Embed
-        embed = discord.Embed(title=f"👤 Community Profile: {target.display_name}", color=target.color or discord.Color.blue())
+        
+        ver_icon = "✅" if is_verified else "❌"
+        ver_label = "Verified" if is_verified else "Unverified"
+        msl_tag = "  ⸱  🎓 MSL" if is_msl else ""
+        
+        # ── Badges ──
+        from services.badge_service import badge_service
+        badges = await badge_service.get_badges(target.id)
+        
+        BADGE_ICONS = {
+            "Twilight Pilgrim": "🌅",
+            "The First People": "🏛️",
+            "Moniyan Sage": "📜",
+            "Battlefield God": "⚔️",
+            "Mogul of the Land": "💰",
+            "Convivialist": "🎊",
+        }
+        
+        # ── Themed Embed Color ──
+        # Pick a rich color based on the user's highest tier progression
+        tier_colors = {
+            "Commoner": 0x8B8B8B,     # Stone grey
+            "Vassal": 0x4A9E4A,        # Forest green
+            "Noble": 0x3A7BD5,         # Royal blue
+            "High Noble": 0x9B59B6,    # Amethyst purple
+            "Monarch": 0xF1C40F,       # Gold
+        }
+        embed_color = discord.Color.blue()
+        if xp_tier:
+            main_rank = xp_tier.split(" ")[0]
+            if main_rank in tier_colors:
+                embed_color = discord.Color(tier_colors[main_rank])
+        if target.color and target.color != discord.Color.default():
+            embed_color = target.color
+        
+        # ═══════════════════════════════════════════════════════
+        #  BUILD THE EMBED
+        # ═══════════════════════════════════════════════════════
+        
+        embed = discord.Embed(color=embed_color)
+        embed.set_author(
+            name=f"{target.display_name}'s Community Profile",
+            icon_url=target.display_avatar.url
+        )
         embed.set_thumbnail(url=target.display_avatar.url)
         
-        # XP Field
-        embed.add_field(name="Experience (XP)", value=f"**Level {level}** • `{xp:,} XP`\nGlobal Rank: **{rank_display}**\nTier: **{xp_tier or 'None'}**", inline=True)
+        # ── XP Section ──
+        if level >= 101:
+            xp_progress_line = f"`{xp_bar}` **MAX**\n> 👑 *Monarch — The Apex*"
+        else:
+            xp_progress_line = (
+                f"`{xp_bar}` **{xp_pct}%**\n"
+                f"> `{xp - current_level_xp:,}` / `{xp_level_range:,}` XP — **{xp_remaining:,}** to Lv. {level + 1}"
+            )
         
-        # Events Field
-        embed.add_field(name="Event Points (EP)", value=f"**{ep:,} EP**\nGlobal Rank: **{ep_rank_display}**\nAttended: **{events_attended} Events**\nTier: **{current_ep_tier}**", inline=True)
+        xp_section = (
+            f"**⚡ Level {level}** ⸱ {xp_tier or 'None'}\n"
+            f"🏅 Rank: **{rank_display}** ⸱ `{xp:,} XP`\n\n"
+            f"{xp_progress_line}"
+        )
+        embed.add_field(name="── ⚔️ Experience (XP) ──", value=xp_section, inline=False)
         
-        # Verification Field
-        embed.add_field(name="MLBB Verification", value=f"**Status:** {ver_status}", inline=False)
+        # ── EP Section ──
+        if next_ep_tier:
+            ep_progress_line = (
+                f"`{ep_bar}` **{ep_pct}%**\n"
+                f"> Next: **{next_ep_tier}**"
+            )
+        else:
+            ep_progress_line = f"`{ep_bar}` **MAX**\n> 🔱 *Mythic — The Summit*"
         
-        embed.set_footer(text=f"Requested by {inter.user.display_name}", icon_url=inter.user.display_avatar.url)
+        ep_section = (
+            f"**🏆 {current_ep_tier}**\n"
+            f"🏅 Rank: **{ep_rank_display}** ⸱ `{ep:,} EP`\n"
+            f"📋 Events Attended: **{events_attended}**\n\n"
+            f"{ep_progress_line}"
+        )
+        embed.add_field(name="── 🎯 Event Points (EP) ──", value=ep_section, inline=False)
+        
+        # ── Status Bar (Verification + Badges) ──
+        status_parts = [f"{ver_icon} {ver_label}{msl_tag}"]
+        
+        if badges:
+            badge_display = " ".join(BADGE_ICONS.get(b, "🏷️") + f" *{b}*" for b in badges)
+            status_parts.append(f"\n🎖️ {badge_display}")
+        
+        embed.add_field(
+            name="── 🛡️ Status ──",
+            value="\n".join(status_parts),
+            inline=False
+        )
+        
+        # ── Footer ──
+        embed.set_footer(
+            text=f"Requested by {inter.user.display_name}  ⸱  /profile",
+            icon_url=inter.user.display_avatar.url
+        )
+        
         await inter.followup.send(embed=embed)
     
     # ─────────────────────────────────────────────────────────────────────
