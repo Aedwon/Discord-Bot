@@ -1,12 +1,14 @@
 """
-Quest Management Cog - Admin-only CRUD interface for the quest definition catalog.
-Provides /manage-quests with interactive Add, Edit, and Delete via modals and buttons.
+Quest Management Cog - Admin CRUD + user-facing /quests command.
+/manage-quests: Admin interactive Add, Edit, Delete via modals and buttons.
+/quests: Users view their 3 daily quests with progress tracking.
 """
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
+import datetime
 
 from services.quest_service import (
     quest_service,
@@ -14,6 +16,7 @@ from services.quest_service import (
     QUEST_TASK_TYPES,
     TIER_DISPLAY,
     TASK_TYPE_DISPLAY,
+    TIER_REWARDS,
 )
 from utils.checks import require_admin_auth
 
@@ -581,14 +584,83 @@ async def _refresh_quest_list_message(message: discord.Message, page: int = 0):
         logger.error(f"Failed to refresh quest list: {e}")
 
 
+# ─── USER QUEST EMBED ───────────────────────────────────────────────────
+
+
+def _build_user_quests_embed(user: discord.User | discord.Member, quests: list[dict]) -> discord.Embed:
+    """Build the user-facing quest progress embed."""
+    if not quests:
+        embed = discord.Embed(
+            title="🎯 Daily Quests",
+            description=(
+                "No quests are available right now.\n\n"
+                "*The quest catalog needs at least one quest in each tier "
+                "(Common, Uncommon, Rare) before daily quests can be generated.*"
+            ),
+            color=discord.Color.greyple(),
+        )
+        embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+        return embed
+
+    all_done = all(q.get("completed") for q in quests)
+
+    embed = discord.Embed(
+        title="🎯 Daily Quests",
+        color=discord.Color.gold() if all_done else discord.Color.blue(),
+    )
+    embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+
+    for q in quests:
+        tier_info = TIER_DISPLAY.get(q["tier"], {"emoji": "❓", "label": q["tier"]})
+        task_info = TASK_TYPE_DISPLAY.get(q["task_type"], {"label": "???", "unit": "?"})
+        reward = TIER_REWARDS.get(q["tier"], 0)
+
+        progress = q.get("progress", 0)
+        target = q["target_goal"]
+        pct = min(progress / target, 1.0) if target > 0 else 1.0
+        bar_fill = int(pct * 10)
+        bar = "█" * bar_fill + "░" * (10 - bar_fill)
+        pct_display = int(pct * 100)
+
+        if q.get("completed"):
+            status_line = f"`{bar}` **100%** ✅\n+{reward} XP Claimed"
+        else:
+            status_line = f"`{bar}` **{pct_display}%**  ({progress}/{target} {task_info['unit']})"
+
+        desc = ""
+        if q.get("description"):
+            desc = f"*{q['description']}*\n"
+
+        embed.add_field(
+            name=f"{tier_info['emoji']} {q['name']} ({tier_info['label']})",
+            value=f"{desc}{task_info['label']}: {target} {task_info['unit']}\n{status_line}\nReward: `{reward} XP`",
+            inline=False,
+        )
+
+    if all_done:
+        # Calculate time until midnight for reset display  
+        now = datetime.datetime.now()
+        tomorrow = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        delta = tomorrow - now
+        hours, remainder = divmod(int(delta.total_seconds()), 3600)
+        minutes = remainder // 60
+        embed.set_footer(text=f"✅ All quests complete! New quests in {hours}h {minutes}m")
+    else:
+        embed.set_footer(text="Quests reset daily at midnight")
+
+    return embed
+
+
 # ─── COG ────────────────────────────────────────────────────────────────
 
 
 class QuestCog(commands.Cog, name="Quests"):
-    """Admin quest catalog management."""
+    """Admin quest catalog management + user daily quests."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    # ─── Admin Command ──────────────────────────────────────────────
 
     @app_commands.command(
         name="manage-quests",
@@ -605,6 +677,37 @@ class QuestCog(commands.Cog, name="Quests"):
         view = QuestManageView(quests)
 
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    # ─── User Command ───────────────────────────────────────────────
+
+    @app_commands.command(
+        name="quests",
+        description="View your daily quests and progress",
+    )
+    async def view_quests(self, interaction: discord.Interaction):
+        """Show the user's 3 daily quests with progress bars."""
+        await interaction.response.defer(ephemeral=True)
+
+        user_id = interaction.user.id
+
+        # Fetch today's quests (returns empty if assigned_date != today)
+        quests = await quest_service.get_user_quests(user_id)
+
+        if not quests:
+            # No quests for today — generate new set (handles stale day + first time)
+            await quest_service.generate_quests_for_user(user_id)
+            quests = await quest_service.get_user_quests(user_id)
+
+        embed = _build_user_quests_embed(interaction.user, quests)
+
+        # If all complete, show reroll stub (future: token reroll button)
+        if quests and all(q.get("completed") for q in quests):
+            # TODO(future): Add token-based reroll button here
+            # view = QuestRerollView(user_id, cost=REROLL_TOKEN_COST)
+            # await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

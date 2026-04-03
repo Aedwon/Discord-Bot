@@ -345,6 +345,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/pomodoro add <user>`**", "Add someone to your Pomodoro session"),
                 ("**`/pomodoro leave`**", "Leave the Pomodoro session"),
                 ("**`/pomodoro stop`**", "End Pomodoro for everyone (creator only)"),
+                ("**`/quests`**", "View your daily quests and progress"),
             ]
         },
         "booster": {

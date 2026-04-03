@@ -492,6 +492,22 @@ class Database:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Per-user daily quest assignments and progress tracking
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quest_progress (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                quest_id INT NOT NULL,
+                slot TINYINT NOT NULL,
+                progress INT DEFAULT 0,
+                completed BOOLEAN DEFAULT FALSE,
+                completed_at DATETIME DEFAULT NULL,
+                assigned_date DATE NOT NULL,
+                INDEX idx_qp_user_date (user_id, assigned_date),
+                FOREIGN KEY (quest_id) REFERENCES quests(id) ON DELETE CASCADE
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""
@@ -576,7 +592,8 @@ class Database:
         await self.execute("DELETE FROM verified_users")
 
     async def wipe_quests(self):
-        """Delete all quest definitions."""
+        """Delete all quest definitions and user progress."""
+        await self.execute("DELETE FROM quest_progress")
         await self.execute("DELETE FROM quests")
 
 

@@ -15,6 +15,7 @@ from config import XP_CONFIG, BATCH_UPDATE_INTERVAL
 from services.xp_service import xp_service
 from services.settings_service import settings_service
 from services.verification_service import verification_service
+from services.quest_service import quest_service
 from utils.embeds import create_leaderboard_embed, create_rank_embed
 from utils.checks import require_admin_auth
 
@@ -284,6 +285,14 @@ class XpCog(commands.Cog, name="Leveling"):
                         self.pending_xp[member.id] = (
                             self.pending_xp.get(member.id, 0) + xp_amt
                         )
+                        
+                        # Quest progress — +1 VC minute per 60s cycle
+                        try:
+                            completed = await quest_service.increment_progress(member.id, "vc_minutes", 1)
+                            for q in completed:
+                                await xp_service.add_xp(member.id, q["reward_xp"])
+                        except Exception as e:
+                            logger.error(f"Quest progress error (voice): {e}")
     
     # ─────────────────────────────────────────────────────────────────────
     # Event Listeners
@@ -333,6 +342,14 @@ class XpCog(commands.Cog, name="Leveling"):
         else:
             if message.content.startswith("Xptest"):
                 await message.reply(f"⏳ **LIVE DEBUG:** You are in `gained_msg_xp` (cooldown phase). You must wait for the background loop to clear this before earning again.", delete_after=15)
+        
+        # Quest progress — every qualifying message counts (independent of XP cooldown)
+        try:
+            completed = await quest_service.increment_progress(user_id, "message_count", 1)
+            for q in completed:
+                await xp_service.add_xp(user_id, q["reward_xp"])
+        except Exception as e:
+            logger.error(f"Quest progress error (message): {e}")
     
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
@@ -376,6 +393,14 @@ class XpCog(commands.Cog, name="Leveling"):
         self.daily_reaction_cache[user_id] = user_daily
         
         self.pending_xp[user_id] = self.pending_xp.get(user_id, 0) + xp_amount
+        
+        # Quest progress — reaction count
+        try:
+            completed = await quest_service.increment_progress(user_id, "reaction_count", 1)
+            for q in completed:
+                await xp_service.add_xp(user_id, q["reward_xp"])
+        except Exception as e:
+            logger.error(f"Quest progress error (reaction): {e}")
     
     # ─────────────────────────────────────────────────────────────────────
     # Slash Commands
