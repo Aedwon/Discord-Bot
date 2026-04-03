@@ -934,50 +934,51 @@ class ModCog(commands.Cog, name="Moderation"):
         
         await inter.followup.send(embed=embed, ephemeral=True)
     
-    @app_commands.command(name="mute", description="Mute a user (assigns Muted role)")
+    @app_commands.command(name="mute", description="Timeout a user (Discord native mute)")
     @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(
         user="The member to mute",
-        duration="Duration (e.g., 1m, 1h, 1d, 1w)",
+        duration="Duration (e.g., 1m, 1h, 1d, 1w) — max 28 days",
         reason="Optional reason for the mute"
     )
     async def mute(self, inter: discord.Interaction, user: discord.Member, duration: str, reason: str = None):
-        """Mute user by assigning Muted role."""
+        """Mute user using Discord's native timeout API."""
         await inter.response.defer()  # Prevent Unknown Interaction timeouts
         if not await self._check_hierarchy(inter, user):
             return
         
-        # Validate duration format (for logging purposes)
+        # Validate duration
         parsed = self._parse_duration(duration)
         if not parsed:
             return await inter.followup.send("❌ Invalid duration. Use: `1m`, `1h`, `1d`, `1w`", ephemeral=True)
         
-        # Get Muted role
-        muted_role_id = await settings_service.get_int("muted_role_id")
-        if not muted_role_id:
+        # Discord API hard cap: 28 days
+        max_timeout = timedelta(days=28)
+        if parsed > max_timeout:
             return await inter.followup.send(
-                "❌ Muted role not configured. Use `/setup role muted @Muted`",
+                "❌ Discord's timeout limit is **28 days**. Use `/ban` for longer punishments.",
                 ephemeral=True
             )
         
-        muted_role = inter.guild.get_role(muted_role_id)
-        if not muted_role:
-            return await inter.followup.send("❌ Muted role not found.", ephemeral=True)
+        # Check if already timed out
+        if user.is_timed_out():
+            until = user.timed_out_until
+            return await inter.followup.send(
+                f"❌ {user.mention} is already timed out until <t:{int(until.timestamp())}:f>.",
+                ephemeral=True
+            )
         
-        # Check if already muted
-        if muted_role in user.roles:
-            return await inter.followup.send(f"❌ {user.mention} is already muted.", ephemeral=True)
-        
-        # Apply Muted role with verification
-        success, error = await self._add_role_with_verification(
-            guild=inter.guild,
-            user_id=user.id,
-            role=muted_role,
-            reason=f"Muted by {inter.user}: {reason}"
-        )
-        
-        if not success:
-            return await inter.followup.send(f"❌ {error}", ephemeral=True)
+        # Apply native timeout
+        timeout_until = discord.utils.utcnow() + parsed
+        try:
+            await user.timeout(timeout_until, reason=f"Muted by {inter.user}: {reason or 'No reason'}")
+        except discord.Forbidden:
+            return await inter.followup.send(
+                "❌ I lack the `Moderate Members` permission, or the user's role is above mine.",
+                ephemeral=True
+            )
+        except discord.HTTPException as e:
+            return await inter.followup.send(f"❌ Discord API error: {e}", ephemeral=True)
         
         # DM and log
         await self._notify_user(user, f"muted for {duration}", reason, inter.guild.name)
@@ -987,9 +988,10 @@ class ModCog(commands.Cog, name="Moderation"):
         embed.add_field(name="User", value=user.mention, inline=True)
         embed.add_field(name="Duration", value=duration, inline=True)
         embed.add_field(name="Moderator", value=inter.user.mention, inline=True)
+        embed.add_field(name="Expires", value=f"<t:{int(timeout_until.timestamp())}:R>", inline=True)
         if reason:
             embed.add_field(name="Reason", value=reason, inline=False)
-        embed.set_footer(text="Role-based mute applied")
+        embed.set_footer(text="Native Discord timeout applied — auto-expires, survives rejoin")
         
         await inter.followup.send(embed=embed)
         await self._log_to_channel(inter.guild, embed)
@@ -1172,30 +1174,26 @@ class ModCog(commands.Cog, name="Moderation"):
         except discord.NotFound:
             await inter.followup.send("❌ User not found or not banned.", ephemeral=True)
     
-    @app_commands.command(name="unmute", description="Remove Muted role from a member")
+    @app_commands.command(name="unmute", description="Remove timeout from a member")
     @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="Member to unmute", reason="Reason for unmute")
     async def unmute(self, inter: discord.Interaction, user: discord.Member, reason: str = None):
-        """Remove Muted role from a member."""
+        """Remove Discord timeout from a member."""
         await inter.response.defer()  # Prevent Unknown Interaction timeouts
-        muted_role_id = await settings_service.get_int("muted_role_id")
-        if not muted_role_id:
-            return await inter.followup.send("❌ Muted role not configured.", ephemeral=True)
         
-        muted_role = inter.guild.get_role(muted_role_id)
-        if not muted_role:
-            return await inter.followup.send("❌ Muted role not found.", ephemeral=True)
+        if not user.is_timed_out():
+            return await inter.followup.send(f"❌ {user.mention} is not currently timed out.", ephemeral=True)
         
-        # Remove Muted role with verification
-        success, error = await self._remove_role_with_verification(
-            guild=inter.guild,
-            user_id=user.id,
-            role=muted_role,
-            reason=f"Unmuted by {inter.user}: {reason}"
-        )
+        try:
+            await user.timeout(None, reason=f"Unmuted by {inter.user}: {reason or 'No reason'}")
+        except discord.Forbidden:
+            return await inter.followup.send(
+                "❌ I lack the `Moderate Members` permission, or the user's role is above mine.",
+                ephemeral=True
+            )
+        except discord.HTTPException as e:
+            return await inter.followup.send(f"❌ Discord API error: {e}", ephemeral=True)
         
-        if not success:
-            return await inter.followup.send(f"❌ {error}", ephemeral=True)
         await mod_service.log_action("unmute", inter.user.id, user.id, reason)
         
         embed = discord.Embed(title="🔊 User Unmuted", color=discord.Color.green())
@@ -1203,6 +1201,7 @@ class ModCog(commands.Cog, name="Moderation"):
         embed.add_field(name="Moderator", value=inter.user.mention, inline=True)
         if reason:
             embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text="Native Discord timeout lifted")
         
         await inter.followup.send(embed=embed)
         await self._log_to_channel(inter.guild, embed)
