@@ -336,6 +336,9 @@ class AnonMessageCog(commands.Cog, name="AnonMessages"):
 
             # Delete old panel message
             if self._panel_message_id:
+                if channel.last_message_id == self._panel_message_id:
+                    # Still the latest message, no need to repost
+                    return
                 try:
                     old_msg = await channel.fetch_message(self._panel_message_id)
                     await old_msg.delete()

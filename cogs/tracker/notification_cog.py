@@ -63,25 +63,26 @@ class NotificationToggleButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         """Toggle the notification role for the user."""
+        await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         member = interaction.user
 
         if not guild or not isinstance(member, discord.Member):
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 "❌ This can only be used in a server.", ephemeral=True
             )
 
         # Look up the role by exact name
         role = discord.utils.get(guild.roles, name=self.role_name)
         if not role:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"❌ Role **{self.role_name}** not found. Please contact an admin.",
                 ephemeral=True,
             )
 
         # Check bot hierarchy — can we manage this role?
         if role >= guild.me.top_role:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"❌ I cannot manage the **{self.role_name}** role (it is above my highest role).",
                 ephemeral=True,
             )
@@ -97,7 +98,7 @@ class NotificationToggleButton(discord.ui.Button):
                     description=f"{self.emoji} You have **unsubscribed** from **{self.role_name}**.",
                     color=discord.Color.light_grey(),
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
             else:
                 # ── SUBSCRIBE ──
                 await member.add_roles(role, reason="Notification panel: subscribed")
@@ -107,17 +108,20 @@ class NotificationToggleButton(discord.ui.Button):
                     description=f"{self.emoji} You have **subscribed** to **{self.role_name}**!",
                     color=discord.Color.green(),
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ I don't have permission to manage roles.", ephemeral=True
             )
         except discord.HTTPException as e:
             logger.error(f"Failed to toggle notification role for {member.id}: {e}")
-            await interaction.response.send_message(
-                "❌ Something went wrong. Please try again later.", ephemeral=True
-            )
+            try:
+                await interaction.followup.send(
+                    "❌ Something went wrong. Please try again later.", ephemeral=True
+                )
+            except Exception:
+                pass
 
     async def _update_db(self, user_id: int, subscribed: bool):
         """Update the user's notification preference in the database."""

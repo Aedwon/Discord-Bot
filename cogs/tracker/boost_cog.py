@@ -807,13 +807,14 @@ class BoostCog(commands.Cog, name="Boost Tracker"):
     
     @app_commands.command(name="force-booster-raffle", description="Forcefully execute the booster raffle (Admin Only)")
     @app_commands.default_permissions(administrator=True)
-    async def raffle_force(self, inter: discord.Interaction):
+    @app_commands.describe(ignore_7day_rule="Whether to ignore the 7-day minimum boosting requirement")
+    async def raffle_force(self, inter: discord.Interaction, ignore_7day_rule: bool = False):
         """Delegate to the BoosterRaffleCog's raffle logic."""
         raffle_cog = self.bot.get_cog("Booster Raffle")
         if not raffle_cog:
             return await inter.response.send_message("❌ Raffle system is not loaded.", ephemeral=True)
         await inter.response.defer(ephemeral=True)
-        await raffle_cog._execute_raffle(is_manual=True, target_channel=inter.channel)
+        await raffle_cog._execute_raffle(is_manual=True, target_channel=inter.channel, ignore_7day_rule=ignore_7day_rule)
         await inter.followup.send("✅ Raffle manually executed.", ephemeral=True)
 
 

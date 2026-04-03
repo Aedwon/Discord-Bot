@@ -227,11 +227,23 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         broken_by = row.get("high_score_broken_by")
 
         lines = [f"**Current Streak:** `{current}`"]
+        
+        curr_contrib = await db.fetch_all("SELECT user_id, count FROM counting_current_contributors ORDER BY count DESC LIMIT 3")
+        if curr_contrib and current > 0:
+            lines.append("*Top Contributors:*")
+            for i, c in enumerate(curr_contrib, 1):
+                lines.append(f"  `{i}.` <@{c['user_id']}> ({c['count']})")
 
         if high > 0:
             lines.append(f"\n🏆 **All-Time Record:** `{high}`")
             if broken_by:
                 lines.append(f"╰ Broken by <@{broken_by}>")
+                
+            hs_contrib = await db.fetch_all("SELECT user_id, count FROM counting_highscore_contributors ORDER BY count DESC LIMIT 3")
+            if hs_contrib:
+                lines.append("*Record Contributors:*")
+                for i, c in enumerate(hs_contrib, 1):
+                    lines.append(f"  `{i}.` <@{c['user_id']}> ({c['count']})")
         else:
             lines.append("\n*No record set yet — start counting!*")
 

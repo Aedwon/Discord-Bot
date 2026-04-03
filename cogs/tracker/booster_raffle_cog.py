@@ -33,7 +33,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
     async def before_raffle(self):
         await self.bot.wait_until_ready()
 
-    async def _execute_raffle(self, is_manual=False, target_channel=None):
+    async def _execute_raffle(self, is_manual=False, target_channel=None, ignore_7day_rule=False):
         logger.info("Starting Weekly Booster Raffle execution...")
         
         # 1. Fetch all currently active boosters with their active weights
@@ -74,7 +74,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             joined_early_enough = start_date <= cutoff_7_days
             
             # Priority Pool: Needs to have NOT won this month AND been boosting for >= 7 days
-            if not has_won and joined_early_enough:
+            if not has_won and (joined_early_enough or ignore_7day_rule):
                 pool_a.append(b)
             else:
                 pool_b.append(b)

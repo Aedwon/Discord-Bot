@@ -46,6 +46,28 @@ class CountingCog(commands.Cog, name="Counting"):
                 except Exception:
                     pass  # Column already exists
 
+
+            # Safe migration: create contributor tables
+            try:
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS counting_current_contributors (
+                        guild_id BIGINT,
+                        user_id BIGINT,
+                        count INT DEFAULT 0,
+                        PRIMARY KEY (guild_id, user_id)
+                    )
+                ''')
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS counting_highscore_contributors (
+                        guild_id BIGINT,
+                        user_id BIGINT,
+                        count INT DEFAULT 0,
+                        PRIMARY KEY (guild_id, user_id)
+                    )
+                ''')
+            except Exception as e:
+                logger.error(f"Counting: Failed to create contributor tables: {e}")
+
             rows = await db.fetch_all(
                 "SELECT guild_id, current_count, last_user_id, high_score, high_score_broken_by FROM counting_state"
             )
@@ -124,11 +146,24 @@ class CountingCog(commands.Cog, name="Counting"):
             state["high_score"] = old_count
             state["high_score_broken_by"] = message.author.id
             new_record = True
+            try:
+                # Copy current contributors to highscore contributors
+                await db.execute("DELETE FROM counting_highscore_contributors WHERE guild_id = %s", (guild_id,))
+                await db.execute(
+                    "INSERT INTO counting_highscore_contributors SELECT * FROM counting_current_contributors WHERE guild_id = %s", 
+                    (guild_id,)
+                )
+            except Exception as e:
+                logger.error(f"Counting: Failed to save highscore contributors: {e}")
 
         # Reset state
         state["count"] = 0
         state["last_user_id"] = None
         self._warned.pop(guild_id, None)
+        try:
+            await db.execute("DELETE FROM counting_current_contributors WHERE guild_id = %s", (guild_id,))
+        except Exception as e:
+            logger.error(f"Counting: Failed to reset current contributors: {e}")
 
         await self._save_state(guild_id, 0, None)
         await self._react_safe(message, "❌")
@@ -210,6 +245,17 @@ class CountingCog(commands.Cog, name="Counting"):
         # ── Correct number ──
         state["count"] = number
         state["last_user_id"] = user_id
+
+        # Update contributors
+        try:
+            await db.execute(
+                """INSERT INTO counting_current_contributors (guild_id, user_id, count)
+                   VALUES (%s, %s, 1)
+                   ON DUPLICATE KEY UPDATE count = count + 1""",
+                (guild_id, user_id)
+            )
+        except Exception as e:
+            logger.error(f"Counting: Failed to update current contributors: {e}")
 
         # Clear this user's warning if they had one (they counted correctly)
         if user_id in warned_set:
