@@ -22,11 +22,9 @@ from utils.checks import require_admin_auth
 
 logger = logging.getLogger("mlbb_bot.quest_cog")
 
-# Max quests per page (2 buttons per quest + 1 Add = 5 per action row × 5 rows = 25 max)
-# Layout: each quest takes 1 action row with [Edit] [Delete], plus 1 row for [Add]
-# Discord limit: 5 action rows → 4 quest rows + 1 control row = 4 quests per page
-# Actually we can fit edit+delete in one row per quest, so 4 quests + 1 add row
-QUESTS_PER_PAGE = 4
+# Select menu approach: up to 25 quests in a dropdown, action buttons below
+# Layout: Row 0 = Select, Row 1 = [Edit] [Delete] [Add], Row 2 = [Prev] [Next]
+QUESTS_PER_PAGE = 25
 
 
 # ─── MODALS ─────────────────────────────────────────────────────────────
@@ -376,66 +374,85 @@ class QuestEditSelectView(discord.ui.View):
 
 
 class QuestManageView(discord.ui.View):
-    """Main management view showing active quests with Edit/Delete buttons per quest,
-    plus an Add button and pagination if needed."""
+    """Management view using a select menu to pick a quest, then Edit/Delete buttons."""
 
     def __init__(self, quests: list[dict], page: int = 0):
         super().__init__(timeout=300)
         self.all_quests = quests
         self.page = page
         self.total_pages = max(1, (len(quests) + QUESTS_PER_PAGE - 1) // QUESTS_PER_PAGE)
-        self._build_buttons()
+        self.selected_quest_id: int | None = None
+        self._build_components()
 
-    def _build_buttons(self):
-        """Dynamically build Edit/Delete buttons for quests on the current page."""
+    def _build_components(self):
+        """Build the select menu and action buttons."""
         start = self.page * QUESTS_PER_PAGE
         end = start + QUESTS_PER_PAGE
         page_quests = self.all_quests[start:end]
 
-        # Add Edit/Delete buttons for each quest (1 action row per quest)
-        for i, quest in enumerate(page_quests):
-            edit_btn = discord.ui.Button(
-                label=f"Edit: {quest['name'][:30]}",
-                style=discord.ButtonStyle.primary,
-                emoji="✏️",
-                custom_id=f"quest_edit_{quest['id']}",
-                row=i,
-            )
-            edit_btn.callback = self._make_edit_callback(quest["id"])
-            self.add_item(edit_btn)
+        # Row 0: Quest select menu (only if quests exist)
+        if page_quests:
+            options = []
+            for quest in page_quests:
+                tier_info = TIER_DISPLAY.get(quest["tier"], {"emoji": "❓", "label": quest["tier"]})
+                task_info = TASK_TYPE_DISPLAY.get(quest["task_type"], {"label": "???", "unit": "?"})
+                options.append(discord.SelectOption(
+                    label=quest["name"][:100],
+                    value=str(quest["id"]),
+                    description=f"{tier_info['label']}  ·  {task_info['label']}: {quest['target_goal']} {task_info['unit']}"[:100],
+                    emoji=tier_info["emoji"],
+                ))
 
-            delete_btn = discord.ui.Button(
-                label="Delete",
-                style=discord.ButtonStyle.danger,
-                emoji="🗑️",
-                custom_id=f"quest_delete_{quest['id']}",
-                row=i,
+            select = discord.ui.Select(
+                placeholder="Select a quest to manage...",
+                options=options,
+                row=0,
             )
-            delete_btn.callback = self._make_delete_callback(quest["id"], quest["name"])
-            self.add_item(delete_btn)
+            select.callback = self._select_callback
+            self.add_item(select)
 
-        # Control row (last row) — row index = len(page_quests)
-        control_row = min(len(page_quests), 4)
+        # Row 1: Action buttons
+        edit_btn = discord.ui.Button(
+            label="Edit",
+            style=discord.ButtonStyle.primary,
+            emoji="✏️",
+            disabled=True,  # Enabled once a quest is selected
+            custom_id="quest_action_edit",
+            row=1,
+        )
+        edit_btn.callback = self._edit_callback
+        self.add_item(edit_btn)
+
+        delete_btn = discord.ui.Button(
+            label="Delete",
+            style=discord.ButtonStyle.danger,
+            emoji="🗑️",
+            disabled=True,
+            custom_id="quest_action_delete",
+            row=1,
+        )
+        delete_btn.callback = self._delete_callback
+        self.add_item(delete_btn)
 
         add_btn = discord.ui.Button(
             label="Add Quest",
             style=discord.ButtonStyle.success,
             emoji="➕",
-            custom_id="quest_add",
-            row=control_row,
+            custom_id="quest_action_add",
+            row=1,
         )
         add_btn.callback = self._add_callback
         self.add_item(add_btn)
 
-        # Pagination buttons (if needed)
+        # Row 2: Pagination (if needed)
         if self.total_pages > 1:
             prev_btn = discord.ui.Button(
                 label="Prev",
                 style=discord.ButtonStyle.secondary,
                 emoji="◀️",
-                custom_id="quest_prev",
                 disabled=(self.page == 0),
-                row=control_row,
+                custom_id="quest_page_prev",
+                row=2,
             )
             prev_btn.callback = self._prev_callback
             self.add_item(prev_btn)
@@ -444,34 +461,43 @@ class QuestManageView(discord.ui.View):
                 label="Next",
                 style=discord.ButtonStyle.secondary,
                 emoji="▶️",
-                custom_id="quest_next",
                 disabled=(self.page >= self.total_pages - 1),
-                row=control_row,
+                custom_id="quest_page_next",
+                row=2,
             )
             next_btn.callback = self._next_callback
             self.add_item(next_btn)
 
-    def _make_edit_callback(self, quest_id: int):
-        async def callback(interaction: discord.Interaction):
-            quest = await quest_service.get_quest(quest_id)
-            if not quest:
-                return await interaction.response.send_message(
-                    "❌ Quest no longer exists.", ephemeral=True
-                )
-            await interaction.response.send_modal(QuestEditModal(quest))
+    async def _select_callback(self, interaction: discord.Interaction):
+        """When a quest is selected, enable Edit/Delete buttons."""
+        self.selected_quest_id = int(interaction.data["values"][0])
+        # Enable edit and delete buttons
+        for child in self.children:
+            if hasattr(child, "custom_id"):
+                if child.custom_id in ("quest_action_edit", "quest_action_delete"):
+                    child.disabled = False
+        await interaction.response.edit_message(view=self)
 
-        return callback
+    async def _edit_callback(self, interaction: discord.Interaction):
+        if not self.selected_quest_id:
+            return await interaction.response.send_message("❌ Select a quest first.", ephemeral=True)
+        quest = await quest_service.get_quest(self.selected_quest_id)
+        if not quest:
+            return await interaction.response.send_message("❌ Quest no longer exists.", ephemeral=True)
+        await interaction.response.send_modal(QuestEditModal(quest))
 
-    def _make_delete_callback(self, quest_id: int, quest_name: str):
-        async def callback(interaction: discord.Interaction):
-            view = QuestDeleteConfirmView(quest_id, quest_name, interaction.message)
-            await interaction.response.send_message(
-                f"⚠️ Are you sure you want to **permanently delete** quest **{quest_name}**?",
-                view=view,
-                ephemeral=True,
-            )
-
-        return callback
+    async def _delete_callback(self, interaction: discord.Interaction):
+        if not self.selected_quest_id:
+            return await interaction.response.send_message("❌ Select a quest first.", ephemeral=True)
+        quest = await quest_service.get_quest(self.selected_quest_id)
+        if not quest:
+            return await interaction.response.send_message("❌ Quest no longer exists.", ephemeral=True)
+        view = QuestDeleteConfirmView(quest["id"], quest["name"], interaction.message)
+        await interaction.response.send_message(
+            f"⚠️ Are you sure you want to **permanently delete** quest **{quest['name']}**?",
+            view=view,
+            ephemeral=True,
+        )
 
     async def _add_callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(QuestAddModal())
@@ -541,18 +567,29 @@ def _build_quest_embed(quests: list[dict], page: int = 0) -> discord.Embed:
         )
         return embed
 
-    lines = []
     for quest in page_quests:
-        line = quest_service.format_quest_line(quest)
-        desc_preview = ""
-        if quest.get("description"):
-            desc_preview = f"\n> *{quest['description'][:80]}{'...' if len(quest.get('description', '')) > 80 else ''}*"
-        lines.append(f"**{quest['name']}**\n{line}{desc_preview}")
+        tier_info = TIER_DISPLAY.get(quest["tier"], {"emoji": "❓", "label": quest["tier"]})
+        task_info = TASK_TYPE_DISPLAY.get(quest["task_type"], {"label": "???", "unit": "?"})
+        reward = TIER_REWARDS.get(quest["tier"], 0)
 
-    embed.description = "\n\n".join(lines)
+        desc = quest.get("description") or ""
+        if len(desc) > 80:
+            desc = desc[:77] + "..."
+
+        value_lines = [
+            f"{tier_info['emoji']} {tier_info['label']}  ·  {task_info['label']}: **{quest['target_goal']}** {task_info['unit']}  ·  `+{reward} XP`",
+        ]
+        if desc:
+            value_lines.append(f"> *{desc}*")
+
+        embed.add_field(
+            name=quest["name"],
+            value="\n".join(value_lines),
+            inline=False,
+        )
 
     if total_pages > 1:
-        embed.set_footer(text=f"Page {page + 1}/{total_pages} • {len(quests)} total quests")
+        embed.set_footer(text=f"Page {page + 1}/{total_pages}  ·  {len(quests)} total quests")
     else:
         embed.set_footer(text=f"{len(quests)} active quest{'s' if len(quests) != 1 else ''}")
 
