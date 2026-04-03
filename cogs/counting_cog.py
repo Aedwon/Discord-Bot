@@ -40,7 +40,9 @@ class CountingCog(commands.Cog, name="Counting"):
         """Load counting state from DB into RAM cache."""
         try:
             # Safe migration: add high score columns if missing
-            for col, col_def in [("high_score", "INT NOT NULL DEFAULT 0"), ("high_score_broken_by", "BIGINT DEFAULT NULL")]:
+            for col, col_def in [("high_score", "INT NOT NULL DEFAULT 0"), 
+                                 ("high_score_broken_by", "BIGINT DEFAULT NULL"),
+                                 ("last_message_id", "BIGINT DEFAULT NULL")]:
                 try:
                     await db.execute(f"ALTER TABLE counting_state ADD COLUMN {col} {col_def}")
                 except Exception:
@@ -69,7 +71,7 @@ class CountingCog(commands.Cog, name="Counting"):
                 logger.error(f"Counting: Failed to create contributor tables: {e}")
 
             rows = await db.fetch_all(
-                "SELECT guild_id, current_count, last_user_id, high_score, high_score_broken_by FROM counting_state"
+                "SELECT guild_id, current_count, last_user_id, high_score, high_score_broken_by, last_message_id FROM counting_state"
             )
             for row in rows:
                 self._state[row["guild_id"]] = {
@@ -77,6 +79,7 @@ class CountingCog(commands.Cog, name="Counting"):
                     "last_user_id": row["last_user_id"],
                     "high_score": row.get("high_score", 0) or 0,
                     "high_score_broken_by": row.get("high_score_broken_by"),
+                    "last_message_id": row.get("last_message_id"),
                 }
             logger.info(f"Counting: Loaded state for {len(rows)} guild(s).")
         except Exception as e:
@@ -96,23 +99,29 @@ class CountingCog(commands.Cog, name="Counting"):
             self._state[guild_id] = {
                 "count": 0,
                 "last_user_id": None,
+                "last_message_id": None,
                 "high_score": 0,
                 "high_score_broken_by": None,
             }
         return self._state[guild_id]
 
-    async def _save_state(self, guild_id: int, count: int, last_user_id: int | None):
+    async def _save_state(self, guild_id: int, count: int, last_user_id: int | None, last_message_id: int | None):
         """Persist counting state to DB."""
         state = self._get_state(guild_id)
+        state["count"] = count
+        state["last_user_id"] = last_user_id
+        state["last_message_id"] = last_message_id
+
         try:
             await db.execute(
-                """INSERT INTO counting_state (guild_id, current_count, last_user_id, high_score, high_score_broken_by)
-                   VALUES (%s, %s, %s, %s, %s)
+                """INSERT INTO counting_state (guild_id, current_count, last_user_id, high_score, high_score_broken_by, last_message_id)
+                   VALUES (%s, %s, %s, %s, %s, %s)
                    ON DUPLICATE KEY UPDATE current_count = VALUES(current_count),
                                            last_user_id = VALUES(last_user_id),
                                            high_score = VALUES(high_score),
-                                           high_score_broken_by = VALUES(high_score_broken_by)""",
-                (guild_id, count, last_user_id, state["high_score"], state["high_score_broken_by"]),
+                                           high_score_broken_by = VALUES(high_score_broken_by),
+                                           last_message_id = VALUES(last_message_id)""",
+                (guild_id, count, last_user_id, state["high_score"], state["high_score_broken_by"], last_message_id),
             )
         except Exception as e:
             logger.error(f"Counting: Failed to save state for guild {guild_id}: {e}")
@@ -165,8 +174,9 @@ class CountingCog(commands.Cog, name="Counting"):
         except Exception as e:
             logger.error(f"Counting: Failed to reset current contributors: {e}")
 
-        await self._save_state(guild_id, 0, None)
-        await self._react_safe(message, "❌")
+        await self._save_state(guild_id, 0, None, message.id)
+        if not getattr(message, "is_offline_sync", False):
+            await self._react_safe(message, "❌")
 
         reply_text = (
             f"💥 **{message.author.display_name}** broke the chain at **{old_count}**! "
@@ -184,37 +194,27 @@ class CountingCog(commands.Cog, name="Counting"):
         await self._react_safe(message, "⚠️")
         await self._reply_safe(message, warning)
 
-    # ─── Listener ────────────────────────────────────────────────────
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        # Ignore bots and DMs
-        if message.author.bot or not message.guild:
-            return
-
-        # Check if this is the counting channel
-        channel_id = await self._get_channel_id()
-        if not channel_id or message.channel.id != channel_id:
-            return
-
+    async def _process_counting_message(self, message: discord.Message, is_offline_sync: bool = False):
         guild_id = message.guild.id
         state = self._get_state(guild_id)
         user_id = message.author.id
         content = message.content.strip()
         warned_set = self._warned.get(guild_id, set())
 
+        # Tag message mathematically so the underlying breaking logics silence their reactions
+        message.is_offline_sync = is_offline_sync
+
         # ── Non-number message ──
         if not content.isdigit():
             if user_id in warned_set:
-                # Already warned → break chain
                 await self._break_chain(message, guild_id, "Non-number messages aren't allowed here.")
             else:
-                # First offense → warn
-                await self._warn_user(
-                    message, guild_id,
-                    "⚠️ Only numbers are allowed in the counting channel! "
-                    "Next time, the chain will break."
-                )
+                if not is_offline_sync:
+                    await self._warn_user(
+                        message, guild_id,
+                        "⚠️ Only numbers are allowed in the counting channel! "
+                        "Next time, the chain will break."
+                    )
             return
 
         number = int(content)
@@ -223,15 +223,14 @@ class CountingCog(commands.Cog, name="Counting"):
         # ── Same user counting twice in a row ──
         if state["last_user_id"] == user_id:
             if user_id in warned_set:
-                # Already warned → break chain
                 await self._break_chain(message, guild_id, "You can't count twice in a row!")
             else:
-                # First offense → warn (don't increment)
-                await self._warn_user(
-                    message, guild_id,
-                    "⚠️ You can't count twice in a row! "
-                    "Let someone else go next. Another attempt will break the chain."
-                )
+                if not is_offline_sync:
+                    await self._warn_user(
+                        message, guild_id,
+                        "⚠️ You can't count twice in a row! "
+                        "Let someone else go next. Another attempt will break the chain."
+                    )
             return
 
         # ── Wrong number ──
@@ -261,8 +260,65 @@ class CountingCog(commands.Cog, name="Counting"):
         if user_id in warned_set:
             warned_set.discard(user_id)
 
-        await self._react_safe(message, "✅")
-        await self._save_state(guild_id, number, user_id)
+        if not is_offline_sync:
+            await self._react_safe(message, "✅")
+        await self._save_state(guild_id, number, user_id, message.id)
+
+    # ─── Listeners ───────────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Ignore bots and DMs
+        if message.author.bot or not message.guild:
+            return
+
+        # Check if this is the counting channel
+        channel_id = await self._get_channel_id()
+        if not channel_id or message.channel.id != channel_id:
+            return
+
+        await self._process_counting_message(message, is_offline_sync=False)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """When bot boots, sweep counting channels to catch up securely."""
+        import asyncio
+        asyncio.create_task(self._sync_offline_counts())
+
+    async def _sync_offline_counts(self):
+        """Retroactively digest messages posted while the bot was offline."""
+        await self.bot.wait_until_ready()
+        channel_id = await self._get_channel_id()
+        if not channel_id:
+            return
+
+        for guild in self.bot.guilds:
+            channel = guild.get_channel(channel_id)
+            if not channel:
+                continue
+            
+            state = self._get_state(guild.id)
+            last_msg_id = state.get("last_message_id")
+            
+            if not last_msg_id:
+                # Can't sync without an anchored starting point
+                continue
+                
+            try:
+                # Fetch history ascending purely after the last verified DB node
+                logger.info(f"Counting: Initializing offline sync for guild {guild.id} starting from {last_msg_id}...")
+                offline_messages = []
+                async for msg in channel.history(limit=100, after=discord.Object(id=last_msg_id), oldest_first=True):
+                    if not msg.author.bot:
+                        offline_messages.append(msg)
+                
+                # Sequentially digest and validate the backlog
+                if offline_messages:
+                    for msg in offline_messages:
+                        await self._process_counting_message(msg, is_offline_sync=True)
+                    logger.info(f"Counting: Offline sync digested {len(offline_messages)} missed valid/invalid inputs.")
+            except Exception as e:
+                logger.error(f"Counting: Offline sync collapsed cleanly {e}")
 
     # ─── Invalidate channel cache when settings change ────────────
 
