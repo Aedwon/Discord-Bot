@@ -737,7 +737,14 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             grid[key] = row['msg_count']
 
         days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        max_val = max(grid.values()) if grid else 1
+        
+        # Calculate true max over 2-hour aggregated blocks
+        max_val = 1
+        for h in range(0, 24, 2):
+            for d in range(7):
+                val = grid.get((d, h), 0) + grid.get((d, h+1), 0)
+                if val > max_val:
+                    max_val = val
 
         lines = ["**Peak Activity Heatmap (7d, PHT)**\n```"]
         lines.append("Hour  " + " ".join(f"{d:>3}" for d in days))
@@ -746,6 +753,7 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             for d in range(7):
                 count = grid.get((d, h), 0) + grid.get((d, h+1), 0)
                 intensity = int(count / max_val * 9) if max_val > 0 else 0
+                intensity = min(intensity, 9) # Prevent out-of-bounds
                 blocks = ["░", "░", "▒", "▒", "▓", "▓", "█", "█", "█", "█"]
                 row_str += f"  {blocks[intensity]}"
             lines.append(row_str)
