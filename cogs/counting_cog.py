@@ -144,7 +144,7 @@ class CountingCog(commands.Cog, name="Counting"):
         except discord.HTTPException as e:
             logger.warning(f"Counting: Reply failed ({e.status}): {e.text}")
 
-    async def _break_chain(self, message: discord.Message, guild_id: int, reason: str):
+    async def _break_chain(self, message: discord.Message, guild_id: int, reason: str, is_offline_sync: bool = False):
         """Break the chain: check high score, react ❌, reply, reset count."""
         state = self._get_state(guild_id)
         old_count = state["count"]
@@ -175,7 +175,7 @@ class CountingCog(commands.Cog, name="Counting"):
             logger.error(f"Counting: Failed to reset current contributors: {e}")
 
         await self._save_state(guild_id, 0, None, message.id)
-        if not getattr(message, "is_offline_sync", False):
+        if not is_offline_sync:
             await self._react_safe(message, "❌")
 
         reply_text = (
@@ -201,13 +201,12 @@ class CountingCog(commands.Cog, name="Counting"):
         content = message.content.strip()
         warned_set = self._warned.get(guild_id, set())
 
-        # Tag message mathematically so the underlying breaking logics silence their reactions
-        message.is_offline_sync = is_offline_sync
+
 
         # ── Non-number message ──
         if not content.isdigit():
             if user_id in warned_set:
-                await self._break_chain(message, guild_id, "Non-number messages aren't allowed here.")
+                await self._break_chain(message, guild_id, "Non-number messages aren't allowed here.", is_offline_sync)
             else:
                 if not is_offline_sync:
                     await self._warn_user(
@@ -223,7 +222,7 @@ class CountingCog(commands.Cog, name="Counting"):
         # ── Same user counting twice in a row ──
         if state["last_user_id"] == user_id:
             if user_id in warned_set:
-                await self._break_chain(message, guild_id, "You can't count twice in a row!")
+                await self._break_chain(message, guild_id, "You can't count twice in a row!", is_offline_sync)
             else:
                 if not is_offline_sync:
                     await self._warn_user(
@@ -237,7 +236,8 @@ class CountingCog(commands.Cog, name="Counting"):
         if number != expected:
             await self._break_chain(
                 message, guild_id,
-                f"Expected **{expected}**, got **{number}**."
+                f"Expected **{expected}**, got **{number}**.",
+                is_offline_sync
             )
             return
 
