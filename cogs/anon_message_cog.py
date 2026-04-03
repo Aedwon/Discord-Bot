@@ -334,11 +334,19 @@ class AnonMessageCog(commands.Cog, name="AnonMessages"):
                 logger.warning("AnonMessages: Missing permissions in anon channel, skipping sticky repost.")
                 return
 
-            # Delete old panel message
+            # Check if the panel is already at the bottom — skip repost if so
             if self._panel_message_id:
-                if channel.last_message_id == self._panel_message_id:
-                    # Still the latest message, no need to repost
-                    return
+                try:
+                    # Fetch the actual latest message from the API (not the cached gateway value)
+                    # channel.last_message_id can be stale after restarts or missed events
+                    last_messages = [msg async for msg in channel.history(limit=1)]
+                    if last_messages and last_messages[0].id == self._panel_message_id:
+                        # Panel is already the latest message, no need to repost
+                        return
+                except discord.HTTPException:
+                    pass  # If history fetch fails, proceed with repost as fallback
+
+                # Delete old panel since it's no longer at the bottom
                 try:
                     old_msg = await channel.fetch_message(self._panel_message_id)
                     await old_msg.delete()
