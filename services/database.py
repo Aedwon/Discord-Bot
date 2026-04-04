@@ -176,10 +176,18 @@ class Database:
             CREATE TABLE IF NOT EXISTS booster_raffle_history (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id BIGINT NOT NULL,
+                is_excess BOOLEAN DEFAULT FALSE,
                 won_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_brh_won_at (won_at)
+                INDEX idx_brh_won_at (won_at),
+                INDEX idx_brh_excess (user_id, is_excess, won_at)
             )
         ''')
+        
+        # Safe migration: add is_excess column if missing
+        try:
+            await self.execute("ALTER TABLE booster_raffle_history ADD COLUMN is_excess BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
         
         # Auto-create voice channel configs
         await self.execute('''
