@@ -442,6 +442,7 @@ class EventCog(commands.Cog, name="Event"):
         channel="Channel to post the raffle in",
         winners="Number of winners (default: 1)",
         duration_minutes="Auto-draw after N minutes (leave empty for manual draw)",
+        end_time_utc8="Specific UTC+8 Date & Time (YYYY-MM-DD HH:MM) (Overrides duration)",
         hosted_by="Community member hosting this raffle (optional)"
     )
     async def raffle_create(
@@ -449,6 +450,7 @@ class EventCog(commands.Cog, name="Event"):
         title: str, prize: str, channel: discord.TextChannel,
         winners: int = 1,
         duration_minutes: int = None,
+        end_time_utc8: str = None,
         hosted_by: discord.Member = None
     ):
         """Step 1: Collect core params, then offer to add multiline requirements."""
@@ -459,6 +461,7 @@ class EventCog(commands.Cog, name="Event"):
             'channel_id': channel.id,
             'winners': winners,
             'duration_minutes': duration_minutes,
+            'end_time_utc8': end_time_utc8,
             'hosted_by_id': hosted_by.id if hosted_by else None,
             'creator_id': interaction.user.id,
         }
@@ -896,9 +899,9 @@ class EventCog(commands.Cog, name="Event"):
     @app_commands.autocomplete(raffle_id=active_raffle_autocomplete)
     @app_commands.describe(
         raffle_id="The active raffle to add a timer to",
-        duration="How long until the raffle ends. Format: 1d, 6h, 30m, or combinations like 1d12h"
+        duration_or_time="Countdown (1d, 6h) OR exact UTC+8 time (YYYY-MM-DD HH:MM)"
     )
-    async def raffle_set_timer(self, interaction: discord.Interaction, raffle_id: str, duration: str):
+    async def raffle_set_timer(self, interaction: discord.Interaction, raffle_id: str, duration_or_time: str):
         await interaction.response.defer(ephemeral=True)
         try: raffle_id_int = int(raffle_id)
         except ValueError: return await interaction.followup.send("❌ Please select a raffle from the autocomplete list.", ephemeral=True)
@@ -907,27 +910,36 @@ class EventCog(commands.Cog, name="Event"):
         if not raffle:
             return await interaction.followup.send("❌ Active raffle not found.", ephemeral=True)
 
-        # Parse duration string: supports days (d), hours (h), minutes (m)
+        # Parse duration string: supports days (d), hours (h), minutes (m) or a specific datetime
         import re
         total_seconds = 0
-        pattern = re.findall(r'(\d+)([dhm])', duration.lower())
-        if not pattern:
-            return await interaction.followup.send(
-                "❌ Invalid duration format. Use combinations like `1d`, `6h`, `30m`, `1d12h`, `2h30m`.",
-                ephemeral=True
-            )
-        for value, unit in pattern:
-            v = int(value)
-            if unit == 'd': total_seconds += v * 86400
-            elif unit == 'h': total_seconds += v * 3600
-            elif unit == 'm': total_seconds += v * 60
+        ends_at = None
 
-        if total_seconds < 60:
-            return await interaction.followup.send("❌ Minimum duration is 1 minute.", ephemeral=True)
-        if total_seconds > 86400 * 30:
-            return await interaction.followup.send("❌ Maximum duration is 30 days.", ephemeral=True)
+        try:
+            dt = datetime.strptime(duration_or_time, "%Y-%m-%d %H:%M")
+            ends_at = dt - timedelta(hours=8)
+            if ends_at <= datetime.utcnow():
+                return await interaction.followup.send("❌ The provided time must be in the future.", ephemeral=True)
+        except ValueError:
+            pattern = re.findall(r'(\d+)([dhm])', duration_or_time.lower())
+            if not pattern:
+                return await interaction.followup.send(
+                    "❌ Invalid format. Use `YYYY-MM-DD HH:MM` for exact UTC+8 time, or `1d`, `6h`, `30m` for countdown.",
+                    ephemeral=True
+                )
+            for value, unit in pattern:
+                v = int(value)
+                if unit == 'd': total_seconds += v * 86400
+                elif unit == 'h': total_seconds += v * 3600
+                elif unit == 'm': total_seconds += v * 60
 
-        ends_at = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
+            if total_seconds < 60:
+                return await interaction.followup.send("❌ Minimum duration is 1 minute.", ephemeral=True)
+            if total_seconds > 86400 * 30:
+                return await interaction.followup.send("❌ Maximum duration is 30 days.", ephemeral=True)
+
+            ends_at = datetime.utcnow() + timedelta(seconds=total_seconds)
+
         ends_at_naive = ends_at.replace(tzinfo=None)  # Store as UTC naive for MySQL
 
         await db.execute(
@@ -1071,12 +1083,21 @@ async def deploy_raffle(interaction: discord.Interaction, config: dict, bot):
     prize = config['prize']
     winners = config['winners']
     duration_minutes = config['duration_minutes']
+    end_time_utc8 = config.get('end_time_utc8')
     hosted_by_id = config['hosted_by_id']
     creator_id = config['creator_id']
     requirements = config.get('requirements')
 
     ends_at = None
-    if duration_minutes and duration_minutes > 0:
+    if end_time_utc8:
+        try:
+            dt = datetime.strptime(end_time_utc8, "%Y-%m-%d %H:%M")
+            ends_at = dt - timedelta(hours=8)
+            if ends_at <= datetime.utcnow():
+                return await interaction.followup.send("❌ The provided time must be in the future.", ephemeral=True)
+        except ValueError:
+            return await interaction.followup.send("❌ Invalid date format. Please use YYYY-MM-DD HH:MM (e.g., 2026-04-10 15:30).", ephemeral=True)
+    elif duration_minutes and duration_minutes > 0:
         ends_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
 
     # Build embed
