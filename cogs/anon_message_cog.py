@@ -20,8 +20,11 @@ from utils.anon_log import log_anonymous_action
 
 logger = logging.getLogger("mlbb_bot.anon_messages")
 
-# In-memory message counter per guild (cosmetic, resets on restart)
-_message_counters: dict[int, int] = {}
+import asyncio
+from discord.ext import tasks
+
+# Track which channels need full-channel anon message number syncs
+_channels_needing_sync_anon: set[int] = set()
 
 
 # ─── Modals ──────────────────────────────────────────────────────────
@@ -52,9 +55,16 @@ class AnonMessageModal(discord.ui.Modal, title="📨 Send Anonymous Message"):
                 ephemeral=True,
             )
 
-        guild_id = interaction.guild_id
-        _message_counters[guild_id] = _message_counters.get(guild_id, 0) + 1
-        msg_number = _message_counters[guild_id]
+        msg_number = 1
+        async for msg in self.target_channel.history(limit=50):
+            if msg.author == interaction.client.user and msg.embeds:
+                title = msg.embeds[0].title
+                if title and title.startswith("Anonymous Message #"):
+                    import re
+                    match = re.search(r'#(\d+)', title)
+                    if match:
+                        msg_number = int(match.group(1)) + 1
+                        break
 
         embed = discord.Embed(
             title=f"Anonymous Message #{msg_number}",
@@ -69,13 +79,11 @@ class AnonMessageModal(discord.ui.Modal, title="📨 Send Anonymous Message"):
         try:
             await self.target_channel.send(embed=embed, view=AnonReplyView())
         except discord.Forbidden:
-            _message_counters[guild_id] -= 1
             return await interaction.response.send_message(
                 "❌ I don't have permission to send messages in that channel.",
                 ephemeral=True,
             )
         except discord.HTTPException as e:
-            _message_counters[guild_id] -= 1
             logger.error(f"Failed to post anon message #{msg_number}: {e}")
             return await interaction.response.send_message(
                 "❌ Something went wrong. Please try again later.",
@@ -305,10 +313,60 @@ class AnonMessageCog(commands.Cog, name="AnonMessages"):
         self._panel_message_id = stored if stored else None
 
         self.sticky_repost.start()
-        logger.info("AnonMessages: Persistent views registered, sticky task started.")
+        self.sync_anon_queue_worker.start()
+        logger.info("AnonMessages: Persistent views registered, tasks started.")
 
     def cog_unload(self):
         self.sticky_repost.cancel()
+        self.sync_anon_queue_worker.cancel()
+
+    @tasks.loop(seconds=5)
+    async def sync_anon_queue_worker(self):
+        """Process any pending channel resyncs one by one for anonymous messages."""
+        if not _channels_needing_sync_anon:
+            return
+        
+        channel_id = _channels_needing_sync_anon.pop()
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            return
+            
+        try:
+            await self._run_full_channel_sync(channel)
+        except Exception as e:
+            logger.error(f"Error syncing anon messages for {channel_id}: {e}")
+            
+    async def _run_full_channel_sync(self, channel: discord.TextChannel):
+        """Scans the entire channel and corrects all anonymous message embed titles end-to-end to be perfectly sequential."""
+        expected_number = 1
+        async for msg in channel.history(limit=None, oldest_first=True):
+            if msg.author == self.bot.user and msg.embeds:
+                embed = msg.embeds[0]
+                if embed.title and embed.title.startswith("Anonymous Message #"):
+                    correct_title = f"Anonymous Message #{expected_number}"
+                    if embed.title != correct_title:
+                        embed.title = correct_title
+                        try:
+                            await msg.edit(embed=embed)
+                            # Gently respect Discord rate limits
+                            await asyncio.sleep(2)
+                        except discord.HTTPException:
+                            pass
+                    expected_number += 1
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        """Trigger a sync if a message is deleted in the anon messages channel."""
+        channel_id = await settings_service.get_int("anon_messages_channel_id")
+        if payload.channel_id == channel_id:
+            _channels_needing_sync_anon.add(channel_id)
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        """Same logic for message purges."""
+        channel_id = await settings_service.get_int("anon_messages_channel_id")
+        if payload.channel_id == channel_id:
+            _channels_needing_sync_anon.add(channel_id)
 
     # ─── Sticky Panel Background Task ────────────────────────────────
 

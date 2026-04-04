@@ -18,8 +18,11 @@ from utils.anon_log import log_anonymous_action
 
 logger = logging.getLogger("mlbb_bot.confessions")
 
-# In-memory confession counter per guild (resets on bot restart, purely cosmetic)
-_confession_counters: dict[int, int] = {}
+import asyncio
+from discord.ext import tasks
+
+# Track which channels need a full-channel end-to-end resynchronization of numbers
+_channels_needing_sync: set[int] = set()
 
 
 # ─── Persistent View & Modal ────────────────────────────────────────
@@ -51,10 +54,17 @@ class ConfessionModal(discord.ui.Modal, title="📝 Submit a Confession"):
                 ephemeral=True,
             )
 
-        # Increment confession counter for this guild
-        guild_id = interaction.guild_id
-        _confession_counters[guild_id] = _confession_counters.get(guild_id, 0) + 1
-        confession_number = _confession_counters[guild_id]
+        # Dynamically determine the next confession number
+        confession_number = 1
+        async for msg in self.target_channel.history(limit=50):
+            if msg.author == interaction.client.user and msg.embeds:
+                title = msg.embeds[0].title
+                if title and title.startswith("Confession #"):
+                    import re
+                    match = re.search(r'#(\d+)', title)
+                    if match:
+                        confession_number = int(match.group(1)) + 1
+                        break
 
         # Build the anonymous embed
         embed = discord.Embed(
@@ -71,14 +81,12 @@ class ConfessionModal(discord.ui.Modal, title="📝 Submit a Confession"):
             # Post the confession WITH the confess button attached
             await self.target_channel.send(embed=embed, view=ConfessButtonView())
         except discord.Forbidden:
-            _confession_counters[guild_id] -= 1
             return await interaction.response.send_message(
                 "❌ I don't have permission to send messages in the confessions channel. "
                 "Please notify an admin.",
                 ephemeral=True,
             )
         except discord.HTTPException as e:
-            _confession_counters[guild_id] -= 1
             logger.error(f"Failed to post confession #{confession_number}: {e}")
             return await interaction.response.send_message(
                 "❌ Something went wrong while posting your confession. Please try again later.",
@@ -192,7 +200,60 @@ class ConfessionsCog(commands.Cog, name="Confessions"):
     async def cog_load(self):
         """Register the persistent view so buttons survive restarts."""
         self.bot.add_view(ConfessButtonView())
-        logger.info("Confessions: Persistent view registered.")
+        self.sync_queue_worker.start()
+        logger.info("Confessions: Persistent view registered and sync worker started.")
+
+    def cog_unload(self):
+        self.sync_queue_worker.cancel()
+
+    @tasks.loop(seconds=5)
+    async def sync_queue_worker(self):
+        """Process any pending channel resyncs one by one."""
+        if not _channels_needing_sync:
+            return
+        
+        channel_id = _channels_needing_sync.pop()
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            return
+            
+        try:
+            await self._run_full_channel_sync(channel)
+        except Exception as e:
+            logger.error(f"Error syncing confessions for {channel_id}: {e}")
+            
+    async def _run_full_channel_sync(self, channel: discord.TextChannel):
+        """Scans the entire channel and corrects all embed titles end-to-end to be perfectly sequential."""
+        expected_number = 1
+        async for msg in channel.history(limit=None, oldest_first=True):
+            if msg.author == self.bot.user and msg.embeds:
+                embed = msg.embeds[0]
+                if embed.title and embed.title.startswith("Confession #"):
+                    correct_title = f"Confession #{expected_number}"
+                    if embed.title != correct_title:
+                        embed.title = correct_title
+                        try:
+                            await msg.edit(embed=embed)
+                            # Gently respect Discord rate limits
+                            await asyncio.sleep(2)
+                        except discord.HTTPException:
+                            pass
+                    expected_number += 1
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        """Trigger a sync if a message is deleted in the confessions channel."""
+        channel_id = await settings_service.get_int("confessions_channel_id")
+        if payload.channel_id == channel_id:
+            # We add it to the set so it gets picked up by `sync_queue_worker`
+            _channels_needing_sync.add(channel_id)
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        """Same logic for message purges."""
+        channel_id = await settings_service.get_int("confessions_channel_id")
+        if payload.channel_id == channel_id:
+            _channels_needing_sync.add(channel_id)
 
     @confess_group.command(name="deploy", description="Post the confessions panel in the configured channel")
     @app_commands.default_permissions(administrator=True)
