@@ -103,32 +103,60 @@ class XpCog(commands.Cog, name="Leveling"):
                         notify_channel=notify_channel
                     )
 
+    async def _get_all_tier_roles(self, guild: discord.Guild) -> dict[str, discord.Role]:
+        """Build a lookup of all configured XP tier names → Role objects.
+        Cached per call, not globally, to respect live setting changes."""
+        ranks = ["Commoner", "Vassal", "Noble", "High Noble"]
+        numerals = ["V", "IV", "III", "II", "I"]
+        all_tiers = [f"{r} {n}" for r in ranks for n in numerals] + ["Monarch"]
+        
+        tier_roles: dict[str, discord.Role] = {}
+        for name in all_tiers:
+            r_id = await settings_service.get(f"xp_role_{name.replace(' ', '_')}")
+            if r_id and r_id != "0":
+                role = guild.get_role(int(r_id))
+                if role:
+                    tier_roles[name] = role
+        return tier_roles
+
     async def _assign_tier_role(self, guild: discord.Guild, member: discord.Member, tier_name: str, old_tier: str = None):
-        """Assign a tier role to a member, stripping the old one if present. Respects rate limits."""
-        r_id = await settings_service.get(f"xp_role_{tier_name.replace(' ', '_')}")
-        if not r_id or r_id == "0":
+        """Assign the correct tier role and strip ALL other stale tier roles.
+        This ensures sync regardless of how the user's role state got corrupted."""
+        tier_roles = await self._get_all_tier_roles(guild)
+        correct_role = tier_roles.get(tier_name)
+        if not correct_role:
             return
         
-        role = guild.get_role(int(r_id))
-        if not role:
-            return
-        
-        # Skip if they already have it
-        if role in member.roles:
+        # Already perfect — nothing to do
+        if correct_role in member.roles:
+            # Still strip any OTHER stale tier roles they might have accumulated
+            stale = [r for name, r in tier_roles.items() if r in member.roles and name != tier_name]
+            if stale:
+                try:
+                    await member.remove_roles(*stale, reason="XP Sync: Stripping stale tiers")
+                except discord.Forbidden:
+                    pass
             return
         
         try:
-            # Strip old tier role if present
-            if old_tier:
-                o_id = await settings_service.get(f"xp_role_{old_tier.replace(' ', '_')}")
-                if o_id and o_id != "0":
-                    o_role = guild.get_role(int(o_id))
-                    if o_role and o_role in member.roles:
-                        await member.remove_roles(o_role, reason="XP Tier Change")
+            # Strip ALL tier roles that aren't the correct one (single API call)
+            stale = [r for name, r in tier_roles.items() if r in member.roles and name != tier_name]
+            if stale:
+                await member.remove_roles(*stale, reason="XP Tier Change")
             
-            await member.add_roles(role, reason=f"XP Tier: {tier_name}")
+            await member.add_roles(correct_role, reason=f"XP Tier: {tier_name}")
         except discord.Forbidden:
             pass
+
+    async def _strip_all_tier_roles(self, guild: discord.Guild, member: discord.Member):
+        """Remove ALL XP tier roles from a member (used for resets/demotions to level 0)."""
+        tier_roles = await self._get_all_tier_roles(guild)
+        roles_to_remove = [r for r in tier_roles.values() if r in member.roles]
+        if roles_to_remove:
+            try:
+                await member.remove_roles(*roles_to_remove, reason="XP Reset: Tier roles stripped")
+            except discord.Forbidden:
+                pass
 
     async def _get_alert_channel(self, guild: discord.Guild):
         """Get the configured level alerts channel, if any."""
@@ -144,11 +172,8 @@ class XpCog(commands.Cog, name="Leveling"):
         interaction: discord.Interaction = None
     ):
         """
-        Detect level/tier changes, assign roles, and send notifications.
-        Routing:
-          - Level up (same tier) → chat channel / interaction
-          - Rank up (tier changed) → dedicated alert channel
-          - First XP gain → alert channel
+        Detect level/tier changes (up AND down), assign roles, and send notifications.
+        Handles: first XP gain, level up, tier rank up, demotion (admin /xp set), and reset.
         """
         old_lvl = xp_service.get_level(old_xp)
         new_lvl = xp_service.get_level(new_xp)
@@ -162,7 +187,23 @@ class XpCog(commands.Cog, name="Leveling"):
         
         alert_channel = await self._get_alert_channel(guild)
         
-        # DEFAULT TIER: First XP gain → assign starting tier role + welcome in alert channel
+        # ── DEMOTION / RESET: Tier went DOWN (e.g. admin /xp set lower or /xp reset) ──
+        if new_lvl < old_lvl and new_tier != old_tier:
+            if new_xp <= 0:
+                # Full reset — strip all tier roles
+                await self._strip_all_tier_roles(guild, member)
+            else:
+                # Demotion to a lower tier — assign the correct lower tier
+                await self._assign_tier_role(guild, member, new_tier)
+            return
+        
+        # ── Same level, but tier roles might be out of sync (e.g. /xp set to same level range) ──
+        if new_lvl == old_lvl and new_tier:
+            # Silently ensure role is correct without notifications
+            await self._assign_tier_role(guild, member, new_tier)
+            return
+        
+        # ── FIRST XP GAIN: 0 → positive ──
         if old_xp == 0 and new_xp > 0 and new_tier:
             await self._assign_tier_role(guild, member, new_tier)
             target = alert_channel or notify_channel
@@ -653,13 +694,24 @@ class XpCog(commands.Cog, name="Leveling"):
     @app_commands.default_permissions(administrator=True)
     async def xp_set(self, inter: discord.Interaction, user: discord.Member, amount: int):
         from services.xp_service import xp_service
+        await inter.response.defer()
+        
+        old_xp = await xp_service.get_xp(user.id)
         await xp_service.set_currency(user.id, xp=amount)
+        
         embed = discord.Embed(
             title="⚙️ XP Overridden",
             description=f"Successfully set {user.mention}'s XP to **{amount}**.",
             color=discord.Color.orange()
         )
-        await inter.response.send_message(embed=embed)
+        await inter.followup.send(embed=embed)
+        
+        # Trigger role sync (handles promotions, demotions, and resets)
+        if inter.guild:
+            await self._handle_level_change(
+                inter.guild, user.id, old_xp, amount,
+                interaction=inter
+            )
     
     @xp_group.command(name="reset", description="Reset XP for one user or EVERYONE (Admin only)")
     @app_commands.describe(user="The user to reset (leave blank to reset EVERYONE)")
@@ -670,11 +722,19 @@ class XpCog(commands.Cog, name="Leveling"):
         if user:
             from services.xp_service import xp_service
             await inter.response.defer()
+            
+            old_xp = await xp_service.get_xp(user.id)
             await xp_service.set_currency(user.id, xp=0)
+            
+            # Strip all tier roles
+            if inter.guild:
+                member = inter.guild.get_member(user.id)
+                if member:
+                    await self._strip_all_tier_roles(inter.guild, member)
             
             embed = discord.Embed(
                 title="🔄 XP Reset",
-                description=f"Successfully reset {user.mention}'s XP to **0**.",
+                description=f"Successfully reset {user.mention}'s XP to **0**.\nAll XP tier roles have been stripped.",
                 color=discord.Color.red()
             )
             await inter.followup.send(embed=embed)
@@ -687,16 +747,31 @@ class XpCog(commands.Cog, name="Leveling"):
                     self.confirmed = False
                 
                 @discord.ui.button(label="Confirm Global Reset", style=discord.ButtonStyle.danger)
-                async def confirm(self, button_inter: discord.Interaction, button: discord.ui.Button):
-                    self.confirmed = True
-                    self.stop()
+                async def confirm(btn_self, button_inter: discord.Interaction, button: discord.ui.Button):
+                    btn_self.confirmed = True
+                    btn_self.stop()
                     
                     # Reset all XP
                     await db.execute("UPDATE users SET xp = 0")
                     
+                    # Strip all XP tier roles from every member
+                    import asyncio
+                    xp_cog = button_inter.client.get_cog("Leveling")
+                    if xp_cog and button_inter.guild:
+                        tier_roles = await xp_cog._get_all_tier_roles(button_inter.guild)
+                        all_role_objs = set(tier_roles.values())
+                        for member in button_inter.guild.members:
+                            roles_to_strip = [r for r in all_role_objs if r in member.roles]
+                            if roles_to_strip:
+                                try:
+                                    await member.remove_roles(*roles_to_strip, reason="Global XP Reset")
+                                    await asyncio.sleep(0.3)  # Rate limit protection
+                                except discord.Forbidden:
+                                    pass
+                    
                     embed = discord.Embed(
                         title="🚨 GLOBAL XP RESET",
-                        description="**ALL user XP has been wiped to 0.**",
+                        description="**ALL user XP has been wiped to 0.**\nAll XP tier roles have been stripped.",
                         color=discord.Color.dark_red()
                     )
                     await button_inter.response.edit_message(embed=embed, view=None)
