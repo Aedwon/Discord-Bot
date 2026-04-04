@@ -471,6 +471,31 @@ class EventCog(commands.Cog, name="Event"):
             ephemeral=True
         )
 
+    @raffle_group.command(name="reroll", description="Reroll an ended raffle. Disqualify someone or reroll all.")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        raffle_id="The ID of the drawn raffle",
+        disqualified_winner="Optional: A specific winner to disqualify and replace. Leave blank for full reroll."
+    )
+    async def raffle_reroll(self, interaction: discord.Interaction, raffle_id: int, disqualified_winner: discord.Member = None):
+        await interaction.response.defer(ephemeral=True)
+
+        raffle = await db.fetch_one(
+            "SELECT * FROM event_raffles WHERE id = %s", (raffle_id,)
+        )
+        if not raffle:
+            return await interaction.followup.send(f"❌ Raffle #{raffle_id} not found.", ephemeral=True)
+            
+        if raffle['status'] != 'drawn':
+            return await interaction.followup.send(f"❌ Raffle #{raffle_id} has not been drawn yet. Its status is '{raffle['status']}'.", ephemeral=True)
+
+        raffle_cog = self.bot.get_cog("Event Raffle")
+        if not raffle_cog:
+            return await interaction.followup.send("❌ Raffle engine not loaded.", ephemeral=True)
+
+        await raffle_cog.execute_reroll(raffle, disqualified_winner, interaction.guild, interaction)
+
     @raffle_group.command(name="cancel", description="Cancel an active raffle")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
