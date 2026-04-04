@@ -591,6 +591,134 @@ class EventCog(commands.Cog, name="Event"):
             
         await interaction.followup.send(f"✅ Successfully retro-synchronized {synced} legacy raffle(s)!")
 
+    @raffle_group.command(name="force_sync", description="Surgically overwrite the text of legacy announcement messages to match current DB winners.")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(raffle_id="The ID of the corrupted raffle whose messages are out of date")
+    async def raffle_force_sync(self, interaction: discord.Interaction, raffle_id: int):
+        await interaction.response.defer(ephemeral=True)
+        # 1. Fetch DB
+        raffle = await db.fetch_one("SELECT * FROM event_raffles WHERE id = %s", (raffle_id,))
+        if not raffle:
+            return await interaction.followup.send(f"❌ Raffle #{raffle_id} missing.", ephemeral=True)
+            
+        current_winners_str = raffle.get('winners', "")
+        if not current_winners_str:
+            return await interaction.followup.send("❌ No winners securely attached to Database for this raffle.", ephemeral=True)
+            
+        current_winners = [int(w) for w in current_winners_str.split(",")]
+        winner_mentions = " ".join(f"<@{w}>" for w in current_winners)
+        
+        channel = interaction.guild.get_channel(raffle['channel_id'])
+        if not channel:
+            return await interaction.followup.send("❌ Channel no longer exists.", ephemeral=True)
+            
+        # Compile Ledger text if any historic rerolls exist
+        import json
+        history_str = raffle.get('reroll_history')
+        ledger_text = ""
+        if history_str:
+            try:
+                history = json.loads(history_str)
+                ledger_lines = []
+                for item in history:
+                    if item.get('type') == 'targeted':
+                        ledger_lines.append(f"- <@{item['new_id']}> replaced **{item['replaced_name']}** *(Reason: {item['reason']})*")
+                    else:
+                        ledger_lines.append(f"- **Full Reroll Executed** *(Reason: {item['reason']})*")
+                if ledger_lines:
+                    ledger_text = "\n\n---\n**Rerolls History:**\n" + "\n".join(ledger_lines)
+            except Exception:
+                pass
+
+        # Ensure we have the IDs (Radar Sync if currently missing)
+        announcement_id = raffle.get('announcement_msg_id')
+        thread_id = raffle.get('winners_thread_id')
+        welcome_id = raffle.get('welcome_msg_id')
+
+        if not thread_id:
+            target_name = f"🏆 Winners: {raffle['title'][:80]}"
+            for t in channel.threads:
+                if t.name == target_name: thread_id = t.id; break
+            if not thread_id:
+                async for t in channel.archived_threads(limit=100):
+                    if t.name == target_name: thread_id = t.id; break
+
+        if thread_id and not welcome_id:
+            t_obj = interaction.guild.get_thread(thread_id)
+            if t_obj:
+                async for msg in t_obj.history(limit=5, oldest_first=True):
+                    if msg.author.id == self.bot.user.id and "Congratulations!" in msg.content:
+                        welcome_id = msg.id; break
+
+        if not announcement_id:
+            base_msg_id = raffle.get('message_id')
+            if base_msg_id:
+                try:
+                    base_msg = await channel.fetch_message(base_msg_id)
+                    async for msg in channel.history(after=base_msg, limit=20):
+                        if msg.author.id == self.bot.user.id and "raffle results!" in msg.content:
+                            announcement_id = msg.id; break
+                except Exception:
+                    pass
+
+        # Update DB if IDs were discovered
+        await db.execute(
+            "UPDATE event_raffles SET winners_thread_id = %s, announcement_msg_id = %s, welcome_msg_id = %s WHERE id = %s",
+            (thread_id, announcement_id, welcome_id, raffle['id'])
+        )
+        
+        # --- Overwrite Data Phase ---
+        actions_taken = []
+        
+        # 1. Embed "🎉 Winners"
+        if raffle.get('message_id'):
+            try:
+                msg = await channel.fetch_message(raffle['message_id'])
+                embed = msg.embeds[0]
+                for i, field in enumerate(embed.fields):
+                    if getattr(field, 'name', None) == "🎉 Winners":
+                        embed.set_field_at(i, name="🎉 Winners", value=winner_mentions, inline=False)
+                await msg.edit(embed=embed)
+                actions_taken.append("Embed Field")
+            except Exception:
+                pass
+                
+        # 2. Public Announcement Text
+        if announcement_id:
+            try:
+                announcement_msg = await channel.fetch_message(announcement_id)
+                await announcement_msg.edit(content=
+                    f"🎉 **{raffle['title']}** raffle results!\n\n"
+                    f"🏆 Congratulations to: {winner_mentions}\n\n"
+                    f"*You've been added to a private thread below for prize coordination.*{ledger_text}"
+                )
+                actions_taken.append("Public Announcement")
+            except Exception:
+                pass
+                
+        # 3. Lounge Welcome Code
+        if thread_id and welcome_id:
+            try:
+                t_obj = interaction.guild.get_thread(thread_id)
+                if t_obj:
+                    welcome_msg = await t_obj.fetch_message(welcome_id)
+                    host_id = raffle['hosted_by'] or raffle['host_id']
+                    host_mention = f"<@{host_id}>"
+                    await welcome_msg.edit(content=
+                        f"🎉 **Congratulations!** You've won the **{raffle['title']}** raffle!\n\n"
+                        f"**Prize:** {raffle['prize']}\n"
+                        f"**Host:** {host_mention}\n\n"
+                        f"Please coordinate with the host here for prize delivery.\n\n"
+                        f"Winners: {winner_mentions}{ledger_text}"
+                    )
+                    actions_taken.append("Lounge Welcome")
+            except Exception:
+                pass
+                
+        summary = ", ".join(actions_taken) if actions_taken else "No messages found to gracefully edit."
+        await interaction.followup.send(f"✅ Force Sync fully executed! Payloads overridden: {summary}", ephemeral=True)
+
     @app_commands.command(name="raffles", description="Show all active raffles")
     async def raffle_list(self, interaction: discord.Interaction):
         raffles = await db.fetch_all(
