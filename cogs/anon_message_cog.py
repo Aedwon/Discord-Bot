@@ -442,6 +442,75 @@ class AnonMessageCog(commands.Cog, name="AnonMessages"):
 
     # ─── Admin Commands ──────────────────────────────────────────────
 
+    @anon_group.command(name="sync", description="Force re-number all anonymous messages sequentially (fixes gaps from deletions)")
+    @app_commands.default_permissions(administrator=True)
+    async def sync_anon_messages(self, interaction: discord.Interaction):
+        """Manually trigger a full end-to-end sequential renumber of all anonymous messages."""
+        await interaction.response.defer(ephemeral=True)
+
+        channel_id = await settings_service.get_int("anon_messages_channel_id")
+        if not channel_id:
+            return await interaction.followup.send(
+                "❌ Anonymous messages channel is not configured. "
+                "Use `/setup channel anon_messages <#channel>` first.",
+                ephemeral=True,
+            )
+
+        channel = interaction.guild.get_channel(channel_id)
+        if not channel:
+            return await interaction.followup.send(
+                "❌ The configured channel no longer exists.",
+                ephemeral=True,
+            )
+
+        # Count how many anonymous messages exist before starting
+        total = 0
+        async for msg in channel.history(limit=None, oldest_first=True):
+            if msg.author == self.bot.user and msg.embeds:
+                if msg.embeds[0].title and msg.embeds[0].title.startswith("Anonymous Message #"):
+                    total += 1
+
+        if total == 0:
+            return await interaction.followup.send(
+                "ℹ️ No anonymous messages found in the channel. Nothing to sync.",
+                ephemeral=True,
+            )
+
+        await interaction.followup.send(
+            f"🔄 Syncing **{total}** anonymous messages... This may take a while "
+            f"(~{total * 2}s max). I'll notify you when done.",
+            ephemeral=True,
+        )
+
+        try:
+            corrected = 0
+            expected_number = 1
+            async for msg in channel.history(limit=None, oldest_first=True):
+                if msg.author == self.bot.user and msg.embeds:
+                    embed = msg.embeds[0]
+                    if embed.title and embed.title.startswith("Anonymous Message #"):
+                        correct_title = f"Anonymous Message #{expected_number}"
+                        if embed.title != correct_title:
+                            embed.title = correct_title
+                            try:
+                                await msg.edit(embed=embed)
+                                corrected += 1
+                                await asyncio.sleep(2)
+                            except discord.HTTPException as e:
+                                logger.warning(f"Failed to edit anon message during sync: {e}")
+                        expected_number += 1
+
+            await interaction.followup.send(
+                f"✅ Sync complete! **{corrected}** message(s) renumbered out of **{total}** total.",
+                ephemeral=True,
+            )
+        except Exception as e:
+            logger.error(f"Anon message sync error: {e}")
+            await interaction.followup.send(
+                f"❌ Sync encountered an error: `{e}`",
+                ephemeral=True,
+            )
+
     @anon_group.command(name="deploy", description="Deploy the anonymous messages panel now")
     @app_commands.default_permissions(administrator=True)
     async def deploy_panel(self, interaction: discord.Interaction):

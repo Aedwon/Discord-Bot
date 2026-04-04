@@ -255,6 +255,75 @@ class ConfessionsCog(commands.Cog, name="Confessions"):
         if payload.channel_id == channel_id:
             _channels_needing_sync.add(channel_id)
 
+    @confess_group.command(name="sync", description="Force re-number all confessions sequentially (fixes gaps from deletions)")
+    @app_commands.default_permissions(administrator=True)
+    async def sync_confessions(self, interaction: discord.Interaction):
+        """Manually trigger a full end-to-end sequential renumber of all confessions."""
+        await interaction.response.defer(ephemeral=True)
+
+        channel_id = await settings_service.get_int("confessions_channel_id")
+        if not channel_id:
+            return await interaction.followup.send(
+                "❌ Confessions channel is not configured. "
+                "Use `/setup channel confessions <#channel>` first.",
+                ephemeral=True,
+            )
+
+        channel = interaction.guild.get_channel(channel_id)
+        if not channel:
+            return await interaction.followup.send(
+                "❌ The configured confessions channel no longer exists.",
+                ephemeral=True,
+            )
+
+        # Count how many confessions exist before starting
+        total = 0
+        async for msg in channel.history(limit=None, oldest_first=True):
+            if msg.author == self.bot.user and msg.embeds:
+                if msg.embeds[0].title and msg.embeds[0].title.startswith("Confession #"):
+                    total += 1
+
+        if total == 0:
+            return await interaction.followup.send(
+                "ℹ️ No confessions found in the channel. Nothing to sync.",
+                ephemeral=True,
+            )
+
+        await interaction.followup.send(
+            f"🔄 Syncing **{total}** confessions... This may take a while "
+            f"(~{total * 2}s max). I'll notify you when done.",
+            ephemeral=True,
+        )
+
+        try:
+            corrected = 0
+            expected_number = 1
+            async for msg in channel.history(limit=None, oldest_first=True):
+                if msg.author == self.bot.user and msg.embeds:
+                    embed = msg.embeds[0]
+                    if embed.title and embed.title.startswith("Confession #"):
+                        correct_title = f"Confession #{expected_number}"
+                        if embed.title != correct_title:
+                            embed.title = correct_title
+                            try:
+                                await msg.edit(embed=embed)
+                                corrected += 1
+                                await asyncio.sleep(2)
+                            except discord.HTTPException as e:
+                                logger.warning(f"Failed to edit confession during sync: {e}")
+                        expected_number += 1
+
+            await interaction.followup.send(
+                f"✅ Sync complete! **{corrected}** confession(s) renumbered out of **{total}** total.",
+                ephemeral=True,
+            )
+        except Exception as e:
+            logger.error(f"Confession sync error: {e}")
+            await interaction.followup.send(
+                f"❌ Sync encountered an error: `{e}`",
+                ephemeral=True,
+            )
+
     @confess_group.command(name="deploy", description="Post the confessions panel in the configured channel")
     @app_commands.default_permissions(administrator=True)
     async def deploy_panel(self, interaction: discord.Interaction):
