@@ -764,8 +764,8 @@ const DB_DATA = [
         ]
     },
     {
-        "category": "Live Tournament Operations",
-        "emoji": "⚔️",
+        "category": "Live Event Operations",
+        "emoji": "🏟️",
         "id": "tournaments",
         "features": [
             {
