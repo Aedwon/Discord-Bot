@@ -27,6 +27,12 @@ QUIZ_TIMES_UTC = [
     time(hour=12, minute=0, tzinfo=timezone.utc),   # 8:00 PM PHT
 ]
 
+# Reminder: 5 minutes before each quiz time
+QUIZ_REMINDER_TIMES_UTC = [
+    time(hour=3, minute=55, tzinfo=timezone.utc),   # 11:55 AM PHT
+    time(hour=11, minute=55, tzinfo=timezone.utc),   # 7:55 PM PHT
+]
+
 ROUNDS_PER_SESSION = 10
 SECONDS_PER_ROUND = 20
 DELAY_BETWEEN_ROUNDS = 5
@@ -60,12 +66,15 @@ class QuizCog(commands.Cog, name="quiz"):
 
     def cog_unload(self):
         self.quiz_scheduler.cancel()
+        self.quiz_reminder.cancel()
 
     @commands.Cog.listener()
     async def on_ready(self):
         """Start scheduler and run crash recovery after bot is fully connected."""
         if not self.quiz_scheduler.is_running():
             self.quiz_scheduler.start()
+        if not self.quiz_reminder.is_running():
+            self.quiz_reminder.start()
         asyncio.create_task(self._startup_cleanup())
 
     def _load_questions(self):
@@ -150,6 +159,55 @@ class QuizCog(commands.Cog, name="quiz"):
 
     @quiz_scheduler.before_loop
     async def before_scheduler(self):
+        await self.bot.wait_until_ready()
+
+    # ─── PRE-QUIZ REMINDER ───────────────────────────────────────────
+
+    @tasks.loop(time=QUIZ_REMINDER_TIMES_UTC)
+    async def quiz_reminder(self):
+        """Fires 5 minutes before each quiz. Pings the Quiz Notification role."""
+        await self.bot.wait_until_ready()
+
+        channel_id = await settings_service.get_int("quiz_channel_id")
+        if not channel_id:
+            return
+
+        guild = self.bot.guilds[0] if self.bot.guilds else None
+        if not guild:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if not channel:
+            return
+
+        # Find the Quiz Notification role by exact name
+        role = discord.utils.get(guild.roles, name="Quiz Notification")
+        if not role:
+            logger.warning("Quiz Notification role not found — skipping reminder.")
+            return
+
+        now_pht = datetime.now(PHT).strftime("%I:%M %p")
+        try:
+            embed = discord.Embed(
+                title="🧠 Quiz Starting Soon!",
+                description=(
+                    f"A quiz session begins in **5 minutes**!\n\n"
+                    f"📍 Get ready right here in {channel.mention}\n"
+                    f"⏱️ **{ROUNDS_PER_SESSION} rounds** • **{SECONDS_PER_ROUND}s** per question\n"
+                    f"🏆 Top 3 earn EP rewards!"
+                ),
+                color=discord.Color.gold(),
+            )
+            embed.set_footer(text=f"Reminder sent at {now_pht} PHT")
+            await channel.send(content=role.mention, embed=embed)
+            logger.info("Quiz reminder sent successfully.")
+        except discord.Forbidden:
+            logger.error("Bot lacks permission to send quiz reminder.")
+        except discord.HTTPException as e:
+            logger.error(f"Failed to send quiz reminder: {e}")
+
+    @quiz_reminder.before_loop
+    async def before_reminder(self):
         await self.bot.wait_until_ready()
 
     # ─── SESSION ENGINE ─────────────────────────────────────────────
