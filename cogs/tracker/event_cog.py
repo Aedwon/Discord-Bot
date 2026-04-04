@@ -10,7 +10,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-from datetime import datetime, timedelta
+import csv
+import io
+import json
+from datetime import datetime, timedelta, timezone
 
 from services.database import db
 from services.settings_service import settings_service
@@ -197,6 +200,30 @@ class EventCog(commands.Cog, name="Event"):
                 choices.append(app_commands.Choice(name=event.name[:100], value=str(event.id)))
                 if len(choices) >= 25: break
         return choices
+
+    async def active_raffle_autocomplete(self, interaction: discord.Interaction, current: str):
+        """Autocomplete for active raffles (status='active')."""
+        rows = await db.fetch_all(
+            "SELECT id, title FROM event_raffles WHERE status = 'active' ORDER BY created_at DESC LIMIT 25"
+        )
+        choices = []
+        for r in rows:
+            label = f"#{r['id']} — {r['title']}"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label[:100], value=str(r['id'])))
+        return choices[:25]
+
+    async def drawn_raffle_autocomplete(self, interaction: discord.Interaction, current: str):
+        """Autocomplete for drawn raffles (status='drawn')."""
+        rows = await db.fetch_all(
+            "SELECT id, title FROM event_raffles WHERE status = 'drawn' ORDER BY created_at DESC LIMIT 25"
+        )
+        choices = []
+        for r in rows:
+            label = f"#{r['id']} — {r['title']}"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label[:100], value=str(r['id'])))
+        return choices[:25]
 
     # --- CLI COMMANDS ---
 
@@ -449,16 +476,19 @@ class EventCog(commands.Cog, name="Event"):
     @raffle_group.command(name="draw", description="Manually draw winners for a raffle")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(raffle_id="The raffle ID (shown in /event raffle list)")
-    async def raffle_draw(self, interaction: discord.Interaction, raffle_id: int):
+    @app_commands.autocomplete(raffle_id=active_raffle_autocomplete)
+    @app_commands.describe(raffle_id="The active raffle to draw")
+    async def raffle_draw(self, interaction: discord.Interaction, raffle_id: str):
         await interaction.response.defer(ephemeral=True)
+        try: raffle_id_int = int(raffle_id)
+        except ValueError: return await interaction.followup.send("❌ Please select a raffle from the autocomplete list.", ephemeral=True)
 
         raffle = await db.fetch_one(
-            "SELECT * FROM event_raffles WHERE id = %s AND status = 'active'", (raffle_id,)
+            "SELECT * FROM event_raffles WHERE id = %s AND status = 'active'", (raffle_id_int,)
         )
         if not raffle:
             return await interaction.followup.send(
-                f"❌ Raffle #{raffle_id} not found or already drawn.", ephemeral=True
+                f"❌ Raffle not found or already drawn.", ephemeral=True
             )
 
         raffle_cog = self.bot.get_cog("Event Raffle")
@@ -474,22 +504,25 @@ class EventCog(commands.Cog, name="Event"):
     @raffle_group.command(name="reroll", description="Reroll an ended raffle. Disqualify someone or reroll all.")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
+    @app_commands.autocomplete(raffle_id=drawn_raffle_autocomplete)
     @app_commands.describe(
-        raffle_id="The ID of the drawn raffle",
+        raffle_id="The drawn raffle to reroll",
         reason="Required reason for disqualifying current winners / authorizing a reroll.",
         disqualified_winner="Optional: A specific winner to disqualify and replace. Leave blank for full reroll."
     )
-    async def raffle_reroll(self, interaction: discord.Interaction, raffle_id: int, reason: str, disqualified_winner: discord.Member = None):
+    async def raffle_reroll(self, interaction: discord.Interaction, raffle_id: str, reason: str, disqualified_winner: discord.Member = None):
         await interaction.response.defer(ephemeral=True)
+        try: raffle_id_int = int(raffle_id)
+        except ValueError: return await interaction.followup.send("❌ Please select a raffle from the autocomplete list.", ephemeral=True)
 
         raffle = await db.fetch_one(
-            "SELECT * FROM event_raffles WHERE id = %s", (raffle_id,)
+            "SELECT * FROM event_raffles WHERE id = %s", (raffle_id_int,)
         )
         if not raffle:
-            return await interaction.followup.send(f"❌ Raffle #{raffle_id} not found.", ephemeral=True)
+            return await interaction.followup.send(f"❌ Raffle not found.", ephemeral=True)
             
         if raffle['status'] != 'drawn':
-            return await interaction.followup.send(f"❌ Raffle #{raffle_id} has not been drawn yet. Its status is '{raffle['status']}'.", ephemeral=True)
+            return await interaction.followup.send(f"❌ Raffle has not been drawn yet. Its status is '{raffle['status']}'.", ephemeral=True)
 
         raffle_cog = self.bot.get_cog("Event Raffle")
         if not raffle_cog:
@@ -500,21 +533,23 @@ class EventCog(commands.Cog, name="Event"):
     @raffle_group.command(name="cancel", description="Cancel an active raffle")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(raffle_id="The raffle ID to cancel")
-    async def raffle_cancel(self, interaction: discord.Interaction, raffle_id: int):
+    @app_commands.autocomplete(raffle_id=active_raffle_autocomplete)
+    @app_commands.describe(raffle_id="The active raffle to cancel")
+    async def raffle_cancel(self, interaction: discord.Interaction, raffle_id: str):
         await interaction.response.defer(ephemeral=True)
+        try: raffle_id_int = int(raffle_id)
+        except ValueError: return await interaction.followup.send("❌ Please select a raffle from the autocomplete list.", ephemeral=True)
 
         raffle = await db.fetch_one(
-            "SELECT * FROM event_raffles WHERE id = %s AND status = 'active'", (raffle_id,)
+            "SELECT * FROM event_raffles WHERE id = %s AND status = 'active'", (raffle_id_int,)
         )
         if not raffle:
             return await interaction.followup.send(
-                f"❌ Raffle #{raffle_id} not found or not active.", ephemeral=True
+                f"❌ Raffle not found or not active.", ephemeral=True
             )
 
-        await db.execute("UPDATE event_raffles SET status = 'cancelled' WHERE id = %s", (raffle_id,))
+        await db.execute("UPDATE event_raffles SET status = 'cancelled' WHERE id = %s", (raffle_id_int,))
 
-        # Update the embed to show cancelled
         try:
             channel = interaction.guild.get_channel(raffle['channel_id'])
             if channel:
@@ -594,13 +629,15 @@ class EventCog(commands.Cog, name="Event"):
     @raffle_group.command(name="force_sync", description="Surgically overwrite the text of legacy announcement messages to match current DB winners.")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(raffle_id="The ID of the corrupted raffle whose messages are out of date")
-    async def raffle_force_sync(self, interaction: discord.Interaction, raffle_id: int):
+    @app_commands.autocomplete(raffle_id=drawn_raffle_autocomplete)
+    @app_commands.describe(raffle_id="The drawn raffle whose messages are out of date")
+    async def raffle_force_sync(self, interaction: discord.Interaction, raffle_id: str):
         await interaction.response.defer(ephemeral=True)
-        # 1. Fetch DB
-        raffle = await db.fetch_one("SELECT * FROM event_raffles WHERE id = %s", (raffle_id,))
+        try: raffle_id_int = int(raffle_id)
+        except ValueError: return await interaction.followup.send("❌ Please select a raffle from the autocomplete list.", ephemeral=True)
+        raffle = await db.fetch_one("SELECT * FROM event_raffles WHERE id = %s", (raffle_id_int,))
         if not raffle:
-            return await interaction.followup.send(f"❌ Raffle #{raffle_id} missing.", ephemeral=True)
+            return await interaction.followup.send(f"❌ Raffle not found.", ephemeral=True)
             
         current_winners_str = raffle.get('winners', "")
         if not current_winners_str:
@@ -718,6 +755,213 @@ class EventCog(commands.Cog, name="Event"):
                 
         summary = ", ".join(actions_taken) if actions_taken else "No messages found to gracefully edit."
         await interaction.followup.send(f"✅ Force Sync fully executed! Payloads overridden: {summary}", ephemeral=True)
+
+    @raffle_group.command(name="export_winners", description="Export a drawn raffle's winners as a CSV file.")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.autocomplete(raffle_id=drawn_raffle_autocomplete)
+    @app_commands.describe(raffle_id="The drawn raffle to export")
+    async def raffle_export_winners(self, interaction: discord.Interaction, raffle_id: str):
+        await interaction.response.defer(ephemeral=True)
+        try: raffle_id_int = int(raffle_id)
+        except ValueError: return await interaction.followup.send("❌ Please select a raffle from the autocomplete list.", ephemeral=True)
+
+        raffle = await db.fetch_one("SELECT * FROM event_raffles WHERE id = %s", (raffle_id_int,))
+        if not raffle:
+            return await interaction.followup.send("❌ Raffle not found.", ephemeral=True)
+        if not raffle.get('winners'):
+            return await interaction.followup.send("❌ This raffle has no winners recorded.", ephemeral=True)
+
+        winner_ids = [int(w) for w in raffle['winners'].split(",")]
+
+        # Fetch verification data for all winners in one query
+        placeholders = ",".join(["%s"] * len(winner_ids))
+        verified_rows = await db.fetch_all(
+            f"SELECT user_id, full_name, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})",
+            tuple(winner_ids)
+        )
+        verified_map = {r['user_id']: r for r in verified_rows}
+
+        # Block if any winners are unverified
+        unverified_ids = [wid for wid in winner_ids if wid not in verified_map]
+        if unverified_ids:
+            unverified_mentions = ", ".join(f"<@{uid}>" for uid in unverified_ids)
+            return await interaction.followup.send(
+                f"❌ **Export Blocked — Unverified Winners Detected.**\n"
+                f"The following winners have not completed MLBB verification and must be replaced via `/event raffle reroll` before exporting:\n"
+                f"{unverified_mentions}",
+                ephemeral=True
+            )
+
+        # Build the CSV date from ends_at or now
+        draw_date = raffle['ends_at'] or datetime.now(timezone.utc)
+        date_str = draw_date.strftime("%Y/%m/%d")
+        activity = raffle['title']
+
+        output = io.StringIO()
+        output.write('\ufeff')  # UTF-8 BOM for Excel compatibility
+        writer = csv.writer(output)
+        writer.writerow(["Full Name", "UID", "Server", "Amount", "Remarks"])
+
+        for wid in winner_ids:
+            v = verified_map[wid]
+            writer.writerow([
+                v['full_name'],
+                v['mlbb_uid'],
+                v['mlbb_server'],
+                "",  # Amount — blank for manual input
+                f"MSL Network Discord - {activity} - ({date_str})"
+            ])
+
+        output.seek(0)
+        filename = f"raffle_winners_{raffle_id_int}_{date_str.replace('/', '-')}.csv"
+        file = discord.File(fp=io.BytesIO(output.getvalue().encode('utf-8-sig')), filename=filename)
+        await interaction.followup.send(
+            f"✅ Exported **{len(winner_ids)}** winner(s) from **{raffle['title']}**.",
+            file=file,
+            ephemeral=True
+        )
+
+    @event_group.command(name="export_winners", description="Export an event's placement winners as a CSV file.")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(event_id="The Discord event to export placement winners from")
+    async def event_export_winners(self, interaction: discord.Interaction, event_id: str):
+        await interaction.response.defer(ephemeral=True)
+        try: event_id_int = int(event_id)
+        except ValueError: return await interaction.followup.send("❌ Please select an event from the autocomplete list.", ephemeral=True)
+
+        # Fetch event name
+        discord_event = interaction.guild.get_scheduled_event(event_id_int)
+        event_name = discord_event.name if discord_event else f"Event {event_id_int}"
+        draw_date = discord_event.end_time if discord_event and discord_event.end_time else datetime.now(timezone.utc)
+        date_str = draw_date.strftime("%Y/%m/%d")
+
+        rewards = await db.fetch_all(
+            "SELECT user_id, reward_type FROM guild_event_rewards WHERE event_id = %s ORDER BY awarded_at",
+            (event_id_int,)
+        )
+        if not rewards:
+            return await interaction.followup.send("❌ No placement winners found for this event.", ephemeral=True)
+
+        winner_ids = list({r['user_id'] for r in rewards})
+        placeholders = ",".join(["%s"] * len(winner_ids))
+        verified_rows = await db.fetch_all(
+            f"SELECT user_id, full_name, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})",
+            tuple(winner_ids)
+        )
+        verified_map = {r['user_id']: r for r in verified_rows}
+
+        # Block if unverified
+        unverified_ids = [wid for wid in winner_ids if wid not in verified_map]
+        if unverified_ids:
+            unverified_mentions = ", ".join(f"<@{uid}>" for uid in unverified_ids)
+            return await interaction.followup.send(
+                f"❌ **Export Blocked — Unverified Winners Detected.**\n"
+                f"The following winners have not completed MLBB verification and must be resolved first:\n"
+                f"{unverified_mentions}",
+                ephemeral=True
+            )
+
+        output = io.StringIO()
+        output.write('\ufeff')
+        writer = csv.writer(output)
+        writer.writerow(["Full Name", "UID", "Server", "Amount", "Remarks"])
+
+        # One row per reward entry (a user could have multiple placements)
+        for row in rewards:
+            v = verified_map[row['user_id']]
+            placement = row['reward_type']
+            writer.writerow([
+                v['full_name'],
+                v['mlbb_uid'],
+                v['mlbb_server'],
+                "",
+                f"MSL Network Discord - {event_name} - {placement} - ({date_str})"
+            ])
+
+        output.seek(0)
+        filename = f"event_winners_{event_id_int}_{date_str.replace('/', '-')}.csv"
+        file = discord.File(fp=io.BytesIO(output.getvalue().encode('utf-8-sig')), filename=filename)
+        await interaction.followup.send(
+            f"✅ Exported **{len(rewards)}** placement row(s) from **{event_name}**.",
+            file=file,
+            ephemeral=True
+        )
+
+    @raffle_group.command(name="set_timer", description="Set or update the end time on an existing active raffle.")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.autocomplete(raffle_id=active_raffle_autocomplete)
+    @app_commands.describe(
+        raffle_id="The active raffle to add a timer to",
+        duration="How long until the raffle ends. Format: 1d, 6h, 30m, or combinations like 1d12h"
+    )
+    async def raffle_set_timer(self, interaction: discord.Interaction, raffle_id: str, duration: str):
+        await interaction.response.defer(ephemeral=True)
+        try: raffle_id_int = int(raffle_id)
+        except ValueError: return await interaction.followup.send("❌ Please select a raffle from the autocomplete list.", ephemeral=True)
+
+        raffle = await db.fetch_one("SELECT * FROM event_raffles WHERE id = %s AND status = 'active'", (raffle_id_int,))
+        if not raffle:
+            return await interaction.followup.send("❌ Active raffle not found.", ephemeral=True)
+
+        # Parse duration string: supports days (d), hours (h), minutes (m)
+        import re
+        total_seconds = 0
+        pattern = re.findall(r'(\d+)([dhm])', duration.lower())
+        if not pattern:
+            return await interaction.followup.send(
+                "❌ Invalid duration format. Use combinations like `1d`, `6h`, `30m`, `1d12h`, `2h30m`.",
+                ephemeral=True
+            )
+        for value, unit in pattern:
+            v = int(value)
+            if unit == 'd': total_seconds += v * 86400
+            elif unit == 'h': total_seconds += v * 3600
+            elif unit == 'm': total_seconds += v * 60
+
+        if total_seconds < 60:
+            return await interaction.followup.send("❌ Minimum duration is 1 minute.", ephemeral=True)
+        if total_seconds > 86400 * 30:
+            return await interaction.followup.send("❌ Maximum duration is 30 days.", ephemeral=True)
+
+        ends_at = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
+        ends_at_naive = ends_at.replace(tzinfo=None)  # Store as UTC naive for MySQL
+
+        await db.execute(
+            "UPDATE event_raffles SET ends_at = %s WHERE id = %s",
+            (ends_at_naive, raffle_id_int)
+        )
+
+        # Update embed to display the countdown
+        channel = interaction.guild.get_channel(raffle['channel_id'])
+        if channel and raffle.get('message_id'):
+            try:
+                msg = await channel.fetch_message(raffle['message_id'])
+                if msg.embeds:
+                    embed = msg.embeds[0]
+                    # Update or add the ends_at field
+                    ends_dt_discord = discord.utils.format_dt(ends_at, style='R')
+                    ends_dt_full = discord.utils.format_dt(ends_at, style='F')
+                    field_updated = False
+                    for i, field in enumerate(embed.fields):
+                        if getattr(field, 'name', None) in ('⏰ Ends', '⏰ Auto-Draws'):
+                            embed.set_field_at(i, name="⏰ Ends", value=f"{ends_dt_full} ({ends_dt_discord})", inline=False)
+                            field_updated = True
+                            break
+                    if not field_updated:
+                        embed.add_field(name="⏰ Ends", value=f"{ends_dt_full} ({ends_dt_discord})", inline=False)
+                    await msg.edit(embed=embed)
+            except Exception as e:
+                logger.warning(f"Could not update raffle embed with timer: {e}")
+
+        ends_dt_discord = discord.utils.format_dt(ends_at, style='R')
+        await interaction.followup.send(
+            f"✅ Timer set! Raffle **{raffle['title']}** will auto-draw {ends_dt_discord}.",
+            ephemeral=True
+        )
 
     @app_commands.command(name="raffles", description="Show all active raffles")
     async def raffle_list(self, interaction: discord.Interaction):
