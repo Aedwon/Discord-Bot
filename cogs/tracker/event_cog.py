@@ -541,7 +541,7 @@ class RaffleRequirementsModal(discord.ui.Modal, title="📋 Raffle Requirements"
     requirements = discord.ui.TextInput(
         label="Requirements / Mechanics",
         style=discord.TextStyle.long,
-        placeholder="Type your requirements here...\nEach line will be preserved as-is.\n\nExample:\n1. Like this post on Facebook\n2. Share to your story\n3. Tag 2 friends",
+        placeholder="E.g.\n1. Like this post\n2. Share to your story\n3. Tag 2 friends",
         required=True,
         max_length=1500,
     )
