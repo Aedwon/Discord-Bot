@@ -579,23 +579,19 @@ class RaffleDeployView(discord.ui.View):
 
     @discord.ui.button(label="Add Requirements", style=discord.ButtonStyle.primary, emoji="📋")
     async def add_requirements(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Disable both buttons to prevent double-click
-        for item in self.children:
-            item.disabled = True
-        await interaction.message.edit(view=self)
-        # Open multiline modal
+        # We cannot disable buttons here because we must respond with the modal.
         modal = RaffleRequirementsModal(self.raffle_config, self.bot)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Skip — Deploy Now", style=discord.ButtonStyle.secondary, emoji="🚀")
     async def skip_deploy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Disable both buttons to prevent double-click
         for item in self.children:
             item.disabled = True
-        await interaction.message.edit(view=self)
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # Edit the ephemeral message to disable buttons (this also acknowledges the interaction)
+        await interaction.response.edit_message(view=self)
         self.raffle_config['requirements'] = None
         await deploy_raffle(interaction, self.raffle_config, self.bot)
+
 
 
 async def deploy_raffle(interaction: discord.Interaction, config: dict, bot):
