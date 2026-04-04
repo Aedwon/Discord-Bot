@@ -413,11 +413,17 @@
                 display: flex;
                 overflow-x: auto;
                 padding-bottom: 0.5rem;
+                gap: 0.5rem;
             }
             .sidebar-label { display: none; }
             .sidebar button {
                 white-space: nowrap;
                 width: auto;
+                margin-bottom: 0;
+            }
+            #dynamic-tabs {
+                display: flex;
+                gap: 0.5rem;
             }
             .param-row {
                 grid-template-columns: 1fr;
