@@ -21,7 +21,7 @@ def _build_level_thresholds(max_level: int = _MAX_PRECOMPUTED) -> list[int]:
     thresholds = [0]  # Level 1 requires 0 XP
     cumulative = 0
     for k in range(1, max_level):
-        cumulative += int(150 * (k ** 1.9))
+        cumulative += round(150 * (k ** 1.9))
         thresholds.append(cumulative)
     return thresholds
 
@@ -49,7 +49,7 @@ class XpService:
             level = len(_LEVEL_THRESHOLDS)
             cumulative = _LEVEL_THRESHOLDS[-1]
             while cumulative <= xp:
-                cumulative += int(150 * (level ** 1.9))
+                cumulative += round(150 * (level ** 1.9))
                 level += 1
             return level - 1
         
@@ -70,7 +70,7 @@ class XpService:
         # Dynamic computation for levels beyond precomputed range
         cumulative = _LEVEL_THRESHOLDS[-1]
         for k in range(len(_LEVEL_THRESHOLDS), level):
-            cumulative += int(150 * (k ** 1.9))
+            cumulative += round(150 * (k ** 1.9))
         return cumulative
         
     def get_tier_name(self, level: int) -> str | None:
