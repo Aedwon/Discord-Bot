@@ -9,6 +9,7 @@ import secrets
 from datetime import datetime, timezone
 from discord.ext import commands, tasks
 from discord import app_commands
+import json
 import logging
 
 from services.database import db
@@ -268,7 +269,7 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
             logger.warning(f"Could not update drawn raffle embed: {e}")
 
         # Announcement
-        await channel.send(
+        announcement_msg = await channel.send(
             f"🎉 **{raffle['title']}** raffle results!\n\n"
             f"🏆 Congratulations to: {winner_mentions}\n\n"
             f"*You've been added to a private thread below for prize coordination.*"
@@ -283,7 +284,7 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                 type=discord.ChannelType.private_thread,
                 auto_archive_duration=4320
             )
-            await winner_thread.send(
+            welcome_msg = await winner_thread.send(
                 f"🎉 **Congratulations!** You've won the **{raffle['title']}** raffle!\n\n"
                 f"**Prize:** {raffle['prize']}\n"
                 f"**Host:** {host_mention}\n\n"
@@ -304,12 +305,15 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
             if host_member:
                 await winner_thread.add_user(host_member)
                 
-            await db.execute("UPDATE event_raffles SET winners_thread_id = %s WHERE id = %s", (winner_thread.id, raffle_id))
+            await db.execute(
+                "UPDATE event_raffles SET winners_thread_id = %s, announcement_msg_id = %s, welcome_msg_id = %s WHERE id = %s", 
+                (winner_thread.id, announcement_msg.id, welcome_msg.id, raffle_id)
+            )
 
         except Exception as e:
             logger.error(f"Failed to create winner thread: {e}")
 
-    async def execute_reroll(self, raffle: dict, disqualified_user: discord.Member, guild: discord.Guild, interaction: discord.Interaction):
+    async def execute_reroll(self, raffle: dict, disqualified_user: discord.Member, reason: str, guild: discord.Guild, interaction: discord.Interaction):
         """Rerolls an ended raffle. If disqualified_user is provided, replaces only them. Otherwise, full reroll."""
         raffle_id = raffle['id']
         current_winners_str = raffle.get('winners', "")
@@ -341,11 +345,32 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
             
             new_winner_str = ",".join(str(w) for w in new_winners_list)
             
-            await db.execute("UPDATE event_raffles SET winners = %s WHERE id = %s", (new_winner_str, raffle_id))
+            # Target Replacement Logic Data Updates
+            history_str = raffle.get('reroll_history')
+            history = json.loads(history_str) if history_str else []
+            history.append({
+                "type": "targeted",
+                "replaced_name": disqualified_user.display_name,
+                "new_id": new_winner_id,
+                "reason": reason
+            })
+            history_json = json.dumps(history)
+            
+            await db.execute("UPDATE event_raffles SET winners = %s, reroll_history = %s WHERE id = %s", (new_winner_str, history_json, raffle_id))
+            
+            # Format ledger
+            ledger_lines = []
+            for item in history:
+                if item.get('type') == 'targeted':
+                    ledger_lines.append(f"- <@{item['new_id']}> replaced **{item['replaced_name']}** *(Reason: {item['reason']})*")
+                else:
+                    ledger_lines.append(f"- **Full Reroll Executed** *(Reason: {item['reason']})*")
+                    
+            ledger_text = "\n\n---\n**Rerolls History:**\n" + "\n".join(ledger_lines) if ledger_lines else ""
             
             channel = guild.get_channel(raffle['channel_id'])
             if channel:
-                # Update embed
+                # Update main Embed
                 try:
                     msg = await channel.fetch_message(raffle['message_id'])
                     embed = msg.embeds[0]
@@ -358,13 +383,40 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                 except Exception as e:
                     logger.warning(f"Could not update rerolled embed: {e}")
 
-                # Announce
-                await channel.send(f"🎲 **Reroll!** <@{new_winner_id}> has replaced **{disqualified_user.display_name}** in the **{raffle['title']}** raffle!")
+                # Update Original Public Announcement (Silent)
+                announcement_msg_id = raffle.get('announcement_msg_id')
+                if announcement_msg_id:
+                    try:
+                        announcement_msg = await channel.fetch_message(announcement_msg_id)
+                        await announcement_msg.edit(content=
+                            f"🎉 **{raffle['title']}** raffle results!\n\n"
+                            f"🏆 Congratulations to: {winner_mentions}\n\n"
+                            f"*You've been added to a private thread below for prize coordination.*{ledger_text}"
+                        )
+                    except Exception:
+                        pass
                 
                 # Update Winners Thread
                 if raffle.get('winners_thread_id'):
                     thread = guild.get_thread(raffle.get('winners_thread_id'))
                     if thread:
+                        # Update thread welcome message (Silent)
+                        welcome_msg_id = raffle.get('welcome_msg_id')
+                        if welcome_msg_id:
+                            try:
+                                welcome_msg = await thread.fetch_message(welcome_msg_id)
+                                host_id = raffle['hosted_by'] or raffle['host_id']
+                                host_mention = f"<@{host_id}>"
+                                await welcome_msg.edit(content=
+                                    f"🎉 **Congratulations!** You've won the **{raffle['title']}** raffle!\n\n"
+                                    f"**Prize:** {raffle['prize']}\n"
+                                    f"**Host:** {host_mention}\n\n"
+                                    f"Please coordinate with the host here for prize delivery.\n\n"
+                                    f"Winners: {winner_mentions}{ledger_text}"
+                                )
+                            except Exception:
+                                pass
+
                         # Attempt to remove disqualified
                         try:
                             member_to_remove = guild.get_member(disqualified_user.id)
@@ -383,12 +435,13 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                         except Exception:
                             pass
                         
-                        await thread.send(f"🎲 **Reroll:** **{disqualified_user.display_name}** was disqualified. Welcome **{new_winner_name}** to the winners lounge!")
+                        # Internal info message for transparency inside loop lounge
+                        await thread.send(f"🎲 **Reroll:** **{disqualified_user.display_name}** was disqualified for: *{reason}*. Welcome **{new_winner_name}** to the winners lounge!")
                         
-            await interaction.followup.send(f"✅ Replaced {disqualified_user.mention} with <@{new_winner_id}>.", ephemeral=True)
+            await interaction.followup.send(f"✅ Replaced {disqualified_user.mention} with <@{new_winner_id}>. (Reroll logged silently).", ephemeral=True)
 
         else:
-            # Full Reroll
+            # Full Reroll Logic Updates
             entries = await db.fetch_all("SELECT user_id FROM event_raffle_entries WHERE raffle_id = %s", (raffle_id,))
             pool = [e['user_id'] for e in entries]
             
@@ -404,7 +457,25 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                 
             new_winner_str = ",".join(str(w) for w in new_winners_list)
             
-            await db.execute("UPDATE event_raffles SET winners = %s WHERE id = %s", (new_winner_str, raffle_id))
+            history_str = raffle.get('reroll_history')
+            history = json.loads(history_str) if history_str else []
+            history.append({
+                "type": "full",
+                "reason": reason
+            })
+            history_json = json.dumps(history)
+            
+            await db.execute("UPDATE event_raffles SET winners = %s, reroll_history = %s WHERE id = %s", (new_winner_str, history_json, raffle_id))
+            
+            # Format ledger
+            ledger_lines = []
+            for item in history:
+                if item.get('type') == 'targeted':
+                    ledger_lines.append(f"- <@{item['new_id']}> replaced **{item['replaced_name']}** *(Reason: {item['reason']})*")
+                else:
+                    ledger_lines.append(f"- **Full Reroll Executed** *(Reason: {item['reason']})*")
+                    
+            ledger_text = "\n\n---\n**Rerolls History:**\n" + "\n".join(ledger_lines) if ledger_lines else ""
             
             channel = guild.get_channel(raffle['channel_id'])
             if channel:
@@ -421,13 +492,40 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                 except Exception:
                     pass
                     
-                # Announce
-                await channel.send(f"🎲 **Full Reroll!** The **{raffle['title']}** raffle has been completely redrawn.\nNew Winners: {winner_mentions}")
+                # Update Original Public Announcement (Silent)
+                announcement_msg_id = raffle.get('announcement_msg_id')
+                if announcement_msg_id:
+                    try:
+                        announcement_msg = await channel.fetch_message(announcement_msg_id)
+                        await announcement_msg.edit(content=
+                            f"🎉 **{raffle['title']}** raffle results!\n\n"
+                            f"🏆 Congratulations to: {winner_mentions}\n\n"
+                            f"*You've been added to a private thread below for prize coordination.*{ledger_text}"
+                        )
+                    except Exception:
+                        pass
                 
                 # Update Winners Thread
                 if raffle.get('winners_thread_id'):
                     thread = guild.get_thread(raffle.get('winners_thread_id'))
                     if thread:
+                        # Update thread welcome message (Silent)
+                        welcome_msg_id = raffle.get('welcome_msg_id')
+                        if welcome_msg_id:
+                            try:
+                                welcome_msg = await thread.fetch_message(welcome_msg_id)
+                                host_id = raffle['hosted_by'] or raffle['host_id']
+                                host_mention = f"<@{host_id}>"
+                                await welcome_msg.edit(content=
+                                    f"🎉 **Congratulations!** You've won the **{raffle['title']}** raffle!\n\n"
+                                    f"**Prize:** {raffle['prize']}\n"
+                                    f"**Host:** {host_mention}\n\n"
+                                    f"Please coordinate with the host here for prize delivery.\n\n"
+                                    f"Winners: {winner_mentions}{ledger_text}"
+                                )
+                            except Exception:
+                                pass
+
                         # Attempt to remove all old
                         for old_w in current_winners:
                             try:
@@ -452,9 +550,9 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                                 
                         winner_names_str = ", ".join(winner_names_list)
                         
-                        await thread.send(f"🎲 **Full Reroll Executed!** Previous winners were removed. Welcome the new winners: {winner_names_str}")
+                        await thread.send(f"🎲 **Full Reroll Executed!** Reason: *{reason}*. Previous winners were removed. Welcome the new winners: {winner_names_str}")
                         
-            await interaction.followup.send("✅ Full reroll complete.", ephemeral=True)
+            await interaction.followup.send("✅ Full reroll complete. (Reroll logged silently).", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

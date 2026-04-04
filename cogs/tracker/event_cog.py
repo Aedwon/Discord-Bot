@@ -476,9 +476,10 @@ class EventCog(commands.Cog, name="Event"):
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
         raffle_id="The ID of the drawn raffle",
+        reason="Required reason for disqualifying current winners / authorizing a reroll.",
         disqualified_winner="Optional: A specific winner to disqualify and replace. Leave blank for full reroll."
     )
-    async def raffle_reroll(self, interaction: discord.Interaction, raffle_id: int, disqualified_winner: discord.Member = None):
+    async def raffle_reroll(self, interaction: discord.Interaction, raffle_id: int, reason: str, disqualified_winner: discord.Member = None):
         await interaction.response.defer(ephemeral=True)
 
         raffle = await db.fetch_one(
@@ -494,7 +495,7 @@ class EventCog(commands.Cog, name="Event"):
         if not raffle_cog:
             return await interaction.followup.send("❌ Raffle engine not loaded.", ephemeral=True)
 
-        await raffle_cog.execute_reroll(raffle, disqualified_winner, interaction.guild, interaction)
+        await raffle_cog.execute_reroll(raffle, disqualified_winner, reason, interaction.guild, interaction)
 
     @raffle_group.command(name="cancel", description="Cancel an active raffle")
     @require_admin_auth()
@@ -527,6 +528,68 @@ class EventCog(commands.Cog, name="Event"):
             logger.warning(f"Could not update cancelled raffle embed: {e}")
 
         await interaction.followup.send(f"✅ Raffle **{raffle['title']}** cancelled.", ephemeral=True)
+
+    @raffle_group.command(name="sync_legacy", description="Retroactively locate and cache message IDs for previously drawn raffles.")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    async def raffle_sync_legacy(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        # Fetch raffles where status='drawn' and either tracking ID is missing
+        raffles = await db.fetch_all("SELECT * FROM event_raffles WHERE status = 'drawn' AND (winners_thread_id IS NULL OR announcement_msg_id IS NULL)")
+        if not raffles:
+            return await interaction.followup.send("✅ All drawn raffles are already fully synchronized!")
+            
+        synced = 0
+        for raffle in raffles:
+            channel = interaction.guild.get_channel(raffle['channel_id'])
+            if not channel:
+                continue
+                
+            announcement_id = raffle.get('announcement_msg_id')
+            thread_id = raffle.get('winners_thread_id')
+            welcome_id = raffle.get('welcome_msg_id')
+            
+            # Find Thread
+            if not thread_id:
+                target_name = f"🏆 Winners: {raffle['title'][:80]}"
+                for t in channel.threads:
+                    if t.name == target_name:
+                        thread_id = t.id
+                        break
+                if not thread_id:
+                    async for t in channel.archived_threads(limit=100):
+                        if t.name == target_name:
+                            thread_id = t.id
+                            break
+                            
+            if thread_id and not welcome_id:
+                t_obj = interaction.guild.get_thread(thread_id)
+                if t_obj:
+                    async for msg in t_obj.history(limit=5, oldest_first=True):
+                        if msg.author.id == self.bot.user.id and "Congratulations!" in msg.content:
+                            welcome_id = msg.id
+                            break
+                            
+            if not announcement_id:
+                # Search channel near message_id
+                base_msg_id = raffle.get('message_id')
+                if base_msg_id:
+                    try:
+                        base_msg = await channel.fetch_message(base_msg_id)
+                        async for msg in channel.history(after=base_msg, limit=20):
+                            if msg.author.id == self.bot.user.id and "raffle results!" in msg.content:
+                                announcement_id = msg.id
+                                break
+                    except Exception:
+                        pass
+                        
+            await db.execute(
+                "UPDATE event_raffles SET winners_thread_id = %s, announcement_msg_id = %s, welcome_msg_id = %s WHERE id = %s",
+                (thread_id, announcement_id, welcome_id, raffle['id'])
+            )
+            synced += 1
+            
+        await interaction.followup.send(f"✅ Successfully retro-synchronized {synced} legacy raffle(s)!")
 
     @app_commands.command(name="raffles", description="Show all active raffles")
     async def raffle_list(self, interaction: discord.Interaction):
