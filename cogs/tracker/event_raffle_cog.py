@@ -6,7 +6,7 @@ This cog provides the engine: draw logic, persistent button handlers, and the ba
 
 import discord
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from discord.ext import commands, tasks
 from discord import app_commands
 import logging
@@ -143,19 +143,48 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
     def cog_unload(self):
         self.auto_draw_loop.cancel()
 
+    # ─── CRASH RECOVERY ─────────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Draw any raffles that expired while the bot was offline."""
+        try:
+            overdue = await db.fetch_all(
+                "SELECT * FROM event_raffles "
+                "WHERE status = 'active' AND ends_at IS NOT NULL AND ends_at <= UTC_TIMESTAMP()"
+            )
+            if overdue:
+                logger.info(f"Crash recovery: found {len(overdue)} overdue raffle(s) to draw")
+                guild = self.bot.guilds[0] if self.bot.guilds else None
+                if guild:
+                    for raffle in overdue:
+                        try:
+                            await self.execute_draw(raffle, guild)
+                            logger.info(f"Crash recovery: drew raffle #{raffle['id']} '{raffle['title']}'")
+                        except Exception as e:
+                            logger.error(f"Crash recovery: failed to draw raffle #{raffle['id']}: {e}")
+        except Exception as e:
+            logger.error(f"Crash recovery check failed: {e}")
+
     # ─── AUTO-DRAW TASK ─────────────────────────────────────────────────
 
     @tasks.loop(seconds=30)
     async def auto_draw_loop(self):
         """Check for raffles that need auto-drawing."""
         try:
+            # Use UTC_TIMESTAMP() to correctly compare against UTC-stored ends_at
             due = await db.fetch_all(
-                "SELECT * FROM event_raffles WHERE status = 'active' AND ends_at IS NOT NULL AND ends_at <= NOW()"
+                "SELECT * FROM event_raffles "
+                "WHERE status = 'active' AND ends_at IS NOT NULL AND ends_at <= UTC_TIMESTAMP()"
             )
             for raffle in due:
                 guild = self.bot.guilds[0] if self.bot.guilds else None
                 if guild:
-                    await self.execute_draw(raffle, guild)
+                    try:
+                        await self.execute_draw(raffle, guild)
+                        logger.info(f"Auto-draw: drew raffle #{raffle['id']} '{raffle['title']}'")
+                    except Exception as e:
+                        logger.error(f"Auto-draw: failed to draw raffle #{raffle['id']}: {e}")
         except Exception as e:
             logger.error(f"Auto-draw loop error: {e}")
 
@@ -180,6 +209,11 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                 channel = await guild.fetch_channel(raffle['channel_id'])
             except Exception:
                 logger.error(f"Cannot find channel for raffle #{raffle_id}")
+                # Still mark as drawn so we don't retry forever
+                await db.execute(
+                    "UPDATE event_raffles SET status = 'drawn', winners = '' WHERE id = %s",
+                    (raffle_id,)
+                )
                 return
 
         if not entries:

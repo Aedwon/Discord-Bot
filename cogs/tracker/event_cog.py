@@ -3,12 +3,14 @@ Event Tracker Cog - Hooks natively into Discord Scheduled Events for Kiosks and 
 Built with robust anti-spasm race condition locks, validation boundaries, and UI defers.
 Features an End-To-End Security Toolkit: Dashboards, Revocation, Budgets, Audit Logs.
 Includes an ultra-efficient RAM Cached Peak Voice Tracking system for Overflow channels.
+Raffle creation uses a two-step Modal flow for multiline requirements support.
 """
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
+from datetime import datetime, timedelta
 
 from services.database import db
 from services.settings_service import settings_service
@@ -404,8 +406,6 @@ class EventCog(commands.Cog, name="Event"):
     # Raffle Subgroup
     # ─────────────────────────────────────────────────────────────────────
 
-    raffle_group = app_commands.Group(name="raffle", description="Create and manage event raffles")
-
     @raffle_group.command(name="create", description="Create and deploy a new event raffle")
     @require_admin_auth()
     @app_commands.default_permissions(administrator=True)
@@ -415,91 +415,35 @@ class EventCog(commands.Cog, name="Event"):
         channel="Channel to post the raffle in",
         winners="Number of winners (default: 1)",
         duration_minutes="Auto-draw after N minutes (leave empty for manual draw)",
-        hosted_by="Community member hosting this raffle (optional)",
-        requirements="Social media requirements, e.g. 'Like & Share on FB' (optional)"
+        hosted_by="Community member hosting this raffle (optional)"
     )
     async def raffle_create(
         self, interaction: discord.Interaction,
         title: str, prize: str, channel: discord.TextChannel,
         winners: int = 1,
         duration_minutes: int = None,
-        hosted_by: discord.Member = None,
-        requirements: str = None
+        hosted_by: discord.Member = None
     ):
-        from cogs.tracker.event_raffle_cog import PersistentRaffleView
-        from datetime import datetime, timedelta
+        """Step 1: Collect core params, then offer to add multiline requirements."""
+        # Stash raffle config for the follow-up view/modal
+        raffle_config = {
+            'title': title,
+            'prize': prize,
+            'channel_id': channel.id,
+            'winners': winners,
+            'duration_minutes': duration_minutes,
+            'hosted_by_id': hosted_by.id if hosted_by else None,
+            'creator_id': interaction.user.id,
+        }
 
-        await interaction.response.defer(ephemeral=True)
-
-        ends_at = None
-        if duration_minutes and duration_minutes > 0:
-            ends_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
-
-        # Build embed
-        host_display = hosted_by.mention if hosted_by else interaction.user.mention
-        embed = discord.Embed(
-            title=f"🎟️ {title}",
-            description=f"**Prize:** {prize}",
-            color=0xFFD700,
-            timestamp=datetime.utcnow()
-        )
-        embed.add_field(name="Hosted By", value=host_display, inline=True)
-        embed.add_field(name="Winners", value=f"**{winners}**", inline=True)
-        embed.add_field(name="Participants", value="**0**", inline=True)
-
-        if requirements:
-            embed.add_field(
-                name="📋 Requirements",
-                value=f"> {requirements}\n*You'll be added to a proof thread upon joining.*",
-                inline=False
-            )
-
-        if ends_at:
-            embed.add_field(
-                name="⏰ Ends",
-                value=discord.utils.format_dt(ends_at, style="R"),
-                inline=False
-            )
-        else:
-            embed.add_field(name="⏰ Draw", value="Manual — an admin will draw when ready", inline=False)
-
-        embed.set_footer(text="Click 🎟️ Join Raffle to enter!")
-
-        # Send embed
-        msg = await channel.send(embed=embed, view=PersistentRaffleView())
-
-        # Create proof thread if requirements exist
-        proof_thread_id = None
-        if requirements:
-            try:
-                proof_thread = await msg.create_thread(
-                    name=f"📸 Proof: {title[:80]}",
-                    auto_archive_duration=4320
-                )
-                proof_thread_id = proof_thread.id
-                await proof_thread.send(
-                    f"📋 **Raffle Requirements:**\n> {requirements}\n\n"
-                    f"When you join the raffle, you'll be added here. "
-                    f"Please post a screenshot proving you've completed the requirements."
-                )
-            except Exception as e:
-                logger.error(f"Failed to create proof thread: {e}")
-
-        # Save to database
-        await db.execute('''
-            INSERT INTO event_raffles 
-                (host_id, hosted_by, title, prize, requirements, winner_count,
-                 message_id, channel_id, proof_thread_id, ends_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ''', (
-            interaction.user.id,
-            hosted_by.id if hosted_by else None,
-            title, prize, requirements, winners,
-            msg.id, channel.id, proof_thread_id, ends_at
-        ))
-
-        await interaction.followup.send(
-            f"✅ Raffle **{title}** deployed in {channel.mention}!", ephemeral=True
+        view = RaffleDeployView(raffle_config, self.bot)
+        await interaction.response.send_message(
+            f"🎟️ **Raffle: {title}**\n\n"
+            f"Would you like to add requirements/mechanics (with multiline support)?\n\n"
+            f"• **Add Requirements** — opens a text box where you can type instructions with line breaks\n"
+            f"• **Skip — Deploy Now** — deploys the raffle immediately without requirements",
+            view=view,
+            ephemeral=True
         )
 
     @raffle_group.command(name="draw", description="Manually draw winners for a raffle")
@@ -588,5 +532,174 @@ class EventCog(commands.Cog, name="Event"):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
+# ─── RAFFLE MODAL & DEPLOY HELPERS ──────────────────────────────────────
+
+class RaffleRequirementsModal(discord.ui.Modal, title="📋 Raffle Requirements"):
+    """Multiline text input for raffle mechanics/requirements."""
+
+    requirements = discord.ui.TextInput(
+        label="Requirements / Mechanics",
+        style=discord.TextStyle.long,
+        placeholder="Type your requirements here...\nEach line will be preserved as-is.\n\nExample:\n1. Like this post on Facebook\n2. Share to your story\n3. Tag 2 friends",
+        required=True,
+        max_length=1500,
+    )
+
+    def __init__(self, raffle_config: dict, bot):
+        super().__init__()
+        self.raffle_config = raffle_config
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        self.raffle_config['requirements'] = self.requirements.value
+        await deploy_raffle(interaction, self.raffle_config, self.bot)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error(f"RaffleRequirementsModal error: {error}")
+        try:
+            await interaction.followup.send("❌ Failed to process requirements.", ephemeral=True)
+        except Exception:
+            pass
+
+
+class RaffleDeployView(discord.ui.View):
+    """Ephemeral view: 'Add Requirements' or 'Skip — Deploy Now'."""
+
+    def __init__(self, raffle_config: dict, bot):
+        super().__init__(timeout=120)
+        self.raffle_config = raffle_config
+        self.bot = bot
+
+    async def on_timeout(self):
+        """Disable buttons after timeout."""
+        for item in self.children:
+            item.disabled = True
+
+    @discord.ui.button(label="Add Requirements", style=discord.ButtonStyle.primary, emoji="📋")
+    async def add_requirements(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Disable both buttons to prevent double-click
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+        # Open multiline modal
+        modal = RaffleRequirementsModal(self.raffle_config, self.bot)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Skip — Deploy Now", style=discord.ButtonStyle.secondary, emoji="🚀")
+    async def skip_deploy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Disable both buttons to prevent double-click
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        self.raffle_config['requirements'] = None
+        await deploy_raffle(interaction, self.raffle_config, self.bot)
+
+
+async def deploy_raffle(interaction: discord.Interaction, config: dict, bot):
+    """
+    Core raffle deployment logic.
+    Builds the embed, sends it with persistent buttons, creates proof thread,
+    pings the Giveaway Notification role, and stores everything in the DB.
+    """
+    from cogs.tracker.event_raffle_cog import PersistentRaffleView
+
+    guild = interaction.guild
+    channel = guild.get_channel(config['channel_id'])
+    if not channel:
+        return await interaction.followup.send("❌ Channel not found.", ephemeral=True)
+
+    title = config['title']
+    prize = config['prize']
+    winners = config['winners']
+    duration_minutes = config['duration_minutes']
+    hosted_by_id = config['hosted_by_id']
+    creator_id = config['creator_id']
+    requirements = config.get('requirements')
+
+    ends_at = None
+    if duration_minutes and duration_minutes > 0:
+        ends_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
+
+    # Build embed
+    host_display = f"<@{hosted_by_id}>" if hosted_by_id else f"<@{creator_id}>"
+    embed = discord.Embed(
+        title=f"🎟️ {title}",
+        description=f"**Prize:** {prize}",
+        color=0xFFD700,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="Hosted By", value=host_display, inline=True)
+    embed.add_field(name="Winners", value=f"**{winners}**", inline=True)
+    embed.add_field(name="Participants", value="**0**", inline=True)
+
+    if requirements:
+        # Preserve multiline: format each line as a blockquote line
+        formatted_lines = "\n".join(f"> {line}" for line in requirements.split("\n"))
+        embed.add_field(
+            name="📋 Requirements",
+            value=f"{formatted_lines}\n\n*You'll be added to a proof thread upon joining.*",
+            inline=False
+        )
+
+    if ends_at:
+        embed.add_field(
+            name="⏰ Ends",
+            value=discord.utils.format_dt(ends_at, style="R"),
+            inline=False
+        )
+    else:
+        embed.add_field(name="⏰ Draw", value="Manual — an admin will draw when ready", inline=False)
+
+    embed.set_footer(text="Click 🎟️ Join Raffle to enter!")
+
+    # Resolve Giveaway Notification role for the ping
+    ping_content = None
+    giveaway_role = discord.utils.get(guild.roles, name="Giveaway Notification")
+    if giveaway_role:
+        ping_content = f"{giveaway_role.mention} 🎁 **New Raffle!**"
+
+    # Send embed (with role ping in content if available)
+    msg = await channel.send(content=ping_content, embed=embed, view=PersistentRaffleView())
+
+    # Create proof thread if requirements exist
+    proof_thread_id = None
+    if requirements:
+        try:
+            proof_thread = await msg.create_thread(
+                name=f"📸 Proof: {title[:80]}",
+                auto_archive_duration=4320
+            )
+            proof_thread_id = proof_thread.id
+            formatted_for_thread = "\n".join(f"> {line}" for line in requirements.split("\n"))
+            await proof_thread.send(
+                f"📋 **Raffle Requirements:**\n{formatted_for_thread}\n\n"
+                f"When you join the raffle, you'll be added here. "
+                f"Please post a screenshot proving you've completed the requirements."
+            )
+        except Exception as e:
+            logger.error(f"Failed to create proof thread: {e}")
+
+    # Save to database
+    await db.execute('''
+        INSERT INTO event_raffles 
+            (host_id, hosted_by, title, prize, requirements, winner_count,
+             message_id, channel_id, proof_thread_id, ends_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ''', (
+        creator_id,
+        hosted_by_id,
+        title, prize, requirements, winners,
+        msg.id, channel.id, proof_thread_id, ends_at
+    ))
+
+    await interaction.followup.send(
+        f"✅ Raffle **{title}** deployed in {channel.mention}!", ephemeral=True
+    )
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(EventCog(bot))
+
