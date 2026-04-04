@@ -908,6 +908,18 @@ const DB_DATA = [
                         "required": true
                     }
                 ]
+            },
+            {
+                "syntax": "/event export_winners",
+                "desc": "Export an event's placement winners as a CSV file.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "event_id",
+                        "type": "autocomplete",
+                        "required": true
+                    }
+                ]
             }
         ]
     },
@@ -934,7 +946,7 @@ const DB_DATA = [
             {
                 "name": "Scheduled Booster Weekly Raffle",
                 "type": "passive",
-                "desc": "Runs every Sunday at 8:00 AM PHT. Requires 7 days minimum boosting to prevent churn exploiting."
+                "desc": "Runs every Sunday at 8:00 AM PHT. If fewer than 25 boosters, excess slots are fairly distributed prioritizing those with fewest excess wins this month. Winner count is configurable."
             },
             {
                 "name": "Auto-Draw with Crash Recovery",
@@ -1033,8 +1045,61 @@ const DB_DATA = [
                 "params": []
             },
             {
+                "syntax": "/event raffle export_winners",
+                "desc": "Export a drawn raffle's winners as a CSV file.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/event raffle set_timer",
+                "desc": "Set or update the auto-draw end time on an active raffle.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    },
+                    {
+                        "name": "duration_minutes",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/event raffle sync_legacy",
+                "desc": "Retroactively locate and cache message IDs for previously drawn raffle announcements.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/event raffle force_sync",
+                "desc": "Overwrite legacy announcement messages to match current DB winners.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
                 "syntax": "/force-booster-raffle",
-                "desc": "Forcefully execute the weekly booster Diamond Raffle.",
+                "desc": "Forcefully execute the weekly booster Diamond Raffle. Uses excess allocation logic when fewer boosters than slots.",
                 "access": "admin",
                 "params": [
                     {
@@ -1093,8 +1158,20 @@ const DB_DATA = [
                 "params": []
             },
             {
+                "syntax": "/anon sync",
+                "desc": "Force re-number all anonymous messages sequentially (fixes gaps from deletions).",
+                "access": "admin",
+                "params": []
+            },
+            {
                 "syntax": "/confessions deploy",
                 "desc": "Deploy the anonymous confessions board panel.",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "/confessions sync",
+                "desc": "Force re-number all confessions sequentially (fixes gaps from deletions).",
                 "access": "admin",
                 "params": []
             },
@@ -1558,7 +1635,7 @@ const DB_DATA = [
             {
                 "syntax": "/booster list",
                 "desc": "List all active server boosters with their tier and duration.",
-                "access": "booster",
+                "access": "admin",
                 "params": []
             }
         ]
