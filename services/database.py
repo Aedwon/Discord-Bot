@@ -452,6 +452,7 @@ class Database:
                 message_id BIGINT NULL,
                 channel_id BIGINT NOT NULL,
                 proof_thread_id BIGINT NULL,
+                winners_thread_id BIGINT NULL,
                 ends_at DATETIME NULL,
                 status VARCHAR(20) NOT NULL DEFAULT 'active',
                 winners TEXT NULL,
@@ -459,6 +460,11 @@ class Database:
             )
         ''')
         
+        try:
+            await self.execute("ALTER TABLE event_raffles ADD COLUMN winners_thread_id BIGINT NULL")
+        except Exception:
+            pass
+            
         await self.execute('''
             CREATE TABLE IF NOT EXISTS event_raffle_entries (
                 raffle_id INT NOT NULL,

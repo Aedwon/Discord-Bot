@@ -303,6 +303,8 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
             host_member = guild.get_member(host_id)
             if host_member:
                 await winner_thread.add_user(host_member)
+                
+            await db.execute("UPDATE event_raffles SET winners_thread_id = %s WHERE id = %s", (winner_thread.id, raffle_id))
 
         except Exception as e:
             logger.error(f"Failed to create winner thread: {e}")
@@ -357,11 +359,11 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                     logger.warning(f"Could not update rerolled embed: {e}")
 
                 # Announce
-                await channel.send(f"🎲 **Reroll!** <@{new_winner_id}> has replaced {disqualified_user.mention} in the **{raffle['title']}** raffle!")
+                await channel.send(f"🎲 **Reroll!** <@{new_winner_id}> has replaced **{disqualified_user.display_name}** in the **{raffle['title']}** raffle!")
                 
-                # Update Proof Thread
-                if raffle.get('proof_thread_id'):
-                    thread = guild.get_thread(raffle['proof_thread_id'])
+                # Update Winners Thread
+                if raffle.get('winners_thread_id'):
+                    thread = guild.get_thread(raffle.get('winners_thread_id'))
                     if thread:
                         # Attempt to remove disqualified
                         try:
@@ -372,14 +374,16 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                             pass
                         
                         # Add new winner
+                        new_winner_name = f"User {new_winner_id}"
                         try:
                             new_member = guild.get_member(new_winner_id)
                             if new_member:
                                 await thread.add_user(new_member)
+                                new_winner_name = new_member.display_name
                         except Exception:
                             pass
                         
-                        await thread.send(f"🎲 **Reroll:** {disqualified_user.mention} was disqualified. Welcome <@{new_winner_id}> to the winners lounge!")
+                        await thread.send(f"🎲 **Reroll:** **{disqualified_user.display_name}** was disqualified. Welcome **{new_winner_name}** to the winners lounge!")
                         
             await interaction.followup.send(f"✅ Replaced {disqualified_user.mention} with <@{new_winner_id}>.", ephemeral=True)
 
@@ -420,9 +424,9 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                 # Announce
                 await channel.send(f"🎲 **Full Reroll!** The **{raffle['title']}** raffle has been completely redrawn.\nNew Winners: {winner_mentions}")
                 
-                # Update Proof Thread
-                if raffle.get('proof_thread_id'):
-                    thread = guild.get_thread(raffle['proof_thread_id'])
+                # Update Winners Thread
+                if raffle.get('winners_thread_id'):
+                    thread = guild.get_thread(raffle.get('winners_thread_id'))
                     if thread:
                         # Attempt to remove all old
                         for old_w in current_winners:
@@ -434,15 +438,21 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
                                 pass
                                 
                         # Add new
+                        winner_names_list = []
                         for new_w in new_winners_list:
                             try:
                                 new_member = guild.get_member(new_w)
                                 if new_member:
                                     await thread.add_user(new_member)
+                                    winner_names_list.append(f"**{new_member.display_name}**")
+                                else:
+                                    winner_names_list.append(f"**User {new_w}**")
                             except Exception:
-                                pass
+                                winner_names_list.append(f"**User {new_w}**")
+                                
+                        winner_names_str = ", ".join(winner_names_list)
                         
-                        await thread.send(f"🎲 **Full Reroll Executed!** Previous winners were removed. Welcome the new winners: {winner_mentions}")
+                        await thread.send(f"🎲 **Full Reroll Executed!** Previous winners were removed. Welcome the new winners: {winner_names_str}")
                         
             await interaction.followup.send("✅ Full reroll complete.", ephemeral=True)
 
