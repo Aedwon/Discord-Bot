@@ -242,14 +242,18 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             diamonds = count * DIAMONDS_PER_WIN
             total_diamonds += diamonds
             
+            user_obj = self.bot.get_user(uid)
+            if not user_obj:
+                try: user_obj = await self.bot.fetch_user(uid)
+                except: pass
+            name_disp = user_obj.display_name if user_obj else f"User {uid}"
+            name_disp = name_disp.replace("*", "").replace("_", "").replace("`", "")
+            
             if count > 1:
                 excess_count = count - 1
-                lines.append(
-                    f"🏆 <@{uid}> — **{diamonds} 💎** "
-                    f"(1 win + {excess_count} excess)"
-                )
+                lines.append(f"🏆 **{name_disp}** — **{diamonds} 💎** (1 win + {excess_count} excess)")
             else:
-                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎**")
+                lines.append(f"🏆 **{name_disp}** — **{diamonds} 💎**")
         
         description_parts = [
             f"Thank you to everyone who boosts the server!\n"
@@ -280,9 +284,11 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         booster_role_id = await settings_service.get_int("server_booster_role_id")
         role_ping = f"<@&{booster_role_id}>" if booster_role_id else ""
         
+        winner_pings = " ".join([f"<@{uid}>" for uid, _ in sorted_winners])
+        
         try:
             await channel.send(
-                content=f"{role_ping}\n🎉 Congratulations to our celestial ascended boosters!".strip(),
+                content=f"{role_ping}\n🎉 Congratulations to our celestial ascended boosters!\n\n{winner_pings}".strip(),
                 embed=embed
             )
         except Exception as e:
@@ -672,11 +678,20 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             diamonds = count * DIAMONDS_PER_WIN
             total_diamonds += diamonds
             
+            user_obj = self.bot.get_user(uid)
+            if not user_obj:
+                try: user_obj = await self.bot.fetch_user(uid)
+                except: pass
+            name_disp = user_obj.display_name if user_obj else f"User {uid}"
+            name_disp = name_disp.replace("*", "").replace("_", "").replace("`", "")
+            
             if count > 1:
                 excess_count = count - 1
-                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎** (1 win + {excess_count} excess)")
+                lines.append(f"🏆 **{name_disp}** — **{diamonds} 💎** (1 win + {excess_count} excess)")
             else:
-                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎**")
+                lines.append(f"🏆 **{name_disp}** — **{diamonds} 💎**")
+                
+        winner_pings = " ".join([f"<@{uid}>" for uid, _ in sorted_winners])
                 
         # 9. Find the original message
         out_channel_id = await settings_service.get_int("boost_public_channel_id")
@@ -700,8 +715,12 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             new_desc = header + "\n" + "\n".join(lines) + f"\n\n**Total Diamonds this week:** 💎 **{total_diamonds:,}**"
             embed.description = new_desc
             embed.title = "✨ Weekly Booster Raffle Winners! (UPDATED) ✨"
+            
+            base_content = target_msg.content.split("\n\n")[0] if "\n\n" in target_msg.content else target_msg.content
+            new_content = f"{base_content}\n\n{winner_pings}"
+            
             try:
-                await target_msg.edit(embed=embed)
+                await target_msg.edit(content=new_content, embed=embed)
             except Exception as e:
                 logger.error(f"Failed to edit target msg: {e}")
                 
@@ -777,13 +796,31 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']): msl_active.add(r['user_id'])
             pool = [b for b in active_boosters if b['user_id'] not in msl_active]
             
-            tickets = []
-            for b_user in pool: tickets.extend([b_user['user_id']] * b_user['raffle_entries'])
+            # Fetch baseline excess for fairness
+            excess_this_month = await db.fetch_all('''
+                SELECT user_id, COUNT(*) as excess_count
+                FROM booster_raffle_history
+                WHERE MONTH(won_at) = MONTH(%s)
+                  AND YEAR(won_at) = YEAR(%s)
+                  AND is_excess = TRUE
+                GROUP BY user_id
+            ''', (target_time, target_time))
+            monthly_excess = {row['user_id']: row['excess_count'] for row in excess_this_month}
                 
             for _ in range(missing):
-                if not tickets: break
-                w = secrets.choice(tickets)
+                candidates = []
+                for b_user in pool:
+                    uid = b_user['user_id']
+                    count = monthly_excess.get(uid, 0)
+                    candidates.append((uid, count))
+                if not candidates: break
+                
+                min_excess = min(c[1] for c in candidates)
+                tied = [uid for uid, count in candidates if count == min_excess]
+                w = secrets.choice(tied)
+                
                 await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, TRUE, %s)", (w, target_time))
+                monthly_excess[w] = monthly_excess.get(w, 0) + 1
                 
         # 6. Rebuild Embed
         updated_records = await db.fetch_all('''
@@ -802,17 +839,31 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         for uid, count in sorted_winners:
             diamonds = count * DIAMONDS_PER_WIN
             total_diamonds += diamonds
+            
+            user_obj = self.bot.get_user(uid)
+            if not user_obj:
+                try: user_obj = await self.bot.fetch_user(uid)
+                except: pass
+            name_disp = user_obj.display_name if user_obj else f"User {uid}"
+            name_disp = name_disp.replace("*", "").replace("_", "").replace("`", "")
+            
             if count > 1:
-                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎** (1 win + {count - 1} excess)")
+                lines.append(f"🏆 **{name_disp}** — **{diamonds} 💎** (1 win + {count - 1} excess)")
             else:
-                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎**")
+                lines.append(f"🏆 **{name_disp}** — **{diamonds} 💎**")
+                
+        winner_pings = " ".join([f"<@{uid}>" for uid, _ in sorted_winners])
                 
         embed = target_msg.embeds[0]
         header = embed.description.split("\n🏆")[0]
         embed.description = header + "\n" + "\n".join(lines) + f"\n\n**Total Diamonds this week:** 💎 **{total_diamonds:,}**"
-        embed.title = "✨ Weekly Booster Raffle Winners! (RESTORED) ✨"
+        embed.title = "✨ Weekly Booster Raffle Winners! (SURGEON CLEAN) ✨"
+        
+        base_content = target_msg.content.split("\n\n")[0] if "\n\n" in target_msg.content else target_msg.content
+        new_content = f"{base_content}\n\n{winner_pings}"
+        
         try:
-            await target_msg.edit(embed=embed)
+            await target_msg.edit(content=new_content, embed=embed)
         except Exception as e:
             logger.error(f"Surgeon msg edit failed: {e}")
         
