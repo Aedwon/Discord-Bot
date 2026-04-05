@@ -1099,7 +1099,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/force-booster-raffle",
-                "desc": "Forcefully execute the weekly booster Diamond Raffle. Uses excess allocation logic when fewer boosters than slots.",
+                "desc": "Forcefully execute the weekly booster Diamond Raffle. Pings Server Booster role. Counts as this week's raffle (auto raffle won't re-run).",
                 "access": "admin",
                 "params": [
                     {
@@ -1108,6 +1108,12 @@ const DB_DATA = [
                         "required": false
                     }
                 ]
+            },
+            {
+                "syntax": "/booster-raffle-status",
+                "desc": "Diagnostic dashboard for the auto booster raffle: channel/role config, booster count, this-week execution status, and next scheduled time with Unix timestamps.",
+                "access": "admin",
+                "params": []
             }
         ]
     },

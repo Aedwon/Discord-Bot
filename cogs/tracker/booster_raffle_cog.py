@@ -31,7 +31,18 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         now = datetime.datetime.now(TZ_MANILA)
         if now.weekday() != 6:  # 0 is Monday, 6 is Sunday
             return
-            
+
+        # Skip if a raffle was already executed this ISO week
+        # (e.g., admin used /force-booster-raffle earlier this week)
+        # YEARWEEK(date, 1) uses ISO mode: Mon=start, Sun=end of week
+        existing = await db.fetch_one('''
+            SELECT COUNT(*) as cnt FROM booster_raffle_history
+            WHERE YEARWEEK(won_at, 1) = YEARWEEK(CURRENT_DATE(), 1)
+        ''')
+        if existing and existing['cnt'] > 0:
+            logger.info("Weekly auto-raffle skipped — already executed this ISO week (forced or prior auto).")
+            return
+
         await self._execute_raffle(is_manual=False)
 
     @weekly_raffle.before_loop
@@ -244,13 +255,153 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         )
         embed.set_footer(text=f"{DIAMONDS_PER_WIN} 💎 per slot • May your light guide us through the cosmos.")
         
+        # Resolve Server Booster role for ping
+        booster_role_id = await settings_service.get_int("server_booster_role_id")
+        role_ping = f"<@&{booster_role_id}>" if booster_role_id else ""
+        
         try:
             await channel.send(
-                content="🎉 Congratulations to our celestial ascended boosters!", 
+                content=f"{role_ping}\n🎉 Congratulations to our celestial ascended boosters!".strip(),
                 embed=embed
             )
         except Exception as e:
             logger.error(f"Failed to send raffle announcement: {e}")
+
+    # ── Diagnostic Command ─────────────────────────────────────
+
+    @app_commands.command(
+        name="booster-raffle-status",
+        description="Diagnostic check for the automated booster raffle system (Admin only)"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def raffle_status(self, interaction: discord.Interaction):
+        """Show full raffle system health: config, booster count, week status, schedule."""
+        await interaction.response.defer(ephemeral=True)
+        
+        checks = []
+        all_ok = True
+        
+        # 1. Channel config
+        channel_id = await settings_service.get_int("boost_public_channel_id")
+        if channel_id:
+            ch = self.bot.get_channel(channel_id)
+            if ch:
+                checks.append(f"✅ **Announcement Channel:** {ch.mention}")
+            else:
+                # Try fetching — might be uncached
+                try:
+                    ch = await self.bot.fetch_channel(channel_id)
+                    checks.append(f"✅ **Announcement Channel:** {ch.mention} *(fetched)*")
+                except Exception:
+                    checks.append(f"❌ **Announcement Channel:** ID `{channel_id}` — **not found / inaccessible**")
+                    all_ok = False
+        else:
+            checks.append("❌ **Announcement Channel:** Not configured — run `/setup channel boost_public <#channel>`")
+            all_ok = False
+        
+        # 2. Booster role config
+        role_id = await settings_service.get_int("server_booster_role_id")
+        if role_id:
+            guild = interaction.guild
+            role = guild.get_role(role_id) if guild else None
+            if role:
+                checks.append(f"✅ **Server Booster Role:** {role.mention}")
+            else:
+                checks.append(f"⚠️ **Server Booster Role:** ID `{role_id}` — **role not found in server**")
+        else:
+            checks.append("⚠️ **Server Booster Role:** Not configured — role ping will be skipped. Run `/setup role server <@role>`")
+        
+        # 3. Winner slots config
+        target_slots = await self._get_target_slots()
+        checks.append(f"ℹ️ **Winner Slots:** `{target_slots}` per draw")
+        
+        # 4. Active boosters in DB
+        booster_count = await db.fetch_one('''
+            SELECT COUNT(*) as cnt FROM users 
+            WHERE boost_start_date IS NOT NULL AND raffle_entries > 0
+        ''')
+        cnt = booster_count['cnt'] if booster_count else 0
+        if cnt > 0:
+            if cnt < target_slots:
+                checks.append(f"✅ **Eligible Boosters:** `{cnt}` *(excess allocation will activate: {target_slots - cnt} extra slot(s))*")
+            else:
+                checks.append(f"✅ **Eligible Boosters:** `{cnt}`")
+        else:
+            checks.append("❌ **Eligible Boosters:** `0` — no boosters with `raffle_entries > 0` in DB")
+            all_ok = False
+        
+        # 5. This-week raffle status (ISO week: Mon–Sun)
+        existing = await db.fetch_one('''
+            SELECT COUNT(*) as cnt, MIN(won_at) as first_at FROM booster_raffle_history
+            WHERE YEARWEEK(won_at, 1) = YEARWEEK(CURRENT_DATE(), 1)
+        ''')
+        raffle_ran = existing and existing['cnt'] > 0
+        
+        now = datetime.datetime.now(TZ_MANILA)
+        # Calculate ISO week boundaries for display
+        iso_year, iso_week, iso_day = now.isocalendar()
+        # Monday of this ISO week
+        week_start = now - datetime.timedelta(days=iso_day - 1)
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Sunday end of this ISO week
+        week_end = week_start + datetime.timedelta(days=6, hours=23, minutes=59, seconds=59)
+        
+        week_start_unix = int(week_start.timestamp())
+        week_end_unix = int(week_end.timestamp())
+        
+        checks.append(f"\n📅 **Current ISO Week {iso_week} ({iso_year}):**")
+        checks.append(f"  <t:{week_start_unix}:D> (Mon) → <t:{week_end_unix}:D> (Sun)")
+        
+        if raffle_ran:
+            first_at = existing['first_at']
+            if first_at:
+                if first_at.tzinfo is None:
+                    first_at = pytz.utc.localize(first_at).astimezone(TZ_MANILA)
+                ran_unix = int(first_at.timestamp())
+                checks.append(f"  ✅ **Raffle already ran** — `{existing['cnt']}` records from <t:{ran_unix}:F>")
+            else:
+                checks.append(f"  ✅ **Raffle already ran** — `{existing['cnt']}` records this week")
+            checks.append(f"  🚫 **Auto raffle will be SKIPPED** this Sunday (already executed)")
+        else:
+            checks.append(f"  ⏳ **No raffle yet this week** — auto raffle is active")
+        
+        # 6. Next scheduled auto raffle time
+        # Next Sunday at 08:00 AM PHT
+        days_until_sunday = (6 - now.weekday()) % 7
+        if days_until_sunday == 0 and now.hour >= 8:
+            # It's Sunday past 8 AM — next is next Sunday
+            days_until_sunday = 7
+        elif days_until_sunday == 0 and now.hour < 8:
+            # It's Sunday before 8 AM — today
+            days_until_sunday = 0
+        
+        next_sunday = now.replace(hour=8, minute=0, second=0, microsecond=0) + datetime.timedelta(days=days_until_sunday)
+        next_unix = int(next_sunday.timestamp())
+        
+        checks.append(f"\n⏰ **Next Auto Raffle:**")
+        checks.append(f"  <t:{next_unix}:F> — <t:{next_unix}:R>")
+        
+        if raffle_ran:
+            checks.append(f"  *(Will be skipped — already ran this week)*")
+        
+        # 7. ISO week explanation
+        checks.append(
+            f"\n📖 **Week Definition:** ISO 8601 — Monday through Sunday. "
+            f"A `/force-booster-raffle` on any day Mon–Sun prevents the "
+            f"auto raffle from running on that same week's Sunday."
+        )
+        
+        # Build embed
+        status_emoji = "✅" if all_ok else "⚠️"
+        embed = discord.Embed(
+            title=f"{status_emoji} Booster Raffle System Status",
+            description="\n".join(checks),
+            color=0x00FF00 if all_ok else 0xFFAA00,
+            timestamp=now
+        )
+        embed.set_footer(text="Booster Raffle Diagnostics")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
