@@ -555,23 +555,24 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
     async def reroll_msl(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
 
-        # 1. Fetch latest draw date
+        # 1. Fetch latest draw timestamp
         latest_record = await db.fetch_one('''
-            SELECT MAX(DATE(won_at)) as latest_date 
+            SELECT MAX(won_at) as latest_time 
             FROM booster_raffle_history
         ''')
         
-        if not latest_record or not latest_record['latest_date']:
+        if not latest_record or not latest_record['latest_time']:
             return await interaction.followup.send("❌ No booster raffle history found.")
             
-        latest_date = latest_record['latest_date']
+        latest_time = latest_record['latest_time']
         
-        # 2. Fetch winners from that date
+        # 2. Fetch winners from that exact batch (within a 60 second window)
         wins_records = await db.fetch_all('''
             SELECT user_id, is_excess 
             FROM booster_raffle_history 
-            WHERE DATE(won_at) = %s
-        ''', (latest_date,))
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
+        ''', (latest_time, latest_time))
         
         if not wins_records:
             return await interaction.followup.send("❌ No winners found for the latest raffle.")
@@ -599,11 +600,13 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             if row['user_id'] in msl_winners:
                 stripped_slots += 1
                     
-        # 5. Delete their records
+        # 5. Delete their records from this specific batch
         await db.execute('''
             DELETE FROM booster_raffle_history 
-            WHERE DATE(won_at) = %s AND user_id IN %s
-        ''', (latest_date, tuple(msl_winners)))
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
+              AND user_id IN %s
+        ''', (latest_time, latest_time, tuple(msl_winners)))
         
         # 6. Fetch legitimate active boosters to distribute the stripped slots
         active_boosters = await db.fetch_all('''
@@ -644,17 +647,21 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         if not new_winners:
             return await interaction.followup.send("❌ Could not draw new winners.")
             
-        # 7. Insert new winners
+        # 7. Insert new winners using the EXACT same timestamp so they merge into the batch cleanly
         for wid in new_winners:
-            await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess) VALUES (%s, TRUE)", (wid,))
+            await db.execute(
+                "INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, TRUE, %s)", 
+                (wid, latest_time)
+            )
             
-        # 8. Fetch updated complete tallies for the latest date to reconstruct the embed
+        # 8. Fetch updated complete tallies for THIS EXACT BATCH to reconstruct the embed
         updated_records = await db.fetch_all('''
             SELECT user_id, COUNT(*) as total_wins 
             FROM booster_raffle_history 
-            WHERE DATE(won_at) = %s
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
             GROUP BY user_id
-        ''', (latest_date,))
+        ''', (latest_time, latest_time))
         
         win_counts = {r['user_id']: r['total_wins'] for r in updated_records}
         sorted_winners = sorted(win_counts.items(), key=lambda x: x[1], reverse=True)
@@ -680,7 +687,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             async for msg in channel.history(limit=100):
                 if msg.author.id == self.bot.user.id and msg.embeds:
                     if msg.embeds[0].title and "Booster Raffle Winners!" in msg.embeds[0].title:
-                        if msg.created_at.astimezone(TZ_MANILA).date() == latest_date:
+                        if msg.created_at.astimezone(TZ_MANILA).date() == latest_time.date():
                             target_msg = msg
                             break
                             
