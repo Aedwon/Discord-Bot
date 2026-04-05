@@ -183,10 +183,8 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 # Ties broken randomly via secrets.choice
                 candidates = []
                 for uid in all_booster_ids:
-                    monthly_excess = excess_count_map.get(uid, 0)
                     draw_excess = excess_winners.count(uid)
-                    total_excess = monthly_excess + draw_excess
-                    candidates.append((uid, total_excess))
+                    candidates.append((uid, draw_excess))
                 
                 # Find minimum excess count among candidates
                 min_excess = min(c[1] for c in candidates)
@@ -796,22 +794,14 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']): msl_active.add(r['user_id'])
             pool = [b for b in active_boosters if b['user_id'] not in msl_active]
             
-            # Fetch baseline excess for fairness
-            excess_this_month = await db.fetch_all('''
-                SELECT user_id, COUNT(*) as excess_count
-                FROM booster_raffle_history
-                WHERE MONTH(won_at) = MONTH(%s)
-                  AND YEAR(won_at) = YEAR(%s)
-                  AND is_excess = TRUE
-                GROUP BY user_id
-            ''', (target_time, target_time))
-            monthly_excess = {row['user_id']: row['excess_count'] for row in excess_this_month}
+            # Track purely localized draw excess for fair equalization
+            draw_excess = {}
                 
             for _ in range(missing):
                 candidates = []
                 for b_user in pool:
                     uid = b_user['user_id']
-                    count = monthly_excess.get(uid, 0)
+                    count = draw_excess.get(uid, 0)
                     candidates.append((uid, count))
                 if not candidates: break
                 
@@ -820,7 +810,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 w = secrets.choice(tied)
                 
                 await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, TRUE, %s)", (w, target_time))
-                monthly_excess[w] = monthly_excess.get(w, 0) + 1
+                draw_excess[w] = draw_excess.get(w, 0) + 1
                 
         # 6. Rebuild Embed
         updated_records = await db.fetch_all('''
@@ -854,9 +844,30 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 
         winner_pings = " ".join([f"<@{uid}>" for uid, _ in sorted_winners])
                 
+        # Rebuild embed description accurately
+        total_boosters = len(sorted_winners)
+        has_excess = any(count > 1 for _, count in sorted_winners)
+        
+        description_parts = [
+            f"Thank you to everyone who boosts the server!\n"
+            f"Here are this week's **{total_boosters}** lucky winners "
+            f"across **{target_slots}** prize slots:\n"
+        ]
+        
+        if has_excess:
+            description_parts.append(
+                f"\n*Since we have {total_boosters} booster(s) for {target_slots} slots, "
+                f"the remaining {target_slots - total_boosters} excess slot(s) have been "
+                f"fairly distributed.*\n\n"
+            )
+        else:
+            description_parts.append("\n")
+            
+        description_parts.append("\n".join(lines))
+        description_parts.append(f"\n\n**Total Diamonds this week:** 💎 **{total_diamonds:,}**")
+        
         embed = target_msg.embeds[0]
-        header = embed.description.split("\n🏆")[0]
-        embed.description = header + "\n" + "\n".join(lines) + f"\n\n**Total Diamonds this week:** 💎 **{total_diamonds:,}**"
+        embed.description = "".join(description_parts)
         embed.title = "✨ Weekly Booster Raffle Winners! (SURGEON CLEAN) ✨"
         
         base_content = target_msg.content.split("\n\n")[0] if "\n\n" in target_msg.content else target_msg.content
