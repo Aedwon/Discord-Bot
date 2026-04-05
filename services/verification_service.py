@@ -19,7 +19,7 @@ logger = logging.getLogger("mlbb_bot.verification")
 class VerificationService:
     def __init__(self):
         self._verified_cache: set[int] = set()
-        self._msl_cache: dict[int, str] = {}  # {uid: nickname}
+        self._msl_cache: dict[tuple[int, int], str] = {}  # {(uid, server): nickname}
         self._loaded = False
 
     # ─── VERIFICATION CACHE ─────────────────────────────────────────────
@@ -138,7 +138,7 @@ class VerificationService:
                         return 0
                     text = await resp.text()
 
-            new_cache: dict[int, str] = {}
+            new_cache: dict[tuple[int, int], str] = {}
             reader = csv.reader(io.StringIO(text))
             rows = list(reader)
 
@@ -147,13 +147,15 @@ class VerificationService:
                 if len(row) < 3:
                     continue
                 nickname = row[0].strip()
+                server_str = row[1].strip()
                 uid_str = row[2].strip()
-                if not uid_str:
+                if not uid_str or not server_str:
                     continue
-                # Handle UIDs that might have non-numeric chars
+                # Handle UIDs and Servers that might have non-numeric chars
                 uid_clean = re.sub(r'\D', '', uid_str)
-                if uid_clean:
-                    new_cache[int(uid_clean)] = nickname
+                server_clean = re.sub(r'\D', '', server_str)
+                if uid_clean and server_clean:
+                    new_cache[(int(uid_clean), int(server_clean))] = nickname
 
             self._msl_cache = new_cache
             logger.info(f"MSL cache loaded: {len(new_cache)} entries")
@@ -163,13 +165,13 @@ class VerificationService:
             logger.error(f"Failed to load MSL cache: {e}")
             return 0
 
-    def is_msl(self, mlbb_uid: int) -> bool:
-        """O(1) check if a UID belongs to an MSL member."""
-        return mlbb_uid in self._msl_cache
+    def is_msl(self, mlbb_uid: int, mlbb_server: int) -> bool:
+        """O(1) check if a UID and Server belong to an MSL member."""
+        return (mlbb_uid, mlbb_server) in self._msl_cache
 
-    def get_msl_nickname(self, mlbb_uid: int) -> str | None:
-        """Get the MSL nickname for a UID, or None if not MSL."""
-        return self._msl_cache.get(mlbb_uid)
+    def get_msl_nickname(self, mlbb_uid: int, mlbb_server: int) -> str | None:
+        """Get the MSL nickname for a UID and Server, or None if not MSL."""
+        return self._msl_cache.get((mlbb_uid, mlbb_server))
 
     @property
     def msl_count(self) -> int:

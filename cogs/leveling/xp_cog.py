@@ -518,8 +518,9 @@ class XpCog(commands.Cog, name="Leveling"):
         if is_verified:
             user_info = await verification_service.get_user_info(target.id)
             uid = user_info['mlbb_uid'] if user_info else None
-            if hasattr(verification_service, 'is_msl') and uid:
-                is_msl = verification_service.is_msl(uid)
+            server = user_info['mlbb_server'] if user_info else None
+            if hasattr(verification_service, 'is_msl') and uid and server:
+                is_msl = verification_service.is_msl(uid, server)
         
         ver_icon = "✅" if is_verified else "❌"
         ver_label = "Verified" if is_verified else "Unverified"

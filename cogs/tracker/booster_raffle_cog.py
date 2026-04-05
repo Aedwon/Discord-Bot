@@ -73,6 +73,24 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             logger.warning("No active boosters found for raffle.")
             return
 
+        # Explicitly filter out any verified MSL members from eligible boosters
+        booster_ids = [b['user_id'] for b in active_boosters]
+        placeholders = ",".join(["%s"] * len(booster_ids))
+        verified_rows = await db.fetch_all(
+            f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})",
+            tuple(booster_ids)
+        )
+        msl_users = set()
+        for r in verified_rows:
+            if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
+                msl_users.add(r['user_id'])
+                
+        active_boosters = [b for b in active_boosters if b['user_id'] not in msl_users]
+        
+        if not active_boosters:
+            logger.warning("No active non-MSL boosters found after filtering.")
+            return
+
         total_boosters = len(active_boosters)
 
         # 2. Fetch users who have won a NORMAL (non-excess) slot THIS calendar month
@@ -528,6 +546,168 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             f"Included **{len(msl_list)}** MSL members and **{len(non_msl_list)}** non-MSL members."
         )
         await interaction.followup.send(response_msg, files=files, ephemeral=True)
+
+    @app_commands.command(
+        name="booster-raffle-reroll-msl",
+        description="Retroactively exclude MSL members from the latest draw and reallocate slots (Admin only)"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def reroll_msl(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+
+        # 1. Fetch latest draw date
+        latest_record = await db.fetch_one('''
+            SELECT MAX(DATE(won_at)) as latest_date 
+            FROM booster_raffle_history
+        ''')
+        
+        if not latest_record or not latest_record['latest_date']:
+            return await interaction.followup.send("❌ No booster raffle history found.")
+            
+        latest_date = latest_record['latest_date']
+        
+        # 2. Fetch winners from that date
+        wins_records = await db.fetch_all('''
+            SELECT user_id, is_excess 
+            FROM booster_raffle_history 
+            WHERE DATE(won_at) = %s
+        ''', (latest_date,))
+        
+        if not wins_records:
+            return await interaction.followup.send("❌ No winners found for the latest raffle.")
+            
+        winner_ids = list({r['user_id'] for r in wins_records})
+        
+        # 3. Identify MSL members among winners
+        placeholders = ",".join(["%s"] * len(winner_ids))
+        verified_rows = await db.fetch_all(
+            f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})",
+            tuple(winner_ids)
+        )
+        
+        msl_winners = set()
+        for r in verified_rows:
+            if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
+                msl_winners.add(r['user_id'])
+                
+        if not msl_winners:
+            return await interaction.followup.send("✅ No MSL members won in the latest booster raffle draw.", ephemeral=True)
+            
+        # 4. Filter records strictly belonging to MSL winners to calculate stripped slots
+        stripped_slots = 0
+        for row in wins_records:
+            if row['user_id'] in msl_winners:
+                stripped_slots += 1
+                    
+        # 5. Delete their records
+        await db.execute('''
+            DELETE FROM booster_raffle_history 
+            WHERE DATE(won_at) = %s AND user_id IN %s
+        ''', (latest_date, tuple(msl_winners)))
+        
+        # 6. Fetch legitimate active boosters to distribute the stripped slots
+        active_boosters = await db.fetch_all('''
+            SELECT user_id, raffle_entries, boost_start_date 
+            FROM users 
+            WHERE boost_start_date IS NOT NULL AND raffle_entries > 0
+        ''')
+        
+        # Filter active boosters
+        booster_ids = [b['user_id'] for b in active_boosters]
+        placeholders2 = ",".join(["%s"] * len(booster_ids))
+        all_ver_rows = await db.fetch_all(
+            f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders2})",
+            tuple(booster_ids)
+        )
+        msl_active = set()
+        for r in all_ver_rows:
+            if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
+                msl_active.add(r['user_id'])
+                
+        pool = [b for b in active_boosters if b['user_id'] not in msl_active]
+        
+        if not pool:
+            return await interaction.followup.send(f"❌ Stripped {stripped_slots} slots from MSL, but no valid boosters exist to receive them!")
+            
+        # Reallocate
+        tickets = []
+        for booster in pool:
+            tickets.extend([booster['user_id']] * booster['raffle_entries'])
+            
+        new_winners = []
+        for _ in range(stripped_slots):
+            if not tickets:
+                break
+            winner = secrets.choice(tickets)
+            new_winners.append(winner)
+            
+        if not new_winners:
+            return await interaction.followup.send("❌ Could not draw new winners.")
+            
+        # 7. Insert new winners
+        for wid in new_winners:
+            await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess) VALUES (%s, TRUE)", (wid,))
+            
+        # 8. Fetch updated complete tallies for the latest date to reconstruct the embed
+        updated_records = await db.fetch_all('''
+            SELECT user_id, COUNT(*) as total_wins 
+            FROM booster_raffle_history 
+            WHERE DATE(won_at) = %s
+            GROUP BY user_id
+        ''', (latest_date,))
+        
+        win_counts = {r['user_id']: r['total_wins'] for r in updated_records}
+        sorted_winners = sorted(win_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        lines = []
+        total_diamonds = 0
+        for uid, count in sorted_winners:
+            diamonds = count * DIAMONDS_PER_WIN
+            total_diamonds += diamonds
+            
+            if count > 1:
+                excess_count = count - 1
+                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎** (1 win + {excess_count} excess)")
+            else:
+                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎**")
+                
+        # 9. Find the original message
+        out_channel_id = await settings_service.get_int("boost_public_channel_id")
+        channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+        target_msg = None
+        
+        if channel:
+            async for msg in channel.history(limit=100):
+                if msg.author.id == self.bot.user.id and msg.embeds:
+                    if msg.embeds[0].title and "Booster Raffle Winners!" in msg.embeds[0].title:
+                        if msg.created_at.astimezone(TZ_MANILA).date() == latest_date:
+                            target_msg = msg
+                            break
+                            
+        if target_msg:
+            embed = target_msg.embeds[0]
+            # Replace description
+            parts = embed.description.split("\n🏆")
+            header = parts[0]
+            
+            new_desc = header + "\n" + "\n".join(lines) + f"\n\n**Total Diamonds this week:** 💎 **{total_diamonds:,}**"
+            embed.description = new_desc
+            embed.title = "✨ Weekly Booster Raffle Winners! (UPDATED) ✨"
+            try:
+                await target_msg.edit(embed=embed)
+            except Exception as e:
+                logger.error(f"Failed to edit target msg: {e}")
+                
+        stripped_str = " ".join([f"<@{u}>" for u in msl_winners])
+        new_str = " ".join([f"<@{u}>" for u in set(new_winners)])
+                
+        await interaction.followup.send(
+            f"✅ **MSL Reroll Complete**\n"
+            f"**Excluded MSL:** {stripped_str}\n"
+            f"**Voided Slots:** `{stripped_slots}`\n"
+            f"**Reallocated To:** {new_str}\n"
+            f"{'(Edited original message!)' if target_msg else '(Original message not found)'}"
+        )
 
 
 async def setup(bot: commands.Bot):

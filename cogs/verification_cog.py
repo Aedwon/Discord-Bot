@@ -88,8 +88,8 @@ class VerificationModal(discord.ui.Modal, title="📝 MLBB Account Verification"
 
             # ── MSL Cross-Reference ──
             msl_status = ""
-            if verification_service.is_msl(uid):
-                msl_nickname = verification_service.get_msl_nickname(uid)
+            if verification_service.is_msl(uid, server):
+                msl_nickname = verification_service.get_msl_nickname(uid, server)
                 msl_role_id = await settings_service.get_int("msl_role_id")
                 if msl_role_id:
                     msl_role = interaction.guild.get_role(msl_role_id)
@@ -394,8 +394,9 @@ class VerificationCog(commands.Cog, name="verification"):
             )
 
         mlbb_uid = info['mlbb_uid']
-        if verification_service.is_msl(mlbb_uid):
-            nickname = verification_service.get_msl_nickname(mlbb_uid)
+        mlbb_server = info['mlbb_server']
+        if verification_service.is_msl(mlbb_uid, mlbb_server):
+            nickname = verification_service.get_msl_nickname(mlbb_uid, mlbb_server)
             msl_role_id = await settings_service.get_int("msl_role_id")
 
             # Grant role if not already assigned

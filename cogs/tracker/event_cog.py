@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from services.database import db
 from services.settings_service import settings_service
+from services.verification_service import verification_service
 from utils.checks import require_admin_auth
 
 logger = logging.getLogger("mlbb_bot.event_cog")
@@ -287,6 +288,14 @@ class EventCog(commands.Cog, name="Event"):
         if not (1 <= total_ep_value <= 100000): return await interaction.response.send_message("❌ EP Bounds Violation.", ephemeral=True)
             
         await interaction.response.defer() 
+        
+        # Prevent MSL members from winning placements
+        v_info = await verification_service.get_user_info(user.id)
+        if v_info and verification_service.is_msl(v_info['mlbb_uid'], v_info['mlbb_server']):
+            return await interaction.followup.send(
+                f"❌ **Blocked:** {user.mention} is an MSL member and cannot receive event placement rewards.",
+                ephemeral=True
+            )
             
         history = await db.fetch_one("SELECT SUM(ep_awarded) as total FROM guild_event_rewards WHERE event_id = %s AND user_id = %s", (event_id_int, user.id))
         already_earned = history['total'] if history and history['total'] else 0

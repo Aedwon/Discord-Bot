@@ -13,6 +13,7 @@ import json
 import logging
 
 from services.database import db
+from services.verification_service import verification_service
 
 logger = logging.getLogger("mlbb_bot.event_raffle")
 
@@ -235,10 +236,22 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
 
         # Select winners with cryptographic randomness
         participant_ids = [e['user_id'] for e in entries]
-        winner_count = min(raffle['winner_count'], len(participant_ids))
+        
+        # Determine MSL members and exclude them from the pool
+        placeholders = ",".join(["%s"] * len(participant_ids))
+        verified_rows = await db.fetch_all(
+            f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})",
+            tuple(participant_ids)
+        )
+        msl_users = set()
+        for r in verified_rows:
+            if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
+                msl_users.add(r['user_id'])
+                
+        pool = [uid for uid in participant_ids if uid not in msl_users]
+        winner_count = min(raffle['winner_count'], len(pool))
 
         winners = []
-        pool = participant_ids.copy()
         for _ in range(winner_count):
             winner = secrets.choice(pool)
             winners.append(winner)
