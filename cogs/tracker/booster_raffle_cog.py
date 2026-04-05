@@ -738,14 +738,16 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         name="booster-raffle-surgeon",
         description="Emergency fix to purge test rounds and restore the target message's integrity."
     )
-    @app_commands.describe(message_id="The discord message ID of the booster raffle announcement to fix")
+    @app_commands.describe(message_link_or_id="The discord message link (or raw ID) of the booster raffle announcement")
     @app_commands.default_permissions(administrator=True)
-    async def surgeon_msl(self, interaction: discord.Interaction, message_id: str):
+    async def surgeon_msl(self, interaction: discord.Interaction, message_link_or_id: str):
         await interaction.response.defer(ephemeral=False)
         
         # 1. Look up the message
         try:
-            msg_id_int = int(message_id)
+            # Parse raw ID if a link is provided: https://discord.com/channels/xxxxx/yyyyy/zzzzzz
+            raw_id_str = message_link_or_id.strip().split("/")[-1]
+            msg_id_int = int(raw_id_str)
             out_channel_id = await settings_service.get_int("boost_public_channel_id")
             channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
             target_msg = await channel.fetch_message(msg_id_int)
@@ -892,7 +894,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         except Exception as e:
             logger.error(f"Surgeon msg edit failed: {e}")
         
-        await interaction.followup.send(f"✅ **Surgical Repair Complete!**\nPurged all anomalies generated during testing and restored the specific message `{message_id}` back exactly to {len(updated_records)} slots (accounting for MSL removal).")
+        await interaction.followup.send(f"✅ **Surgical Repair Complete!**\nPurged all anomalies generated during testing and restored the specific message `{message_link_or_id}` back exactly to {len(updated_records)} slots (accounting for MSL removal).")
 
 
 async def setup(bot: commands.Bot):
