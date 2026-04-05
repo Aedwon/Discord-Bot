@@ -716,6 +716,108 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             f"{'(Edited original message!)' if target_msg else '(Original message not found)'}"
         )
 
+    @app_commands.command(
+        name="booster-raffle-surgeon",
+        description="Emergency fix to purge test rounds and restore the target message's integrity."
+    )
+    @app_commands.describe(message_id="The discord message ID of the booster raffle announcement to fix")
+    @app_commands.default_permissions(administrator=True)
+    async def surgeon_msl(self, interaction: discord.Interaction, message_id: str):
+        await interaction.response.defer(ephemeral=False)
+        
+        # 1. Look up the message
+        try:
+            msg_id_int = int(message_id)
+            out_channel_id = await settings_service.get_int("boost_public_channel_id")
+            channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+            target_msg = await channel.fetch_message(msg_id_int)
+        except Exception:
+            return await interaction.followup.send("❌ Cannot find the specified message in the booster channel.")
+            
+        target_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+        target_date = target_time.date()
+        target_slots = await self._get_target_slots()
+        
+        # 2. Delete ALL rows drawn on that day EXCEPT the ones within 60s of the target message
+        await db.execute('''
+            DELETE FROM booster_raffle_history
+            WHERE DATE(won_at) = %s 
+              AND (won_at < DATE_SUB(%s, INTERVAL 60 SECOND) OR won_at > DATE_ADD(%s, INTERVAL 60 SECOND))
+        ''', (target_date, target_time, target_time))
+        
+        # 3. Check how many slots remain in the target batch
+        rem_records = await db.fetch_all('''
+            SELECT user_id FROM booster_raffle_history
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
+        ''', (target_time, target_time))
+        
+        current_count = len(rem_records)
+        missing = target_slots - current_count
+        
+        # 4. Filter MSL from the target batch explicitly just in case any remained
+        winner_ids = list({r['user_id'] for r in rem_records})
+        if winner_ids:
+            placeholders = ",".join(["%s"] * len(winner_ids))
+            ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})", tuple(winner_ids))
+            for r in ver_rows:
+                if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
+                    await db.execute("DELETE FROM booster_raffle_history WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND) AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND) AND user_id = %s", (target_time, target_time, r['user_id']))
+                    missing += list(x['user_id'] == r['user_id'] for x in rem_records).count(True)
+                    
+        # 5. Bring batch up to target_slots
+        if missing > 0:
+            # Re-fetch active pool
+            active_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
+            booster_ids = [b['user_id'] for b in active_boosters]
+            placeholders2 = ",".join(["%s"] * len(booster_ids))
+            all_ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders2})", tuple(booster_ids))
+            msl_active = set()
+            for r in all_ver_rows:
+                if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']): msl_active.add(r['user_id'])
+            pool = [b for b in active_boosters if b['user_id'] not in msl_active]
+            
+            tickets = []
+            for b_user in pool: tickets.extend([b_user['user_id']] * b_user['raffle_entries'])
+                
+            for _ in range(missing):
+                if not tickets: break
+                w = secrets.choice(tickets)
+                await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, TRUE, %s)", (w, target_time))
+                
+        # 6. Rebuild Embed
+        updated_records = await db.fetch_all('''
+            SELECT user_id, COUNT(*) as total_wins 
+            FROM booster_raffle_history 
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
+            GROUP BY user_id
+        ''', (target_time, target_time))
+        
+        win_counts = {r['user_id']: r['total_wins'] for r in updated_records}
+        sorted_winners = sorted(win_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        lines = []
+        total_diamonds = 0
+        for uid, count in sorted_winners:
+            diamonds = count * DIAMONDS_PER_WIN
+            total_diamonds += diamonds
+            if count > 1:
+                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎** (1 win + {count - 1} excess)")
+            else:
+                lines.append(f"🏆 <@{uid}> — **{diamonds} 💎**")
+                
+        embed = target_msg.embeds[0]
+        header = embed.description.split("\n🏆")[0]
+        embed.description = header + "\n" + "\n".join(lines) + f"\n\n**Total Diamonds this week:** 💎 **{total_diamonds:,}**"
+        embed.title = "✨ Weekly Booster Raffle Winners! (RESTORED) ✨"
+        try:
+            await target_msg.edit(embed=embed)
+        except Exception as e:
+            logger.error(f"Surgeon msg edit failed: {e}")
+        
+        await interaction.followup.send(f"✅ **Surgical Repair Complete!**\nPurged all anomalies generated during testing and restored the specific message `{message_id}` back exactly to {len(updated_records)} slots (accounting for MSL removal).")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BoosterRaffleCog(bot))
