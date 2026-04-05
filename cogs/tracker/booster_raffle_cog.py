@@ -183,13 +183,14 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 # Ties broken randomly via secrets.choice
                 candidates = []
                 for uid in all_booster_ids:
+                    monthly_excess = excess_count_map.get(uid, 0)
                     draw_excess = excess_winners.count(uid)
-                    candidates.append((uid, draw_excess))
+                    candidates.append((uid, draw_excess, monthly_excess))
                 
-                # Find minimum excess count among candidates
-                min_excess = min(c[1] for c in candidates)
-                # All candidates tied at minimum excess
-                tied = [uid for uid, count in candidates if count == min_excess]
+                # Find minimum (draw_excess, monthly_excess)
+                min_sort_key = min((c[1], c[2]) for c in candidates)
+                # Filter candidates tied for absolute parity priority
+                tied = [uid for uid, c_draw, c_month in candidates if (c_draw, c_month) == min_sort_key]
                 
                 chosen = secrets.choice(tied)
                 excess_winners.append(chosen)
@@ -794,23 +795,36 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']): msl_active.add(r['user_id'])
             pool = [b for b in active_boosters if b['user_id'] not in msl_active]
             
-            # Track purely localized draw excess for fair equalization
+            # Fetch baseline excess for historical fairness fallback
+            excess_this_month = await db.fetch_all('''
+                SELECT user_id, COUNT(*) as excess_count
+                FROM booster_raffle_history
+                WHERE MONTH(won_at) = MONTH(%s)
+                  AND YEAR(won_at) = YEAR(%s)
+                  AND is_excess = TRUE
+                GROUP BY user_id
+            ''', (target_time, target_time))
+            monthly_excess = {row['user_id']: row['excess_count'] for row in excess_this_month}
+            
+            # Track purely localized draw excess for immediate draw parity
             draw_excess = {}
                 
             for _ in range(missing):
                 candidates = []
                 for b_user in pool:
                     uid = b_user['user_id']
-                    count = draw_excess.get(uid, 0)
-                    candidates.append((uid, count))
+                    c_draw = draw_excess.get(uid, 0)
+                    c_month = monthly_excess.get(uid, 0)
+                    candidates.append((uid, c_draw, c_month))
                 if not candidates: break
                 
-                min_excess = min(c[1] for c in candidates)
-                tied = [uid for uid, count in candidates if count == min_excess]
+                min_sort_key = min((c[1], c[2]) for c in candidates)
+                tied = [uid for uid, c_draw, c_month in candidates if (c_draw, c_month) == min_sort_key]
                 w = secrets.choice(tied)
                 
                 await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, TRUE, %s)", (w, target_time))
                 draw_excess[w] = draw_excess.get(w, 0) + 1
+                monthly_excess[w] = monthly_excess.get(w, 0) + 1
                 
         # 6. Rebuild Embed
         updated_records = await db.fetch_all('''
