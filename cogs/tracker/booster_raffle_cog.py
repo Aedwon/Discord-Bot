@@ -5,10 +5,13 @@ import datetime
 import logging
 import pytz
 import secrets
+import csv
+import io
 from collections import Counter
 
 from services.database import db
 from services.settings_service import settings_service
+from services.verification_service import verification_service
 from utils.constants import TZ_MANILA
 
 logger = logging.getLogger('mlbb_bot')
@@ -402,6 +405,129 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         embed.set_footer(text="Booster Raffle Diagnostics")
         
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="booster-raffle-export",
+        description="Export the latest booster raffle winners to CSVs (Admin only)"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def raffle_export(self, interaction: discord.Interaction):
+        """Build MSL and Non-MSL CSVs for the most recent booster raffle draw."""
+        await interaction.response.defer(ephemeral=True)
+        
+        # 1. Get the latest raffle execution date
+        latest_record = await db.fetch_one('''
+            SELECT MAX(DATE(won_at)) as latest_date 
+            FROM booster_raffle_history
+        ''')
+        
+        if not latest_record or not latest_record['latest_date']:
+            return await interaction.followup.send("❌ No booster raffle history found.", ephemeral=True)
+            
+        latest_date = latest_record['latest_date']
+        
+        # 2. Fetch all wins from that date
+        wins_records = await db.fetch_all('''
+            SELECT user_id, COUNT(*) as total_wins 
+            FROM booster_raffle_history 
+            WHERE DATE(won_at) = %s
+            GROUP BY user_id
+        ''', (latest_date,))
+        
+        if not wins_records:
+            return await interaction.followup.send("❌ No winners found for the latest raffle.", ephemeral=True)
+            
+        winner_ids = [r['user_id'] for r in wins_records]
+        wins_map = {r['user_id']: r['total_wins'] for r in wins_records}
+        
+        # 3. Identify verification data for all winners
+        placeholders = ",".join(["%s"] * len(winner_ids))
+        verified_rows = await db.fetch_all(
+            f"SELECT user_id, full_name, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})",
+            tuple(winner_ids)
+        )
+        verified_map = {rk['user_id']: rk for rk in verified_rows}
+        
+        unverified_ids = [wid for wid in winner_ids if wid not in verified_map]
+        
+        # Block export if any unverified users found
+        if unverified_ids:
+            pings = " ".join([f"<@{uid}>" for uid in unverified_ids])
+            msg = (
+                f"❌ **Export Blocked — Unverified Winners Detected.**\n"
+                f"The following winners have not completed MLBB verification.\n\n"
+                f"**Copy/Paste this to the booster channel:**\n"
+                f"```\n"
+                f"Please verify to claim your Server Booster Raffle rewards: {pings}\n"
+                f"```"
+            )
+            return await interaction.followup.send(msg, ephemeral=True)
+            
+        # 4. Filter into MSL and Non-MSL arrays
+        msl_list = []
+        non_msl_list = []
+        
+        date_str = latest_date.strftime("%Y/%m/%d")
+        remarks_str = f"MSL Network Discord - Server Booster Raffle - ({date_str})"
+        
+        for wid in winner_ids:
+            v_info = verified_map[wid]
+            uid = v_info['mlbb_uid']
+            amount = wins_map[wid] * DIAMONDS_PER_WIN
+            
+            if verification_service.is_msl(uid):
+                msl_nickname = verification_service.get_msl_nickname(uid)
+                msl_list.append([
+                    msl_nickname,
+                    amount,
+                    remarks_str
+                ])
+            else:
+                non_msl_list.append([
+                    v_info['full_name'],
+                    uid,
+                    v_info['mlbb_server'],
+                    amount,
+                    remarks_str
+                ])
+                
+        # 5. Build attachments
+        files = []
+        file_date = date_str.replace('/', '-')
+        
+        if msl_list:
+            msl_out = io.StringIO()
+            msl_out.write('\ufeff') # UTF-8 BOM
+            msl_writer = csv.writer(msl_out)
+            msl_writer.writerow(["MSL Nickname", "Amount", "Remarks"])
+            msl_writer.writerows(msl_list)
+            msl_out.seek(0)
+            files.append(
+                discord.File(
+                    fp=io.BytesIO(msl_out.getvalue().encode('utf-8-sig')), 
+                    filename=f"msl_booster_raffle_{file_date}.csv"
+                )
+            )
+            
+        if non_msl_list:
+            non_msl_out = io.StringIO()
+            non_msl_out.write('\ufeff')
+            non_msl_writer = csv.writer(non_msl_out)
+            non_msl_writer.writerow(["Full Name", "UID", "Server", "Amount", "Remarks"])
+            non_msl_writer.writerows(non_msl_list)
+            non_msl_out.seek(0)
+            files.append(
+                discord.File(
+                    fp=io.BytesIO(non_msl_out.getvalue().encode('utf-8-sig')), 
+                    filename=f"non_msl_booster_raffle_{file_date}.csv"
+                )
+            )
+            
+        response_msg = (
+            f"✅ Exported **{len(winner_ids)}** winners from the **{date_str}** draw.\n"
+            f"Included **{len(msl_list)}** MSL members and **{len(non_msl_list)}** non-MSL members."
+        )
+        await interaction.followup.send(response_msg, files=files, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

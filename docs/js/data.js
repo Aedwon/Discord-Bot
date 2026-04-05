@@ -1114,6 +1114,12 @@ const DB_DATA = [
                 "desc": "Diagnostic dashboard for the auto booster raffle: channel/role config, booster count, this-week execution status, and next scheduled time with Unix timestamps.",
                 "access": "admin",
                 "params": []
+            },
+            {
+                "syntax": "/booster-raffle-export",
+                "desc": "Export the latest booster raffle winners to separated MSL and Non-MSL CSVs.",
+                "access": "admin",
+                "params": []
             }
         ]
     },

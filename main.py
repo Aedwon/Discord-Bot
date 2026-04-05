@@ -429,6 +429,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/booster list`**", "List all server boosters"),
                 ("**`/force-booster-raffle`**", "Force execute weekly raffle"),
                 ("**`/booster-raffle-status`**", "Diagnose auto raffle system"),
+                ("**`/booster-raffle-export`**", "Export latest raffle to CSV"),
                 ("**`/event …`**", "Event kiosk, placement, status + 8 more"),
                 ("**`/event raffle …`**", "Create, draw, reroll, cancel raffles"),
                 ("**`/analytics …`**", "12+ server analytics commands"),
