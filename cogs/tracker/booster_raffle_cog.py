@@ -792,8 +792,21 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         # 5. Bring batch up to target_slots
         if missing > 0:
             # Re-fetch active pool
-            active_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
+            raw_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
+            
+            # 5.1 Filter out any boosters who started boosting AFTER the original draw
+            active_boosters = []
+            for b in raw_boosters:
+                bst = b['boost_start_date']
+                if bst.tzinfo is None:
+                    bst = pytz.utc.localize(bst)
+                if bst <= target_msg.created_at:
+                    active_boosters.append(b)
+
             booster_ids = [b['user_id'] for b in active_boosters]
+            if not booster_ids:
+                return await interaction.followup.send("❌ Cannot complete surgery: No boosters were eligible before that message timestamp.")
+
             placeholders2 = ",".join(["%s"] * len(booster_ids))
             all_ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders2})", tuple(booster_ids))
             msl_active = set()
