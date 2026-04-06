@@ -765,9 +765,9 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
               AND (won_at < DATE_SUB(%s, INTERVAL 60 SECOND) OR won_at > DATE_ADD(%s, INTERVAL 60 SECOND))
         ''', (target_date, target_time, target_time))
         
-        # 3. Check how many slots remain in the target batch
+        # 3. Check how many slots remain in the target batch (fetch is_excess to preserve states)
         rem_records = await db.fetch_all('''
-            SELECT user_id FROM booster_raffle_history
+            SELECT user_id, is_excess FROM booster_raffle_history
             WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
               AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
         ''', (target_time, target_time))
@@ -776,6 +776,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         missing = target_slots - current_count
         
         # 4. Filter MSL from the target batch explicitly just in case any remained
+        # Calculate exactly how many records belonging to MSL were just deleted to add to 'missing'
         winner_ids = list({r['user_id'] for r in rem_records})
         if winner_ids:
             placeholders = ",".join(["%s"] * len(winner_ids))
@@ -783,7 +784,10 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             for r in ver_rows:
                 if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
                     await db.execute("DELETE FROM booster_raffle_history WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND) AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND) AND user_id = %s", (target_time, target_time, r['user_id']))
-                    missing += list(x['user_id'] == r['user_id'] for x in rem_records).count(True)
+                    deleted_count = list(x['user_id'] == r['user_id'] for x in rem_records).count(True)
+                    missing += deleted_count
+                    # Discard these records from our in-memory list since they're purged
+                    rem_records = [x for x in rem_records if x['user_id'] != r['user_id']]
                     
         # 5. Bring batch up to target_slots
         if missing > 0:
@@ -797,36 +801,51 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']): msl_active.add(r['user_id'])
             pool = [b for b in active_boosters if b['user_id'] not in msl_active]
             
-            # Fetch baseline excess for historical fairness fallback
-            excess_this_month = await db.fetch_all('''
-                SELECT user_id, COUNT(*) as excess_count
-                FROM booster_raffle_history
-                WHERE MONTH(won_at) = MONTH(%s)
-                  AND YEAR(won_at) = YEAR(%s)
-                  AND is_excess = TRUE
-                GROUP BY user_id
-            ''', (target_time, target_time))
-            monthly_excess = {row['user_id']: row['excess_count'] for row in excess_this_month}
+            # Identify existing allocations in the target batch
+            existing_normal_wins = {r['user_id'] for r in rem_records if not r['is_excess']}
+            existing_excess_counts = Counter(r['user_id'] for r in rem_records if r['is_excess'])
             
-            # Track purely localized draw excess for immediate draw parity
-            draw_excess = {}
+            # Step 5A: Distribute missing regular slots to valid pool members without a normal win
+            missing_normals = [b for b in pool if b['user_id'] not in existing_normal_wins]
+            for b in missing_normals:
+                if missing <= 0: break
+                uid = b['user_id']
+                await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, FALSE, %s)", (uid, target_time))
+                existing_normal_wins.add(uid)
+                missing -= 1
+            
+            # Step 5B: Distribute remaining missing slots as Excess fairly
+            if missing > 0:
+                # Fetch baseline excess for historical fairness fallback
+                excess_this_month = await db.fetch_all('''
+                    SELECT user_id, COUNT(*) as excess_count
+                    FROM booster_raffle_history
+                    WHERE MONTH(won_at) = MONTH(%s)
+                      AND YEAR(won_at) = YEAR(%s)
+                      AND is_excess = TRUE
+                    GROUP BY user_id
+                ''', (target_time, target_time))
+                monthly_excess = {row['user_id']: row['excess_count'] for row in excess_this_month}
                 
-            for _ in range(missing):
-                candidates = []
-                for b_user in pool:
-                    uid = b_user['user_id']
-                    c_draw = draw_excess.get(uid, 0)
-                    c_month = monthly_excess.get(uid, 0)
-                    candidates.append((uid, c_draw, c_month))
-                if not candidates: break
-                
-                min_sort_key = min((c[1], c[2]) for c in candidates)
-                tied = [uid for uid, c_draw, c_month in candidates if (c_draw, c_month) == min_sort_key]
-                w = secrets.choice(tied)
-                
-                await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, TRUE, %s)", (w, target_time))
-                draw_excess[w] = draw_excess.get(w, 0) + 1
-                monthly_excess[w] = monthly_excess.get(w, 0) + 1
+                # Initialize draw_excess tracking directly with existing_excess_counts so it doesn't double stack!
+                draw_excess = dict(existing_excess_counts)
+                    
+                for _ in range(missing):
+                    candidates = []
+                    for b_user in pool:
+                        uid = b_user['user_id']
+                        c_draw = draw_excess.get(uid, 0)
+                        c_month = monthly_excess.get(uid, 0)
+                        candidates.append((uid, c_draw, c_month))
+                    if not candidates: break
+                    
+                    min_sort_key = min((c[1], c[2]) for c in candidates)
+                    tied = [uid for uid, c_draw, c_month in candidates if (c_draw, c_month) == min_sort_key]
+                    w = secrets.choice(tied)
+                    
+                    await db.execute("INSERT INTO booster_raffle_history (user_id, is_excess, won_at) VALUES (%s, TRUE, %s)", (w, target_time))
+                    draw_excess[w] = draw_excess.get(w, 0) + 1
+                    monthly_excess[w] = monthly_excess.get(w, 0) + 1
                 
         # 6. Rebuild Embed
         updated_records = await db.fetch_all('''
@@ -896,6 +915,72 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         
         await interaction.followup.send(f"✅ **Surgical Repair Complete!**\nPurged all anomalies generated during testing and restored the specific message `{message_link_or_id}` back exactly to {len(updated_records)} slots (accounting for MSL removal).")
 
+    @app_commands.command(
+        name="booster-raffle-delete",
+        description="Safely purge a specifically linked test draw and explicitly re-enable the auto-raffle. (Admin)"
+    )
+    @app_commands.describe(
+        message_link_or_id="The discord message link (or raw ID) of the booster raffle announcement",
+        delete_message="Optionally instantly delete the Discord announcement message. (Default: False)"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def raffle_delete(self, interaction: discord.Interaction, message_link_or_id: str, delete_message: bool = False):
+        await interaction.response.defer(ephemeral=False)
+        
+        # 1. Look up the message
+        try:
+            raw_id_str = message_link_or_id.strip().split("/")[-1]
+            msg_id_int = int(raw_id_str)
+            out_channel_id = await settings_service.get_int("boost_public_channel_id")
+            channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+            target_msg = await channel.fetch_message(msg_id_int)
+        except Exception:
+            return await interaction.followup.send("❌ Cannot find the specified message in the booster channel.")
+            
+        target_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+        
+        # 2. Count records to verify
+        records = await db.fetch_all('''
+            SELECT COUNT(*) as count FROM booster_raffle_history
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
+        ''', (target_time, target_time))
+        record_count = records[0]['count'] if records else 0
+        
+        if record_count == 0:
+            return await interaction.followup.send("⚠️ No raffle records were found in the database tied to that specific message's timeframe.")
+
+        # 3. Delete records
+        await db.execute('''
+            DELETE FROM booster_raffle_history
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
+        ''', (target_time, target_time))
+        
+        # 4. Attempt to delete message
+        msg_result = ""
+        if delete_message:
+            try:
+                await target_msg.delete()
+                msg_result = "\n🗑️ *Successfully deleted the target announcement message.*"
+            except Exception as e:
+                logger.error(f"Failed to delete target message during purge: {e}")
+                msg_result = f"\n⚠️ *Failed to delete message: Missing permissions or already deleted.*"
+                
+        # 5. Success Message
+        embed = discord.Embed(
+            title="💣 Booster Raffle Wiped",
+            description=(
+                f"Successfully deleted all **{record_count}** specific DB records drawn on `<t:{int(target_time.timestamp())}:F>` from the database.{msg_result}\n\n"
+                f"**Auto-Raffle Reactivation Note:**\n"
+                f"If this was the only raffle on the database for this ISO calendar week, "
+                f"the automatic Sunday cycle has inherently `re-enabled` itself as the week is now empty."
+            ),
+            color=0xFF0000,
+            timestamp=datetime.datetime.now(TZ_MANILA)
+        )
+        
+        await interaction.followup.send(embed=embed)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BoosterRaffleCog(bot))
