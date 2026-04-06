@@ -915,29 +915,68 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         
         await interaction.followup.send(f"✅ **Surgical Repair Complete!**\nPurged all anomalies generated during testing and restored the specific message `{message_link_or_id}` back exactly to {len(updated_records)} slots (accounting for MSL removal).")
 
+    async def target_raffle_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        recent_raffles = await db.fetch_all('''
+            SELECT won_at, COUNT(*) as slots 
+            FROM booster_raffle_history 
+            GROUP BY won_at 
+            ORDER BY won_at DESC 
+            LIMIT 25
+        ''')
+        
+        choices = []
+        for r in recent_raffles:
+            dt = r['won_at']
+            if dt.tzinfo is None:
+                dt = pytz.utc.localize(dt).astimezone(TZ_MANILA)
+            else:
+                dt = dt.astimezone(TZ_MANILA)
+                
+            label = f"{dt.strftime('%b %d, %Y %I:%M %p')} ({r['slots']} slots)"
+            val = str(int(dt.timestamp()))
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label, value=val))
+                
+        return choices[:25]
+
     @app_commands.command(
         name="booster-raffle-delete",
         description="Safely purge a specifically linked test draw and explicitly re-enable the auto-raffle. (Admin)"
     )
     @app_commands.describe(
-        message_link_or_id="The discord message link (or raw ID) of the booster raffle announcement",
+        target_raffle="Select a raffle to delete, or paste a message link/ID",
         delete_message="Optionally instantly delete the Discord announcement message. (Default: False)"
     )
+    @app_commands.autocomplete(target_raffle=target_raffle_autocomplete)
     @app_commands.default_permissions(administrator=True)
-    async def raffle_delete(self, interaction: discord.Interaction, message_link_or_id: str, delete_message: bool = False):
+    async def raffle_delete(self, interaction: discord.Interaction, target_raffle: str, delete_message: bool = False):
         await interaction.response.defer(ephemeral=False)
         
-        # 1. Look up the message
+        target_time = None
+        target_msg = None
+        
+        # Determine if it's a timestamp (autocomplete) or a message ID/link
         try:
-            raw_id_str = message_link_or_id.strip().split("/")[-1]
-            msg_id_int = int(raw_id_str)
-            out_channel_id = await settings_service.get_int("boost_public_channel_id")
-            channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
-            target_msg = await channel.fetch_message(msg_id_int)
-        except Exception:
-            return await interaction.followup.send("❌ Cannot find the specified message in the booster channel.")
+            raw_val = target_raffle.strip().split("/")[-1]
+            val_int = int(raw_val)
             
-        target_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+            # Message IDs are snowflakes (huge integers, > 15 digits)
+            # Unix timestamps for current years are 10 digits
+            if len(str(val_int)) <= 12:
+                # It's an autocompleted timestamp
+                target_time = datetime.datetime.fromtimestamp(val_int).replace(tzinfo=None)
+            else:
+                # It's a message ID
+                msg_id_int = val_int
+                out_channel_id = await settings_service.get_int("boost_public_channel_id")
+                channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+                target_msg = await channel.fetch_message(msg_id_int)
+                target_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+        except Exception:
+            return await interaction.followup.send("❌ Error fetching target. Please use the autocomplete dropdown or a valid message link.")
+            
+        if not target_time:
+            return await interaction.followup.send("❌ Could not determine target time.")
         
         # 2. Count records to verify
         records = await db.fetch_all('''
@@ -960,12 +999,15 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         # 4. Attempt to delete message
         msg_result = ""
         if delete_message:
-            try:
-                await target_msg.delete()
-                msg_result = "\n🗑️ *Successfully deleted the target announcement message.*"
-            except Exception as e:
-                logger.error(f"Failed to delete target message during purge: {e}")
-                msg_result = f"\n⚠️ *Failed to delete message: Missing permissions or already deleted.*"
+            if target_msg:
+                try:
+                    await target_msg.delete()
+                    msg_result = "\n🗑️ *Successfully deleted the target announcement message.*"
+                except Exception as e:
+                    logger.error(f"Failed to delete target message during purge: {e}")
+                    msg_result = f"\n⚠️ *Failed to delete message: Missing permissions or already deleted.*"
+            else:
+                msg_result = "\n*(No Discord message was deleted as an autocomplete target was used instead of a message link).* "
                 
         # 5. Success Message
         embed = discord.Embed(
@@ -980,6 +1022,45 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             timestamp=datetime.datetime.now(TZ_MANILA)
         )
         
+        
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(
+        name="booster-raffle-purge-week",
+        description="Emergency clear: Wipes ALL raffle records for the current calendar week. (Admin)"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def raffle_purge_week(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        
+        # Count records for the current ISO week
+        records = await db.fetch_one('''
+            SELECT COUNT(*) as count FROM booster_raffle_history
+            WHERE YEARWEEK(won_at, 1) = YEARWEEK(CURRENT_DATE(), 1)
+        ''')
+        record_count = records['count'] if records else 0
+        
+        if record_count == 0:
+            return await interaction.followup.send("⚠️ No raffle records exist in the database for the current calendar week.")
+
+        # Delete all records for the current week
+        await db.execute('''
+            DELETE FROM booster_raffle_history
+            WHERE YEARWEEK(won_at, 1) = YEARWEEK(CURRENT_DATE(), 1)
+        ''')
+        
+        embed = discord.Embed(
+            title="☢️ Weekly Raffle Database Wiped",
+            description=(
+                f"Successfully deleted all **{record_count}** DB records drawn this calendar week.\n\n"
+                f"**Clean Slate:**\n"
+                f"• The automated Sunday cycle has been fully re-enabled.\n"
+                f"• Any monthly excess counts assigned during these tests have been wiped.\n"
+                f"• You can now run a completely fresh `/force-booster-raffle` without interference."
+            ),
+            color=0xFF0000,
+            timestamp=datetime.datetime.now(TZ_MANILA)
+        )
         await interaction.followup.send(embed=embed)
 
 async def setup(bot: commands.Bot):
