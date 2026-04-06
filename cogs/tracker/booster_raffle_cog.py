@@ -772,59 +772,58 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
               AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
         ''', (target_time, target_time))
         
+        # 4. Build the definitive valid pool FIRST (always, not conditionally)
+        # This determines who is actually allowed to be in this batch.
+        raw_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
+        
+        # 4.1 Time filter: only boosters who started BEFORE the original draw
+        draw_cutoff_naive = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+        
+        active_boosters = []
+        for b in raw_boosters:
+            bst = b['boost_start_date']
+            if bst.tzinfo is not None:
+                bst = bst.astimezone(TZ_MANILA).replace(tzinfo=None)
+            if bst <= draw_cutoff_naive:
+                active_boosters.append(b)
+
+        booster_ids = [b['user_id'] for b in active_boosters]
+        if not booster_ids:
+            return await interaction.followup.send("❌ Cannot complete surgery: No boosters were eligible before that message timestamp.")
+
+        # 4.2 MSL filter
+        placeholders2 = ",".join(["%s"] * len(booster_ids))
+        all_ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders2})", tuple(booster_ids))
+        msl_active = set()
+        for r in all_ver_rows:
+            if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
+                msl_active.add(r['user_id'])
+        
+        valid_pool_ids = {b['user_id'] for b in active_boosters if b['user_id'] not in msl_active}
+        pool = [b for b in active_boosters if b['user_id'] in valid_pool_ids]
+        
+        # 5. Strip ALL ineligible users from the batch (MSL + post-draw boosters + anyone not in valid pool)
+        batch_user_ids = {r['user_id'] for r in rem_records}
+        ineligible_in_batch = batch_user_ids - valid_pool_ids
+        
+        for ineligible_uid in ineligible_in_batch:
+            await db.execute(
+                "DELETE FROM booster_raffle_history WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND) AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND) AND user_id = %s",
+                (target_time, target_time, ineligible_uid)
+            )
+            rem_records = [x for x in rem_records if x['user_id'] != ineligible_uid]
+        
+        # Recalculate missing after full cleanup
         current_count = len(rem_records)
         missing = target_slots - current_count
-        
-        # 4. Filter MSL from the target batch explicitly just in case any remained
-        # Calculate exactly how many records belonging to MSL were just deleted to add to 'missing'
-        winner_ids = list({r['user_id'] for r in rem_records})
-        if winner_ids:
-            placeholders = ",".join(["%s"] * len(winner_ids))
-            ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})", tuple(winner_ids))
-            for r in ver_rows:
-                if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']):
-                    await db.execute("DELETE FROM booster_raffle_history WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND) AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND) AND user_id = %s", (target_time, target_time, r['user_id']))
-                    deleted_count = list(x['user_id'] == r['user_id'] for x in rem_records).count(True)
-                    missing += deleted_count
-                    # Discard these records from our in-memory list since they're purged
-                    rem_records = [x for x in rem_records if x['user_id'] != r['user_id']]
-                    
-        # 5. Bring batch up to target_slots
+            
+        # 6. Bring batch up to target_slots
         if missing > 0:
-            # Re-fetch active pool
-            raw_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
-            
-            # 5.1 Filter out any boosters who started boosting AFTER the original draw
-            # Convert target_msg timestamp to naive-local for apples-to-apples comparison
-            # boost_start_date is stored via datetime.now() (naive, server-local)
-            # target_msg.created_at is tz-aware UTC from Discord
-            draw_cutoff_naive = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
-            
-            active_boosters = []
-            for b in raw_boosters:
-                bst = b['boost_start_date']
-                # If somehow tz-aware, normalize to naive Manila
-                if bst.tzinfo is not None:
-                    bst = bst.astimezone(TZ_MANILA).replace(tzinfo=None)
-                if bst <= draw_cutoff_naive:
-                    active_boosters.append(b)
-
-            booster_ids = [b['user_id'] for b in active_boosters]
-            if not booster_ids:
-                return await interaction.followup.send("❌ Cannot complete surgery: No boosters were eligible before that message timestamp.")
-
-            placeholders2 = ",".join(["%s"] * len(booster_ids))
-            all_ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders2})", tuple(booster_ids))
-            msl_active = set()
-            for r in all_ver_rows:
-                if verification_service.is_msl(r['mlbb_uid'], r['mlbb_server']): msl_active.add(r['user_id'])
-            pool = [b for b in active_boosters if b['user_id'] not in msl_active]
-            
-            # Identify existing allocations in the target batch
+            # Identify existing allocations in the cleaned batch
             existing_normal_wins = {r['user_id'] for r in rem_records if not r['is_excess']}
             existing_excess_counts = Counter(r['user_id'] for r in rem_records if r['is_excess'])
             
-            # Step 5A: Distribute missing regular slots to valid pool members without a normal win
+            # Step 6A: Distribute missing regular slots to valid pool members without a normal win
             missing_normals = [b for b in pool if b['user_id'] not in existing_normal_wins]
             for b in missing_normals:
                 if missing <= 0: break
@@ -833,7 +832,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 existing_normal_wins.add(uid)
                 missing -= 1
             
-            # Step 5B: Distribute remaining missing slots as Excess fairly
+            # Step 6B: Distribute remaining missing slots as Excess fairly
             if missing > 0:
                 # Fetch baseline excess for historical fairness fallback
                 excess_this_month = await db.fetch_all('''
@@ -1011,42 +1010,17 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             excess_ct = sum(1 for r in rem_records if r['user_id'] == uid and r['is_excess'])
             log.append(f"  • <@{uid}> — Normal: {normal_ct}, Excess: {excess_ct}")
         
-        # ── Step 4: MSL filtering within batch ──
+        # ── Step 4: Build Valid Pool ──
         log.append("")
-        log.append("**═══ STEP 4: MSL Filter (batch members) ═══**")
-        
-        missing = missing_initial
-        msl_in_batch = set()
-        if unique_winners:
-            placeholders = ",".join(["%s"] * len(unique_winners))
-            ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})", tuple(unique_winners))
-            for r in ver_rows:
-                is_msl = verification_service.is_msl(r['mlbb_uid'], r['mlbb_server'])
-                if is_msl:
-                    msl_in_batch.add(r['user_id'])
-                    deleted_count = sum(1 for x in rem_records if x['user_id'] == r['user_id'])
-                    missing += deleted_count
-                    log.append(f"  🚫 <@{r['user_id']}> — MSL member (uid={r['mlbb_uid']}, server={r['mlbb_server']}) → would strip **{deleted_count}** record(s)")
-        
-        if not msl_in_batch:
-            log.append("  ✅ No MSL members found in batch.")
-        
-        # Remove MSL from in-memory tracking
-        rem_records_clean = [x for x in rem_records if x['user_id'] not in msl_in_batch]
-        
-        log.append(f"After MSL strip: **{len(rem_records_clean)}** records remain, **{missing}** slots to fill")
-        
-        # ── Step 5: Active booster pool ──
-        log.append("")
-        log.append("**═══ STEP 5: Active Booster Pool ═══**")
+        log.append("**═══ STEP 4: Build Valid Pool ═══**")
         
         raw_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
-        log.append(f"Raw boosters in DB (boost_start_date IS NOT NULL, raffle_entries > 0): **{len(raw_boosters)}**")
+        log.append(f"Raw boosters in DB: **{len(raw_boosters)}**")
         
-        # ── Step 5.1: Time filter ──
+        # 4.1 Time filter
         log.append("")
-        log.append("**── 5.1: Boost Start Date Filter ──**")
-        log.append(f"Cutoff: Only boosters with `boost_start_date <= {draw_cutoff_naive}`")
+        log.append("**── 4.1: Boost Start Date Filter ──**")
+        log.append(f"Cutoff: `boost_start_date <= {draw_cutoff_naive}`")
         
         active_boosters = []
         filtered_out = []
@@ -1064,10 +1038,12 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         
         log.append(f"**After time filter:** {len(active_boosters)} pass, {len(filtered_out)} filtered out")
         
-        # ── Step 5.2: MSL filter from pool ──
+        # 4.2 MSL filter
         log.append("")
-        log.append("**── 5.2: MSL Filter (active pool) ──**")
+        log.append("**── 4.2: MSL Filter (pool) ──**")
         
+        pool = []
+        valid_pool_ids = set()
         if not active_boosters:
             log.append("  ❌ No active boosters passed time filter!")
         else:
@@ -1081,43 +1057,74 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                     msl_active.add(r['user_id'])
                     log.append(f"  🚫 <@{r['user_id']}> — MSL member removed from pool")
             
-            pool = [b for b in active_boosters if b['user_id'] not in msl_active]
+            valid_pool_ids = {b['user_id'] for b in active_boosters if b['user_id'] not in msl_active}
+            pool = [b for b in active_boosters if b['user_id'] in valid_pool_ids]
             log.append(f"**Final valid pool: {len(pool)} boosters** (removed {len(msl_active)} MSL)")
+        
+        # ── Step 5: Ineligible Batch Audit ──
+        log.append("")
+        log.append("**═══ STEP 5: Ineligible Batch Audit ═══**")
+        
+        batch_user_ids = {r['user_id'] for r in rem_records}
+        ineligible_in_batch = batch_user_ids - valid_pool_ids
+        
+        if ineligible_in_batch:
+            log.append(f"⚠️ **{len(ineligible_in_batch)} batch member(s) are NOT in the valid pool and would be STRIPPED:**")
+            for uid in ineligible_in_batch:
+                record_count = sum(1 for r in rem_records if r['user_id'] == uid)
+                reason_parts = []
+                active_booster_ids = {b['user_id'] for b in active_boosters}
+                if uid not in active_booster_ids:
+                    reason_parts.append("boosted after draw / no longer boosting")
+                if uid in (msl_active if active_boosters else set()):
+                    reason_parts.append("MSL member")
+                reason = ", ".join(reason_parts) if reason_parts else "not in valid pool"
+                log.append(f"  🗑️ <@{uid}> — **{record_count}** record(s) stripped — Reason: {reason}")
             
-            # ── Step 5A: Normal slot distribution ──
-            existing_normal_wins = {r['user_id'] for r in rem_records_clean if not r['is_excess']}
-            existing_excess_counts = Counter(r['user_id'] for r in rem_records_clean if r['is_excess'])
-            
-            missing_normals = [b for b in pool if b['user_id'] not in existing_normal_wins]
-            
-            log.append("")
-            log.append("**── 5A: Missing Normal Slot Allocation ──**")
-            log.append(f"Pool members already holding a normal win: **{len(existing_normal_wins)}**")
-            log.append(f"Pool members MISSING a normal win: **{len(missing_normals)}**")
-            for b in missing_normals:
-                log.append(f"  🆕 <@{b['user_id']}> — would receive a normal (is_excess=FALSE) slot")
-            
-            normals_to_add = min(len(missing_normals), missing)
-            remaining_after_normals = missing - normals_to_add
-            
-            log.append(f"Would add **{normals_to_add}** normal slots, leaving **{remaining_after_normals}** for excess")
-            
-            # ── Step 5B: Excess distribution ──
-            log.append("")
-            log.append("**── 5B: Excess Distribution Preview ──**")
-            log.append(f"Remaining slots to distribute as excess: **{remaining_after_normals}**")
-            log.append(f"Pre-existing excess in batch: {dict(existing_excess_counts) if existing_excess_counts else 'None'}")
-            
-            if remaining_after_normals > 0:
-                log.append(f"Each of the **{len(pool)}** valid boosters would compete for **{remaining_after_normals}** excess slot(s).")
-                if remaining_after_normals <= len(pool):
-                    log.append(f"✅ Parity OK: {remaining_after_normals} excess ≤ {len(pool)} pool → max 1 excess per person")
-                else:
-                    rounds = remaining_after_normals // len(pool)
-                    leftover = remaining_after_normals % len(pool)
-                    log.append(f"⚠️ Multiple rounds needed: {rounds} full round(s) + {leftover} leftover")
+            rem_records_clean = [x for x in rem_records if x['user_id'] not in ineligible_in_batch]
+        else:
+            log.append("✅ All batch members are in the valid pool. No stripping needed.")
+            rem_records_clean = list(rem_records)
+        
+        # Recalculate missing
+        recalc_count = len(rem_records_clean)
+        missing = target_slots - recalc_count
+        log.append(f"\nAfter audit: **{recalc_count}** valid records remain, **{missing}** slots to fill")
+        
+        # ── Step 6A: Normal slot distribution ──
+        existing_normal_wins = {r['user_id'] for r in rem_records_clean if not r['is_excess']}
+        existing_excess_counts = Counter(r['user_id'] for r in rem_records_clean if r['is_excess'])
+        
+        missing_normals = [b for b in pool if b['user_id'] not in existing_normal_wins]
+        
+        log.append("")
+        log.append("**── 6A: Missing Normal Slot Allocation ──**")
+        log.append(f"Pool members already holding a normal win: **{len(existing_normal_wins)}**")
+        log.append(f"Pool members MISSING a normal win: **{len(missing_normals)}**")
+        for b in missing_normals:
+            log.append(f"  🆕 <@{b['user_id']}> — would receive a normal (is_excess=FALSE) slot")
+        
+        normals_to_add = min(len(missing_normals), max(0, missing))
+        remaining_after_normals = max(0, missing) - normals_to_add
+        
+        log.append(f"Would add **{normals_to_add}** normal slots, leaving **{remaining_after_normals}** for excess")
+        
+        # ── Step 6B: Excess distribution ──
+        log.append("")
+        log.append("**── 6B: Excess Distribution Preview ──**")
+        log.append(f"Remaining slots to distribute as excess: **{remaining_after_normals}**")
+        log.append(f"Pre-existing excess in batch: {dict(existing_excess_counts) if existing_excess_counts else 'None'}")
+        
+        if remaining_after_normals > 0:
+            log.append(f"Each of the **{len(pool)}** valid boosters would compete for **{remaining_after_normals}** excess slot(s).")
+            if remaining_after_normals <= len(pool):
+                log.append(f"✅ Parity OK: {remaining_after_normals} excess ≤ {len(pool)} pool → max 1 excess per person")
             else:
-                log.append("✅ No excess slots needed.")
+                rounds = remaining_after_normals // len(pool)
+                leftover = remaining_after_normals % len(pool)
+                log.append(f"⚠️ Multiple rounds needed: {rounds} full round(s) + {leftover} leftover")
+        else:
+            log.append("✅ No excess slots needed.")
         
         # ── Summary ──
         log.append("")
