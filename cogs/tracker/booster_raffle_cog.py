@@ -795,12 +795,18 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             raw_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
             
             # 5.1 Filter out any boosters who started boosting AFTER the original draw
+            # Convert target_msg timestamp to naive-local for apples-to-apples comparison
+            # boost_start_date is stored via datetime.now() (naive, server-local)
+            # target_msg.created_at is tz-aware UTC from Discord
+            draw_cutoff_naive = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+            
             active_boosters = []
             for b in raw_boosters:
                 bst = b['boost_start_date']
-                if bst.tzinfo is None:
-                    bst = pytz.utc.localize(bst)
-                if bst <= target_msg.created_at:
+                # If somehow tz-aware, normalize to naive Manila
+                if bst.tzinfo is not None:
+                    bst = bst.astimezone(TZ_MANILA).replace(tzinfo=None)
+                if bst <= draw_cutoff_naive:
                     active_boosters.append(b)
 
             booster_ids = [b['user_id'] for b in active_boosters]
@@ -927,6 +933,244 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             logger.error(f"Surgeon msg edit failed: {e}")
         
         await interaction.followup.send(f"✅ **Surgical Repair Complete!**\nPurged all anomalies generated during testing and restored the specific message `{message_link_or_id}` back exactly to {len(updated_records)} slots (accounting for MSL removal).")
+
+    @app_commands.command(
+        name="booster-raffle-diagnose",
+        description="Dry-run diagnostic: traces every step the surgeon would take without modifying data. (Admin)"
+    )
+    @app_commands.describe(message_link_or_id="The discord message link (or raw ID) of the booster raffle announcement")
+    @app_commands.default_permissions(administrator=True)
+    async def surgeon_diagnose(self, interaction: discord.Interaction, message_link_or_id: str):
+        await interaction.response.defer(ephemeral=True)
+        
+        log = []  # Collects diagnostic lines
+        
+        # ── Step 1: Resolve Message ──
+        try:
+            raw_id_str = message_link_or_id.strip().split("/")[-1]
+            msg_id_int = int(raw_id_str)
+            out_channel_id = await settings_service.get_int("boost_public_channel_id")
+            channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+            target_msg = await channel.fetch_message(msg_id_int)
+        except Exception as e:
+            return await interaction.followup.send(f"❌ Cannot find message: `{e}`", ephemeral=True)
+        
+        msg_created_utc = target_msg.created_at
+        msg_created_manila = msg_created_utc.astimezone(TZ_MANILA)
+        target_time = msg_created_manila.replace(tzinfo=None)
+        target_date = target_time.date()
+        target_slots = await self._get_target_slots()
+        draw_cutoff_naive = msg_created_manila.replace(tzinfo=None)
+        
+        log.append("**═══ STEP 1: Message Resolution ═══**")
+        log.append(f"Message ID: `{msg_id_int}`")
+        log.append(f"Discord `created_at` (UTC): `{msg_created_utc.isoformat()}`")
+        log.append(f"Converted to Manila: `{msg_created_manila.isoformat()}`")
+        log.append(f"`target_time` (naive Manila): `{target_time}`")
+        log.append(f"`target_date`: `{target_date}`")
+        log.append(f"`target_slots`: `{target_slots}`")
+        log.append(f"`draw_cutoff_naive` for boost filter: `{draw_cutoff_naive}`")
+        
+        # ── Step 2: What would be purged (non-target-batch rows on same day) ──
+        stale_rows = await db.fetch_all('''
+            SELECT id, user_id, is_excess, won_at FROM booster_raffle_history
+            WHERE DATE(won_at) = %s 
+              AND (won_at < DATE_SUB(%s, INTERVAL 60 SECOND) OR won_at > DATE_ADD(%s, INTERVAL 60 SECOND))
+        ''', (target_date, target_time, target_time))
+        
+        log.append("")
+        log.append("**═══ STEP 2: Stale Row Purge (same day, outside 60s window) ═══**")
+        log.append(f"Rows that WOULD be deleted: **{len(stale_rows)}**")
+        for sr in stale_rows[:10]:
+            log.append(f"  • ID `{sr['id']}` — <@{sr['user_id']}> — `won_at={sr['won_at']}` — excess={sr['is_excess']}")
+        if len(stale_rows) > 10:
+            log.append(f"  *(…and {len(stale_rows) - 10} more)*")
+        
+        # ── Step 3: Target batch records ──
+        rem_records = await db.fetch_all('''
+            SELECT user_id, is_excess, won_at FROM booster_raffle_history
+            WHERE won_at >= DATE_SUB(%s, INTERVAL 60 SECOND)
+              AND won_at <= DATE_ADD(%s, INTERVAL 60 SECOND)
+        ''', (target_time, target_time))
+        
+        current_count = len(rem_records)
+        missing_initial = target_slots - current_count
+        
+        log.append("")
+        log.append("**═══ STEP 3: Target Batch (±60s window) ═══**")
+        log.append(f"Records found: **{current_count}** / target **{target_slots}** → initially missing: **{missing_initial}**")
+        
+        normal_in_batch = [r for r in rem_records if not r['is_excess']]
+        excess_in_batch = [r for r in rem_records if r['is_excess']]
+        unique_winners = list({r['user_id'] for r in rem_records})
+        
+        log.append(f"Normal wins: **{len(normal_in_batch)}** | Excess wins: **{len(excess_in_batch)}**")
+        log.append(f"Unique winners: **{len(unique_winners)}**")
+        for uid in unique_winners:
+            normal_ct = sum(1 for r in rem_records if r['user_id'] == uid and not r['is_excess'])
+            excess_ct = sum(1 for r in rem_records if r['user_id'] == uid and r['is_excess'])
+            log.append(f"  • <@{uid}> — Normal: {normal_ct}, Excess: {excess_ct}")
+        
+        # ── Step 4: MSL filtering within batch ──
+        log.append("")
+        log.append("**═══ STEP 4: MSL Filter (batch members) ═══**")
+        
+        missing = missing_initial
+        msl_in_batch = set()
+        if unique_winners:
+            placeholders = ",".join(["%s"] * len(unique_winners))
+            ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})", tuple(unique_winners))
+            for r in ver_rows:
+                is_msl = verification_service.is_msl(r['mlbb_uid'], r['mlbb_server'])
+                if is_msl:
+                    msl_in_batch.add(r['user_id'])
+                    deleted_count = sum(1 for x in rem_records if x['user_id'] == r['user_id'])
+                    missing += deleted_count
+                    log.append(f"  🚫 <@{r['user_id']}> — MSL member (uid={r['mlbb_uid']}, server={r['mlbb_server']}) → would strip **{deleted_count}** record(s)")
+        
+        if not msl_in_batch:
+            log.append("  ✅ No MSL members found in batch.")
+        
+        # Remove MSL from in-memory tracking
+        rem_records_clean = [x for x in rem_records if x['user_id'] not in msl_in_batch]
+        
+        log.append(f"After MSL strip: **{len(rem_records_clean)}** records remain, **{missing}** slots to fill")
+        
+        # ── Step 5: Active booster pool ──
+        log.append("")
+        log.append("**═══ STEP 5: Active Booster Pool ═══**")
+        
+        raw_boosters = await db.fetch_all("SELECT user_id, raffle_entries, boost_start_date FROM users WHERE boost_start_date IS NOT NULL AND raffle_entries > 0")
+        log.append(f"Raw boosters in DB (boost_start_date IS NOT NULL, raffle_entries > 0): **{len(raw_boosters)}**")
+        
+        # ── Step 5.1: Time filter ──
+        log.append("")
+        log.append("**── 5.1: Boost Start Date Filter ──**")
+        log.append(f"Cutoff: Only boosters with `boost_start_date <= {draw_cutoff_naive}`")
+        
+        active_boosters = []
+        filtered_out = []
+        for b in raw_boosters:
+            bst = b['boost_start_date']
+            bst_raw = str(bst)
+            if bst.tzinfo is not None:
+                bst = bst.astimezone(TZ_MANILA).replace(tzinfo=None)
+            passes = bst <= draw_cutoff_naive
+            if passes:
+                active_boosters.append(b)
+            else:
+                filtered_out.append(b)
+            log.append(f"  {'✅' if passes else '❌'} <@{b['user_id']}> — raw=`{bst_raw}` → comparable=`{bst}` — {'PASS' if passes else 'FILTERED (boosted after draw)'}")
+        
+        log.append(f"**After time filter:** {len(active_boosters)} pass, {len(filtered_out)} filtered out")
+        
+        # ── Step 5.2: MSL filter from pool ──
+        log.append("")
+        log.append("**── 5.2: MSL Filter (active pool) ──**")
+        
+        if not active_boosters:
+            log.append("  ❌ No active boosters passed time filter!")
+        else:
+            booster_ids = [b['user_id'] for b in active_boosters]
+            placeholders2 = ",".join(["%s"] * len(booster_ids))
+            all_ver_rows = await db.fetch_all(f"SELECT user_id, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders2})", tuple(booster_ids))
+            msl_active = set()
+            for r in all_ver_rows:
+                is_msl = verification_service.is_msl(r['mlbb_uid'], r['mlbb_server'])
+                if is_msl:
+                    msl_active.add(r['user_id'])
+                    log.append(f"  🚫 <@{r['user_id']}> — MSL member removed from pool")
+            
+            pool = [b for b in active_boosters if b['user_id'] not in msl_active]
+            log.append(f"**Final valid pool: {len(pool)} boosters** (removed {len(msl_active)} MSL)")
+            
+            # ── Step 5A: Normal slot distribution ──
+            existing_normal_wins = {r['user_id'] for r in rem_records_clean if not r['is_excess']}
+            existing_excess_counts = Counter(r['user_id'] for r in rem_records_clean if r['is_excess'])
+            
+            missing_normals = [b for b in pool if b['user_id'] not in existing_normal_wins]
+            
+            log.append("")
+            log.append("**── 5A: Missing Normal Slot Allocation ──**")
+            log.append(f"Pool members already holding a normal win: **{len(existing_normal_wins)}**")
+            log.append(f"Pool members MISSING a normal win: **{len(missing_normals)}**")
+            for b in missing_normals:
+                log.append(f"  🆕 <@{b['user_id']}> — would receive a normal (is_excess=FALSE) slot")
+            
+            normals_to_add = min(len(missing_normals), missing)
+            remaining_after_normals = missing - normals_to_add
+            
+            log.append(f"Would add **{normals_to_add}** normal slots, leaving **{remaining_after_normals}** for excess")
+            
+            # ── Step 5B: Excess distribution ──
+            log.append("")
+            log.append("**── 5B: Excess Distribution Preview ──**")
+            log.append(f"Remaining slots to distribute as excess: **{remaining_after_normals}**")
+            log.append(f"Pre-existing excess in batch: {dict(existing_excess_counts) if existing_excess_counts else 'None'}")
+            
+            if remaining_after_normals > 0:
+                log.append(f"Each of the **{len(pool)}** valid boosters would compete for **{remaining_after_normals}** excess slot(s).")
+                if remaining_after_normals <= len(pool):
+                    log.append(f"✅ Parity OK: {remaining_after_normals} excess ≤ {len(pool)} pool → max 1 excess per person")
+                else:
+                    rounds = remaining_after_normals // len(pool)
+                    leftover = remaining_after_normals % len(pool)
+                    log.append(f"⚠️ Multiple rounds needed: {rounds} full round(s) + {leftover} leftover")
+            else:
+                log.append("✅ No excess slots needed.")
+        
+        # ── Summary ──
+        log.append("")
+        log.append("**═══ SUMMARY ═══**")
+        final_unique = len(pool) if active_boosters else 0
+        expected_excess = max(0, target_slots - final_unique)
+        log.append(f"Target slots: **{target_slots}**")
+        log.append(f"Valid unique boosters (at draw time, non-MSL): **{final_unique}**")
+        log.append(f"Expected excess: **{expected_excess}** (= {target_slots} - {final_unique})")
+        if expected_excess <= final_unique:
+            log.append(f"✅ Each person gets at most **1** excess slot ({expected_excess} of {final_unique} would get 200💎).")
+        else:
+            log.append(f"⚠️ More excess than people — some would get multiple excess.")
+        
+        # ── Send output (split if needed for Discord 2000-char limit) ──
+        full_text = "\n".join(log)
+        
+        if len(full_text) <= 3900:
+            embed = discord.Embed(
+                title="🔬 Surgeon Dry-Run Diagnostic",
+                description=full_text,
+                color=0x00BFFF,
+                timestamp=datetime.datetime.now(TZ_MANILA)
+            )
+            embed.set_footer(text="No data was modified. This is a read-only diagnostic.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            # Split into multiple embeds
+            chunks = []
+            current_chunk = []
+            current_len = 0
+            for line in log:
+                line_len = len(line) + 1
+                if current_len + line_len > 3900:
+                    chunks.append("\n".join(current_chunk))
+                    current_chunk = [line]
+                    current_len = line_len
+                else:
+                    current_chunk.append(line)
+                    current_len += line_len
+            if current_chunk:
+                chunks.append("\n".join(current_chunk))
+            
+            for i, chunk in enumerate(chunks):
+                embed = discord.Embed(
+                    title=f"🔬 Surgeon Diagnostic ({i+1}/{len(chunks)})",
+                    description=chunk,
+                    color=0x00BFFF,
+                    timestamp=datetime.datetime.now(TZ_MANILA)
+                )
+                if i == len(chunks) - 1:
+                    embed.set_footer(text="No data was modified. This is a read-only diagnostic.")
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def target_raffle_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         recent_raffles = await db.fetch_all('''
