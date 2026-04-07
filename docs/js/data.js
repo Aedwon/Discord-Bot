@@ -1,7 +1,7 @@
 const DB_DATA = [
     {
         "category": "Bot Setup & General Config",
-        "emoji": "⚙️",
+        "emoji": "\u2699\ufe0f",
         "id": "setup",
         "features": [
             {
@@ -140,19 +140,19 @@ const DB_DATA = [
             },
             {
                 "syntax": "/setup xp_roles",
-                "desc": "Auto-discover and map the 21 EXP Role Tiers (Commoner V – Monarch) from your server.",
+                "desc": "Auto-discover and map the 21 EXP Role Tiers (Commoner V \u2013 Monarch) from your server.",
                 "access": "admin",
                 "params": []
             },
             {
                 "syntax": "/setup ep_roles",
-                "desc": "Auto-map all 34 EP sub-tier roles (Warrior V – Mythic ladder).",
+                "desc": "Auto-map all 34 EP sub-tier roles (Warrior V \u2013 Mythic ladder).",
                 "access": "admin",
                 "params": []
             },
             {
                 "syntax": "/setup peak_roles",
-                "desc": "Auto-map the 10 Peak Rank legacy roles (Peak Warrior – Peak Mythical Immortal).",
+                "desc": "Auto-map the 10 Peak Rank legacy roles (Peak Warrior \u2013 Peak Mythical Immortal).",
                 "access": "admin",
                 "params": []
             },
@@ -198,7 +198,7 @@ const DB_DATA = [
                 "access": "admin",
                 "params": [
                     {
-                        "name": "role1–role5",
+                        "name": "role1\u2013role5",
                         "type": "@role",
                         "required": true
                     }
@@ -250,13 +250,13 @@ const DB_DATA = [
     },
     {
         "category": "Moderation & Security",
-        "emoji": "🛡️",
+        "emoji": "\ud83d\udee1\ufe0f",
         "id": "mod",
         "features": [
             {
                 "name": "24h Experience Lock",
                 "type": "passive",
-                "desc": "Receiving a formal Warning instantly strips a user’s ability to gain Level XP or Event Points for 24 hours."
+                "desc": "Receiving a formal Warning instantly strips a user\u2019s ability to gain Level XP or Event Points for 24 hours."
             },
             {
                 "name": "Message Log Auditing",
@@ -266,13 +266,13 @@ const DB_DATA = [
             {
                 "name": "Native Timeout Mutes",
                 "type": "passive",
-                "desc": "Mutes use Discord’s native timeout API — they auto-expire, persist across leaves/rejoins, and enforce a 28-day maximum."
+                "desc": "Mutes use Discord\u2019s native timeout API \u2014 they auto-expire, persist across leaves/rejoins, and enforce a 28-day maximum."
             }
         ],
         "commands": [
             {
                 "syntax": "/history",
-                "desc": "View a user’s entire moderation rap sheet (bans, kicks, mutes, warns) and current timeout status.",
+                "desc": "View a user\u2019s entire moderation rap sheet (bans, kicks, mutes, warns) and current timeout status.",
                 "access": "admin",
                 "params": [
                     {
@@ -301,7 +301,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/mute",
-                "desc": "Timeout a user using Discord’s native timeout API. Auto-expires, persists across rejoins. Max 28 days.",
+                "desc": "Timeout a user using Discord\u2019s native timeout API. Auto-expires, persists across rejoins. Max 28 days.",
                 "access": "admin",
                 "params": [
                     {
@@ -437,7 +437,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/autorole",
-                "desc": "Assign the auto-role to all current members who don’t have it.",
+                "desc": "Assign the auto-role to all current members who don\u2019t have it.",
                 "access": "admin",
                 "params": []
             }
@@ -445,13 +445,13 @@ const DB_DATA = [
     },
     {
         "category": "Leveling & Event Points",
-        "emoji": "📈",
+        "emoji": "\ud83d\udcc8",
         "id": "leveling",
         "features": [
             {
                 "name": "Dynamic EP Conversion",
                 "type": "passive",
-                "desc": "Event Points map to MLBB-style rank tiers (Warrior – Mythic) with automatic role assignment on every EP change."
+                "desc": "Event Points map to MLBB-style rank tiers (Warrior \u2013 Mythic) with automatic role assignment on every EP change."
             },
             {
                 "name": "Smart Role Sync",
@@ -521,7 +521,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/xp set",
-                "desc": "Override a user’s total XP to an exact value.",
+                "desc": "Override a user\u2019s total XP to an exact value.",
                 "access": "admin",
                 "params": [
                     {
@@ -567,7 +567,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/ep set",
-                "desc": "Override a user’s Event Points to an exact value.",
+                "desc": "Override a user\u2019s Event Points to an exact value.",
                 "access": "admin",
                 "params": [
                     {
@@ -598,7 +598,7 @@ const DB_DATA = [
     },
     {
         "category": "Analytics & Auditing",
-        "emoji": "📊",
+        "emoji": "\ud83d\udcca",
         "id": "analytics",
         "features": [
             {
@@ -715,19 +715,19 @@ const DB_DATA = [
             },
             {
                 "syntax": "/analytics sentiment daily",
-                "desc": "Export yesterday’s messages as a downloadable .txt file.",
+                "desc": "Export yesterday\u2019s messages as a downloadable .txt file.",
                 "access": "admin",
                 "params": []
             },
             {
                 "syntax": "/analytics sentiment weekly",
-                "desc": "Export last 7 days’ messages as a downloadable .txt file.",
+                "desc": "Export last 7 days\u2019 messages as a downloadable .txt file.",
                 "access": "admin",
                 "params": []
             },
             {
                 "syntax": "/analytics sentiment monthly",
-                "desc": "Export last 30 days’ messages as a downloadable .txt file.",
+                "desc": "Export last 30 days\u2019 messages as a downloadable .txt file.",
                 "access": "admin",
                 "params": []
             },
@@ -765,7 +765,7 @@ const DB_DATA = [
     },
     {
         "category": "Live Event Operations",
-        "emoji": "🏟️",
+        "emoji": "\ud83c\udfdf\ufe0f",
         "id": "tournaments",
         "features": [
             {
@@ -804,7 +804,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/event cap-placement",
-                "desc": "Lock a strict budget limit on an event’s placement payouts.",
+                "desc": "Lock a strict budget limit on an event\u2019s placement payouts.",
                 "access": "admin",
                 "params": [
                     {
@@ -821,7 +821,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/event placement",
-                "desc": "Award a winner’s placement payout (1st, 2nd, MVP, etc). Enforces budget caps.",
+                "desc": "Award a winner\u2019s placement payout (1st, 2nd, MVP, etc). Enforces budget caps.",
                 "access": "admin",
                 "params": [
                     {
@@ -925,7 +925,7 @@ const DB_DATA = [
     },
     {
         "category": "Giveaways & Raffles",
-        "emoji": "🎁",
+        "emoji": "\ud83c\udf81",
         "id": "giveaways",
         "features": [
             {
@@ -1120,18 +1120,66 @@ const DB_DATA = [
                 "desc": "Export the latest booster raffle winners to separated MSL and Non-MSL CSVs.",
                 "access": "admin",
                 "params": []
+            },
+            {
+                "syntax": "/booster-raffle-reroll-msl",
+                "desc": "Retroactively exclude MSL members from the latest draw and reallocate slots to valid non-MSL boosters. Edits original announcement.",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "/booster-raffle-surgeon",
+                "desc": "Emergency fix to purge test rounds and securely map valid winners to a specific target announcement message.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "message_link_or_id",
+                        "type": "string",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/booster-raffle-diagnose",
+                "desc": "Dry-run diagnostic: traces every step the surgeon would take without modifying database records.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "message_link_or_id",
+                        "type": "string",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/booster-raffle-delete",
+                "desc": "Safely purge a specifically linked test draw and explicitly re-enable the auto-raffle.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "message_link_or_id",
+                        "type": "string",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/booster-raffle-purge-week",
+                "desc": "Emergency clear: Wipes ALL raffle records for the current calendar week.",
+                "access": "admin",
+                "params": []
             }
         ]
     },
     {
         "category": "Community & Social",
-        "emoji": "🎭",
+        "emoji": "\ud83c\udfad",
         "id": "social",
         "features": [
             {
                 "name": "Anonymous Sticky Panel",
                 "type": "passive",
-                "desc": "The anon message panel auto-reposts to the bottom of the channel every 10 minutes if it’s no longer the latest message."
+                "desc": "The anon message panel auto-reposts to the bottom of the channel every 10 minutes if it\u2019s no longer the latest message."
             },
             {
                 "name": "Threaded Anonymous Replies",
@@ -1203,7 +1251,7 @@ const DB_DATA = [
     },
     {
         "category": "Quiz & Quests",
-        "emoji": "🧠",
+        "emoji": "\ud83e\udde0",
         "id": "quiz",
         "features": [
             {
@@ -1269,7 +1317,7 @@ const DB_DATA = [
     },
     {
         "category": "Verification & MSL",
-        "emoji": "✅",
+        "emoji": "\u2705",
         "id": "verification",
         "features": [
             {
@@ -1310,7 +1358,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/verify update",
-                "desc": "Edit a user’s MLBB verification info.",
+                "desc": "Edit a user\u2019s MLBB verification info.",
                 "access": "admin",
                 "params": [
                     {
@@ -1332,7 +1380,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/verify remove",
-                "desc": "Remove a user’s verification status.",
+                "desc": "Remove a user\u2019s verification status.",
                 "access": "admin",
                 "params": [
                     {
@@ -1381,7 +1429,7 @@ const DB_DATA = [
     },
     {
         "category": "Embed & Ticket Systems",
-        "emoji": "📨",
+        "emoji": "\ud83d\udce8",
         "id": "embeds",
         "features": [
             {
@@ -1532,7 +1580,7 @@ const DB_DATA = [
     },
     {
         "category": "Voice & Pomodoro",
-        "emoji": "🎮",
+        "emoji": "\ud83c\udfae",
         "id": "utilities",
         "features": [
             {
@@ -1543,7 +1591,7 @@ const DB_DATA = [
             {
                 "name": "Pomodoro Cycles",
                 "type": "passive",
-                "desc": "25 min work → 5 min break (x4), then 15 min long break. VC renames and participants are pinged at each transition."
+                "desc": "25 min work \u2192 5 min break (x4), then 15 min long break. VC renames and participants are pinged at each transition."
             }
         ],
         "commands": [
@@ -1577,7 +1625,7 @@ const DB_DATA = [
                 "access": "general",
                 "params": [
                     {
-                        "name": "user1–user4",
+                        "name": "user1\u2013user4",
                         "type": "@mention",
                         "required": false
                     }
@@ -1611,7 +1659,7 @@ const DB_DATA = [
     },
     {
         "category": "Booster Perks",
-        "emoji": "🌟",
+        "emoji": "\ud83c\udf1f",
         "id": "booster_tier",
         "features": [
             {
@@ -1654,7 +1702,7 @@ const DB_DATA = [
     },
     {
         "category": "Debug & Testing",
-        "emoji": "🔧",
+        "emoji": "\ud83d\udd27",
         "id": "test",
         "features": [],
         "commands": [
@@ -1769,7 +1817,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/test xp-dryrun",
-                "desc": "Simulate an XP message to diagnose why XP isn’t being awarded.",
+                "desc": "Simulate an XP message to diagnose why XP isn\u2019t being awarded.",
                 "access": "admin",
                 "params": [
                     {
@@ -1781,7 +1829,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/test check-db",
-                "desc": "Raw SQL dump of a user’s row in the users table.",
+                "desc": "Raw SQL dump of a user\u2019s row in the users table.",
                 "access": "admin",
                 "params": [
                     {
