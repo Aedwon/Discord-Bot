@@ -794,16 +794,7 @@ class EventCog(commands.Cog, name="Event"):
         )
         verified_map = {r['user_id']: r for r in verified_rows}
 
-        # Block if any winners are unverified
         unverified_ids = [wid for wid in winner_ids if wid not in verified_map]
-        if unverified_ids:
-            unverified_mentions = ", ".join(f"<@{uid}>" for uid in unverified_ids)
-            return await interaction.followup.send(
-                f"❌ **Export Blocked — Unverified Winners Detected.**\n"
-                f"The following winners have not completed MLBB verification and must be replaced via `/event raffle reroll` before exporting:\n"
-                f"{unverified_mentions}",
-                ephemeral=True
-            )
 
         # Build the CSV date from ends_at or now
         draw_date = raffle['ends_at'] or datetime.now(timezone.utc)
@@ -815,7 +806,9 @@ class EventCog(commands.Cog, name="Event"):
         writer = csv.writer(output)
         writer.writerow(["Full Name", "UID", "Server", "Amount", "Remarks"])
 
-        for wid in winner_ids:
+        # Verified winners first
+        verified_winner_ids = [wid for wid in winner_ids if wid in verified_map]
+        for wid in verified_winner_ids:
             v = verified_map[wid]
             writer.writerow([
                 v['full_name'],
@@ -824,15 +817,32 @@ class EventCog(commands.Cog, name="Event"):
                 "",  # Amount — blank for manual input
                 f"MSL Network Discord - {activity} - ({date_str})"
             ])
+        
+        # Unverified winners at the bottom
+        for wid in unverified_ids:
+            user_obj = interaction.guild.get_member(wid)
+            display = user_obj.display_name if user_obj else f"User {wid}"
+            writer.writerow([
+                f"UNVERIFIED — {display}",
+                "N/A",
+                "N/A",
+                "",
+                f"MSL Network Discord - {activity} - ({date_str})"
+            ])
 
         output.seek(0)
         filename = f"raffle_winners_{raffle_id_int}_{date_str.replace('/', '-')}.csv"
         file = discord.File(fp=io.BytesIO(output.getvalue().encode('utf-8-sig')), filename=filename)
-        await interaction.followup.send(
-            f"✅ Exported **{len(winner_ids)}** winner(s) from **{raffle['title']}**.",
-            file=file,
-            ephemeral=True
-        )
+        
+        response_msg = f"✅ Exported **{len(winner_ids)}** winner(s) from **{raffle['title']}**."
+        if unverified_ids:
+            pings = " ".join([f"<@{uid}>" for uid in unverified_ids])
+            response_msg += (
+                f"\n\n⚠️ **{len(unverified_ids)} unverified winner(s)** are tagged as `UNVERIFIED` at the bottom of the CSV.\n\n"
+                f"**Copy/Paste this to tag them:**\n"
+                f"```\nPlease verify to claim your raffle rewards: {pings}\n```"
+            )
+        await interaction.followup.send(response_msg, file=file, ephemeral=True)
 
     @event_group.command(name="export_winners", description="Export an event's placement winners as a CSV file.")
     @require_admin_auth()
@@ -865,42 +875,53 @@ class EventCog(commands.Cog, name="Event"):
         )
         verified_map = {r['user_id']: r for r in verified_rows}
 
-        # Block if unverified
         unverified_ids = [wid for wid in winner_ids if wid not in verified_map]
-        if unverified_ids:
-            unverified_mentions = ", ".join(f"<@{uid}>" for uid in unverified_ids)
-            return await interaction.followup.send(
-                f"❌ **Export Blocked — Unverified Winners Detected.**\n"
-                f"The following winners have not completed MLBB verification and must be resolved first:\n"
-                f"{unverified_mentions}",
-                ephemeral=True
-            )
 
         output = io.StringIO()
         output.write('\ufeff')
         writer = csv.writer(output)
         writer.writerow(["Full Name", "UID", "Server", "Amount", "Remarks"])
 
-        # One row per reward entry (a user could have multiple placements)
+        # Verified reward entries first
         for row in rewards:
-            v = verified_map[row['user_id']]
-            placement = row['reward_type']
-            writer.writerow([
-                v['full_name'],
-                v['mlbb_uid'],
-                v['mlbb_server'],
-                "",
-                f"MSL Network Discord - {event_name} - {placement} - ({date_str})"
-            ])
+            if row['user_id'] in verified_map:
+                v = verified_map[row['user_id']]
+                placement = row['reward_type']
+                writer.writerow([
+                    v['full_name'],
+                    v['mlbb_uid'],
+                    v['mlbb_server'],
+                    "",
+                    f"MSL Network Discord - {event_name} - {placement} - ({date_str})"
+                ])
+        
+        # Unverified reward entries at the bottom
+        for row in rewards:
+            if row['user_id'] not in verified_map:
+                user_obj = interaction.guild.get_member(row['user_id'])
+                display = user_obj.display_name if user_obj else f"User {row['user_id']}"
+                placement = row['reward_type']
+                writer.writerow([
+                    f"UNVERIFIED — {display}",
+                    "N/A",
+                    "N/A",
+                    "",
+                    f"MSL Network Discord - {event_name} - {placement} - ({date_str})"
+                ])
 
         output.seek(0)
         filename = f"event_winners_{event_id_int}_{date_str.replace('/', '-')}.csv"
         file = discord.File(fp=io.BytesIO(output.getvalue().encode('utf-8-sig')), filename=filename)
-        await interaction.followup.send(
-            f"✅ Exported **{len(rewards)}** placement row(s) from **{event_name}**.",
-            file=file,
-            ephemeral=True
-        )
+        
+        response_msg = f"✅ Exported **{len(rewards)}** placement row(s) from **{event_name}**."
+        if unverified_ids:
+            pings = " ".join([f"<@{uid}>" for uid in unverified_ids])
+            response_msg += (
+                f"\n\n⚠️ **{len(unverified_ids)} unverified winner(s)** are tagged as `UNVERIFIED` at the bottom of the CSV.\n\n"
+                f"**Copy/Paste this to tag them:**\n"
+                f"```\nPlease verify to claim your event rewards: {pings}\n```"
+            )
+        await interaction.followup.send(response_msg, file=file, ephemeral=True)
 
     @raffle_group.command(name="set_timer", description="Set or update the end time on an existing active raffle.")
     @require_admin_auth()

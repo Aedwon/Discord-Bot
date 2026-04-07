@@ -472,19 +472,6 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         verified_map = {rk['user_id']: rk for rk in verified_rows}
         
         unverified_ids = [wid for wid in winner_ids if wid not in verified_map]
-        
-        # Block export if any unverified users found
-        if unverified_ids:
-            pings = " ".join([f"<@{uid}>" for uid in unverified_ids])
-            msg = (
-                f"❌ **Export Blocked — Unverified Winners Detected.**\n"
-                f"The following winners have not completed MLBB verification.\n\n"
-                f"**Copy/Paste this to the booster channel:**\n"
-                f"```\n"
-                f"Please verify to claim your Server Booster Raffle rewards: {pings}\n"
-                f"```"
-            )
-            return await interaction.followup.send(msg, ephemeral=True)
             
         # 4. Filter into MSL and Non-MSL arrays
         msl_list = []
@@ -493,7 +480,8 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         date_str = latest_date.strftime("%Y/%m/%d")
         remarks_str = f"MSL Network Discord - Server Booster Raffle - ({date_str})"
         
-        for wid in winner_ids:
+        verified_winner_ids = [wid for wid in winner_ids if wid in verified_map]
+        for wid in verified_winner_ids:
             v_info = verified_map[wid]
             uid = v_info['mlbb_uid']
             amount = wins_map[wid] * DIAMONDS_PER_WIN
@@ -513,6 +501,22 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                     amount,
                     remarks_str
                 ])
+        
+        # Append unverified users at the end of the non-MSL list with placeholder data
+        for wid in unverified_ids:
+            user_obj = self.bot.get_user(wid)
+            if not user_obj:
+                try: user_obj = await self.bot.fetch_user(wid)
+                except Exception: pass
+            display = user_obj.display_name if user_obj else f"User {wid}"
+            amount = wins_map[wid] * DIAMONDS_PER_WIN
+            non_msl_list.append([
+                f"UNVERIFIED — {display}",
+                "N/A",
+                "N/A",
+                amount,
+                remarks_str
+            ])
                 
         # 5. Build attachments
         files = []
@@ -545,11 +549,23 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                     filename=f"non_msl_booster_raffle_{file_date}.csv"
                 )
             )
-            
+        
+        verified_count = len(verified_winner_ids)
         response_msg = (
             f"✅ Exported **{len(winner_ids)}** winners from the **{date_str}** draw.\n"
-            f"Included **{len(msl_list)}** MSL members and **{len(non_msl_list)}** non-MSL members."
+            f"Included **{len(msl_list)}** MSL members and **{verified_count - len(msl_list)}** verified non-MSL members."
         )
+        
+        if unverified_ids:
+            pings = " ".join([f"<@{uid}>" for uid in unverified_ids])
+            response_msg += (
+                f"\n\n⚠️ **{len(unverified_ids)} unverified winner(s)** are tagged as `UNVERIFIED` at the bottom of the non-MSL CSV.\n\n"
+                f"**Copy/Paste this to the booster channel:**\n"
+                f"```\n"
+                f"Please verify to claim your Server Booster Raffle rewards: {pings}\n"
+                f"```"
+            )
+        
         await interaction.followup.send(response_msg, files=files, ephemeral=True)
 
     @app_commands.command(
