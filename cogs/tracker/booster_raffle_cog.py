@@ -487,7 +487,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             amount = wins_map[wid] * DIAMONDS_PER_WIN
             
             if verification_service.is_msl(uid, v_info['mlbb_server']):
-                msl_nickname = verification_service.get_msl_nickname(uid)
+                msl_nickname = verification_service.get_msl_nickname(uid, v_info['mlbb_server'])
                 msl_list.append([
                     msl_nickname,
                     amount,
