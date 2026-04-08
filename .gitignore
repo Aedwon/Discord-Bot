@@ -17,5 +17,9 @@ venv/
 .vscode/
 .idea/
 
+# Scheduled embeds persistence (must survive deploys)
+scheduled_embeds.json
+scheduled_embeds.json.tmp
+
 # OS Generated
 .DS_Store

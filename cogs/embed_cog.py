@@ -15,6 +15,8 @@ import logging
 import asyncio
 import copy
 import os
+import traceback
+from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 from io import BytesIO
 import pytz
@@ -24,6 +26,11 @@ from utils.constants import TZ_MANILA
 from utils.views import ManageScheduledEmbedView
 
 logger = logging.getLogger('mlbb_bot')
+
+# Resolve storage path relative to this file's directory so it always
+# lands next to the bot code, regardless of the process's working directory.
+STORAGE_DIR = Path(__file__).resolve().parent.parent
+STORAGE_FILE = STORAGE_DIR / "scheduled_embeds.json"
 
 
 def generate_identifier(length=6):
@@ -96,39 +103,50 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.storage_file = "scheduled_embeds.json"
-        self.scheduled_data = {}
+        self.storage_file = str(STORAGE_FILE)
+        self.scheduled_data: dict = {}
         
     def _load_data(self):
+        """Load scheduled embeds from the JSON file on disk."""
         if os.path.exists(self.storage_file):
             try:
                 with open(self.storage_file, 'r') as f:
-                    self.scheduled_data = json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load scheduled embeds: {e}")
+                    raw = f.read().strip()
+                    if raw:
+                        self.scheduled_data = json.loads(raw)
+                    else:
+                        self.scheduled_data = {}
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Failed to load scheduled embeds from {self.storage_file}: {e}")
                 self.scheduled_data = {}
         else:
             self.scheduled_data = {}
+            logger.info(f"No scheduled embeds file found at {self.storage_file}, starting fresh.")
             
     def _save_data(self):
+        """Atomically persist the scheduled data to disk."""
         try:
             temp_file = self.storage_file + ".tmp"
             with open(temp_file, 'w') as f:
-                json.dump(self.scheduled_data, f, indent=4)
+                json.dump(self.scheduled_data, f, indent=2)
             os.replace(temp_file, self.storage_file)
-        except Exception as e:
-            logger.error(f"Failed to save scheduled embeds: {e}")
+        except OSError as e:
+            logger.error(f"Failed to save scheduled embeds to {self.storage_file}: {e}")
     
     async def cog_load(self):
         """Start background task when cog is loaded."""
         self._load_data()
         
-        # Reset any stuck processing states back to pending natively
+        # Reset any embeds that got stuck in 'processing' from a previous crash
+        changed = False
         for identifier, data in self.scheduled_data.items():
             if data.get('status') == 'processing':
                 data['status'] = 'pending'
-        self._save_data()
+                changed = True
+        if changed:
+            self._save_data()
         
+        logger.info(f"EmbedsCog loaded. {len(self.scheduled_data)} scheduled embed(s) in queue. Storage: {self.storage_file}")
         self.schedule_loop.start()
     
     def cog_unload(self):
@@ -142,6 +160,9 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     async def schedule_loop(self):
         """Check and send pending scheduled embeds."""
         try:
+            # Always reload from disk in case the file was updated externally
+            self._load_data()
+            
             now_unix = int(datetime.datetime.now(pytz.UTC).timestamp())
             
             # Find due embeds
@@ -154,6 +175,10 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 return
 
             for identifier in due_keys:
+                # Re-check — the entry might have been removed between iterations
+                if identifier not in self.scheduled_data:
+                    continue
+                    
                 row = self.scheduled_data[identifier]
                 row['status'] = 'processing'
                 self._save_data()
@@ -162,6 +187,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 log_embed_color = discord.Color.red()
                 log_title = "❌ Scheduled Embed Failed"
                 message_link = None
+                user_id = row.get('user_id')
                 
                 try:
                     channel = self.bot.get_channel(row['channel_id'])
@@ -178,7 +204,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     view = discohook_to_view(payload.get("components", []))
                     
                     # Fix empty string content throwing 400 Bad Request
-                    content = row['content']
+                    content = row.get('content')
                     safe_content = content if content else None
                     
                     # Wrap send in wait_for to prevent infinite hangs on rate limits 
@@ -188,35 +214,39 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     )
                     message_link = f"https://discord.com/channels/{channel.guild.id}/{channel.id}/{sent_msg.id}"
                     
-                    # Remove from JSON database completely
+                    # Remove from JSON store completely
                     self.scheduled_data.pop(identifier, None)
                     self._save_data()
                     
                     log_title = "✅ Scheduled Embed Sent"
                     log_embed_color = 0x00FF00
+                    logger.info(f"Successfully sent scheduled embed {identifier} to #{channel.name}")
                 
                 except asyncio.TimeoutError:
                     logger.error(f"Timeout sending scheduled embed {identifier}")
-                    self.scheduled_data[identifier]['status'] = 'pending'
-                    self._save_data()
-                    continue  # We will retry this silently next tick
+                    if identifier in self.scheduled_data:
+                        self.scheduled_data[identifier]['status'] = 'pending'
+                        self._save_data()
+                    continue  # Retry next tick
                 except discord.HTTPException as e:
                     logger.error(f"HTTPException sending scheduled embed {identifier}: {e.status} - {e.text}")
                     if e.status >= 500 or e.status == 429:
-                        self.scheduled_data[identifier]['status'] = 'pending'
-                        self._save_data()
-                        continue  # Transient error, silently retry next tick
+                        if identifier in self.scheduled_data:
+                            self.scheduled_data[identifier]['status'] = 'pending'
+                            self._save_data()
+                        continue  # Transient error, retry next tick
                     else:
                         self.scheduled_data.pop(identifier, None)
                         self._save_data()
                         log_title += f" (HTTP {e.status})"
                 except Exception as e:
                     logger.error(f"Failed to send scheduled embed {identifier}: {e}")
+                    logger.error(traceback.format_exc())
                     self.scheduled_data.pop(identifier, None)
                     self._save_data()
                     log_title += " (Internal Error)"
                 
-                # Check target_channel available to log
+                # Try to send a log notification
                 try:
                     guild_id = target_channel.guild.id if target_channel and hasattr(target_channel, 'guild') else None
                     if guild_id:
@@ -232,21 +262,22 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                                     color=log_embed_color,
                                     timestamp=datetime.datetime.now(TZ_MANILA)
                                 )
-                                embed.add_field(name="Identifier", value=f"`{row['identifier']}`")
+                                embed.add_field(name="Identifier", value=f"`{identifier}`")
                                 embed.add_field(name="Channel", value=target_channel.mention)
-                                embed.add_field(name="User", value=f"<@{row['user_id']}>")
+                                embed.add_field(name="User", value=f"<@{user_id}>")
                                 if message_link:
                                     embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
                                 
-                                await log_channel.send(content=f"<@{row['user_id']}>", embed=embed)
+                                await log_channel.send(content=f"<@{user_id}>", embed=embed)
                 except Exception as log_e:
-                    logger.error(f"Failed to send log for scheduled embed {row['identifier']}: {log_e}")
+                    logger.error(f"Failed to send log for scheduled embed {identifier}: {log_e}")
                 
                 # Sleep between dispatches to organically circumvent spam filters
                 await asyncio.sleep(1)
                 
         except Exception as e:
             logger.error(f"Critical error in schedule_loop: {e}")
+            logger.error(traceback.format_exc())
     
     @schedule_loop.before_loop
     async def before_loop(self):
@@ -514,6 +545,9 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     @app_commands.default_permissions(administrator=True)
     async def manage_embeds(self, interaction: discord.Interaction):
         """Manage pending scheduled embeds."""
+        # Refresh from disk to catch any external changes
+        self._load_data()
+        
         user_id = interaction.user.id
         formatted_rows = []
         
@@ -534,6 +568,9 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         await interaction.response.send_message("Select an embed to preview and manage:", view=view, ephemeral=True)
         
     async def preview_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
+        # Refresh from disk
+        self._load_data()
+        
         row = self.scheduled_data.get(identifier)
         if not row:
             await interaction.response.edit_message(content="❌ Could not find that embed.", embeds=[], view=None)
@@ -543,7 +580,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             payload = row['embed_json']
             if isinstance(payload, str):
                 payload = json.loads(payload)
-            content = row['content']
+            content = row.get('content', '')
             
             unix_time = row['schedule_for_utc']
             time_str = f"<t:{unix_time}:F> (<t:{unix_time}:R>)"
@@ -565,6 +602,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             
     async def cancel_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
         """Actually cancel the embed (called from the view)."""
+        self._load_data()
         if identifier in self.scheduled_data:
             self.scheduled_data.pop(identifier, None)
             self._save_data()
@@ -574,6 +612,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
 
     async def post_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
         """Instantly post a scheduled embed right now."""
+        self._load_data()
         row = self.scheduled_data.get(identifier)
         if not row or row.get('status') != 'pending':
             await interaction.response.edit_message(content="❌ Could not find that pending embed.", embeds=[], view=None)
@@ -590,9 +629,10 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             
             embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in payload.get("embeds", [])]
             view = discohook_to_view(payload.get("components", []))
-            content = row['content']
+            content = row.get('content')
+            safe_content = content if content else None
             
-            sent_msg = await channel.send(content=content, embeds=embeds, view=view)
+            sent_msg = await channel.send(content=safe_content, embeds=embeds, view=view)
             
             self.scheduled_data.pop(identifier, None)
             self._save_data()
@@ -605,6 +645,192 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         except Exception as e:
             logger.error(f"Failed to force post embed {identifier}: {e}")
             await interaction.response.edit_message(content=f"❌ Error posting embed: `{e}`", embeds=[], view=None)
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # Diagnostics
+    # ─────────────────────────────────────────────────────────────────────
+    
+    @embed_group.command(name="diagnose", description="Run a full diagnostic on the scheduled embed pipeline")
+    @app_commands.default_permissions(administrator=True)
+    async def diagnose_embeds(self, interaction: discord.Interaction):
+        """Diagnose the entire scheduled embed pipeline step by step."""
+        await interaction.response.defer(ephemeral=True)
+        
+        lines = []
+        lines.append("# 🔍 Embed Pipeline Diagnostic Report\n")
+        
+        # ── Step 1: Storage File ──
+        lines.append("## 1️⃣ Storage File")
+        lines.append(f"**Path:** `{self.storage_file}`")
+        
+        file_exists = os.path.exists(self.storage_file)
+        lines.append(f"**Exists on disk:** {'✅ Yes' if file_exists else '❌ No'}")
+        
+        if file_exists:
+            try:
+                stat = os.stat(self.storage_file)
+                lines.append(f"**File size:** {stat.st_size} bytes")
+                mod_time = datetime.datetime.fromtimestamp(stat.st_mtime, tz=pytz.UTC).astimezone(TZ_MANILA)
+                lines.append(f"**Last modified:** {mod_time.strftime('%d/%m/%Y %H:%M:%S')} (UTC+8)")
+            except OSError as e:
+                lines.append(f"**Stat error:** `{e}`")
+            
+            try:
+                with open(self.storage_file, 'r') as f:
+                    raw = f.read()
+                disk_data = json.loads(raw) if raw.strip() else {}
+                lines.append(f"**Parseable JSON:** ✅ Yes")
+                lines.append(f"**Entries on disk:** {len(disk_data)}")
+            except Exception as e:
+                lines.append(f"**Parseable JSON:** ❌ No — `{e}`")
+                disk_data = {}
+        else:
+            lines.append("⚠️ The file does not exist yet. It will be created when you schedule an embed.")
+            disk_data = {}
+        
+        # Check write permissions
+        try:
+            test_path = self.storage_file + ".diag_test"
+            with open(test_path, 'w') as f:
+                f.write("test")
+            os.remove(test_path)
+            lines.append(f"**Write permissions:** ✅ Writable")
+        except OSError as e:
+            lines.append(f"**Write permissions:** ❌ Cannot write — `{e}`")
+        
+        # ── Step 2: In-Memory State ──
+        lines.append("\n## 2️⃣ In-Memory State")
+        lines.append(f"**Entries in memory:** {len(self.scheduled_data)}")
+        
+        pending = [k for k, v in self.scheduled_data.items() if v.get('status') == 'pending']
+        processing = [k for k, v in self.scheduled_data.items() if v.get('status') == 'processing']
+        other = [k for k, v in self.scheduled_data.items() if v.get('status') not in ('pending', 'processing')]
+        
+        lines.append(f"**Pending:** {len(pending)}")
+        lines.append(f"**Processing (stuck?):** {len(processing)}")
+        if other:
+            lines.append(f"**Other statuses:** {len(other)}")
+        
+        # Memory vs disk sync check
+        if file_exists:
+            mem_keys = set(self.scheduled_data.keys())
+            disk_keys = set(disk_data.keys())
+            if mem_keys == disk_keys:
+                lines.append("**Memory ↔ Disk sync:** ✅ In sync")
+            else:
+                only_mem = mem_keys - disk_keys
+                only_disk = disk_keys - mem_keys
+                lines.append("**Memory ↔ Disk sync:** ⚠️ Out of sync")
+                if only_mem:
+                    lines.append(f"  - Only in memory: `{', '.join(only_mem)}`")
+                if only_disk:
+                    lines.append(f"  - Only on disk: `{', '.join(only_disk)}`")
+        
+        # ── Step 3: Schedule Loop ──
+        lines.append("\n## 3️⃣ Schedule Loop")
+        loop = self.schedule_loop
+        lines.append(f"**Running:** {'✅ Yes' if loop.is_running() else '❌ No'}")
+        lines.append(f"**Failed:** {'⚠️ Yes' if loop.failed() else '✅ No'}")
+        lines.append(f"**Current loop count:** {loop.current_loop}")
+        
+        if loop.next_iteration:
+            next_iter_utc = loop.next_iteration
+            next_iter_manila = next_iter_utc.astimezone(TZ_MANILA)
+            lines.append(f"**Next iteration:** {next_iter_manila.strftime('%d/%m/%Y %H:%M:%S')} (UTC+8)")
+        else:
+            lines.append("**Next iteration:** ❌ Not scheduled")
+        
+        exc = loop.get_task().exception() if loop.get_task() and loop.get_task().done() else None
+        if exc:
+            lines.append(f"**Last exception:** `{exc}`")
+        
+        # ── Step 4: Current Time Comparison ──
+        lines.append("\n## 4️⃣ Time Check")
+        now_utc = datetime.datetime.now(pytz.UTC)
+        now_manila = now_utc.astimezone(TZ_MANILA)
+        now_unix = int(now_utc.timestamp())
+        lines.append(f"**Current UTC:** {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"**Current Manila:** {now_manila.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"**Current Unix:** `{now_unix}`")
+        
+        # ── Step 5: Per-entry Detail ──
+        lines.append("\n## 5️⃣ Scheduled Entries Detail")
+        
+        if not self.scheduled_data:
+            lines.append("*No entries.*")
+        else:
+            for ident, entry in self.scheduled_data.items():
+                sched_unix = entry.get('schedule_for_utc', 0)
+                status = entry.get('status', 'unknown')
+                channel_id = entry.get('channel_id')
+                user_id = entry.get('user_id')
+                has_embeds = bool(entry.get('embed_json', {}).get('embeds'))
+                
+                sched_dt = datetime.datetime.fromtimestamp(sched_unix, tz=pytz.UTC).astimezone(TZ_MANILA)
+                delta = sched_unix - now_unix
+                
+                if delta > 0:
+                    mins_left = delta // 60
+                    time_status = f"⏳ in {mins_left}m"
+                else:
+                    mins_overdue = abs(delta) // 60
+                    time_status = f"🔴 OVERDUE by {mins_overdue}m"
+                
+                lines.append(f"\n**`{ident}`** — Status: `{status}` — {time_status}")
+                lines.append(f"  Scheduled: {sched_dt.strftime('%d/%m/%Y %H:%M')} (Unix: `{sched_unix}`)")
+                lines.append(f"  Channel: <#{channel_id}> — User: <@{user_id}>")
+                lines.append(f"  Has embeds: {'✅' if has_embeds else '❌'}")
+                
+                # Verify channel is accessible
+                try:
+                    ch = self.bot.get_channel(channel_id)
+                    if ch:
+                        lines.append(f"  Channel accessible: ✅ #{ch.name}")
+                    else:
+                        ch = await self.bot.fetch_channel(channel_id)
+                        lines.append(f"  Channel accessible: ✅ #{ch.name} (fetched)")
+                except Exception as e:
+                    lines.append(f"  Channel accessible: ❌ `{e}`")
+        
+        # ── Step 6: Log Channel ──
+        lines.append("\n## 6️⃣ Log Channel")
+        try:
+            log_row = await db.fetch_one(
+                "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                (interaction.guild.id,)
+            )
+            if log_row and log_row.get('embed_log_channel_id'):
+                log_ch_id = log_row['embed_log_channel_id']
+                log_ch = self.bot.get_channel(log_ch_id)
+                if log_ch:
+                    lines.append(f"**Configured:** ✅ {log_ch.mention}")
+                else:
+                    lines.append(f"**Configured:** ⚠️ ID `{log_ch_id}` but channel not found in cache")
+            else:
+                lines.append("**Configured:** ❌ No log channel set (use `/embed logs`)")
+        except Exception as e:
+            lines.append(f"**DB query error:** `{e}`")
+        
+        # ── Step 7: Working Directory ──
+        lines.append("\n## 7️⃣ Environment")
+        lines.append(f"**CWD:** `{os.getcwd()}`")
+        lines.append(f"**Bot code dir:** `{STORAGE_DIR}`")
+        lines.append(f"**__file__:** `{__file__}`")
+        
+        # Send the report
+        report = "\n".join(lines)
+        
+        # Discord has a 2000 char limit — send as file if too long
+        if len(report) > 1900:
+            buffer = BytesIO(report.encode("utf-8"))
+            buffer.seek(0)
+            await interaction.followup.send(
+                content="📋 Diagnostic report attached below:",
+                file=discord.File(fp=buffer, filename="embed_diagnostic.md"),
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(report, ephemeral=True)
     
     @embed_group.command(name="logs", description="Set the channel for scheduled embed logs")
     @app_commands.describe(channel="Channel for embed logs")
