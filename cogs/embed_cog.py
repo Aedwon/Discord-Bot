@@ -13,6 +13,7 @@ import string
 import datetime
 import logging
 import asyncio
+import copy
 from urllib.parse import urlparse, parse_qs, quote
 from io import BytesIO
 import pytz
@@ -141,7 +142,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     target_channel = channel
                     
                     data = json.loads(row['embed_json'])
-                    embeds = [discord.Embed.from_dict(e) for e in data.get("embeds", [])]
+                    embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in data.get("embeds", [])]
                     view = discohook_to_view(data.get("components", []))
                     
                     # Fix empty string content throwing 400 Bad Request
@@ -287,7 +288,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         embeds_list = data.get("embeds", [])
         components_list = data.get("components", [])
 
-        embeds = [discord.Embed.from_dict(e) for e in embeds_list]
+        embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in embeds_list]
         view = discohook_to_view(components_list)
         
         if schedule_for:
@@ -394,7 +395,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             channel = interaction.guild.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
             target_message = await channel.fetch_message(msg_id)
 
-            new_embeds = [discord.Embed.from_dict(e) for e in embeds_list]
+            new_embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in embeds_list]
             new_view = discohook_to_view(components_list)
 
             if target_message.author.id == self.bot.user.id:
@@ -522,7 +523,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             time_str = f"<t:{unix_time}:F> (<t:{unix_time}:R>)"
             
             # The database saves just "embeds" and "components"
-            embeds = [discord.Embed.from_dict(e) for e in payload.get("embeds", [])]
+            embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in payload.get("embeds", [])]
             
             # Prepend preview warning
             if content:
@@ -559,7 +560,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 
             data = json.loads(row['embed_json'])
             
-            embeds = [discord.Embed.from_dict(e) for e in data.get("embeds", [])]
+            embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in data.get("embeds", [])]
             view = discohook_to_view(data.get("components", []))
             content = row['content']
             
