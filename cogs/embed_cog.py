@@ -147,7 +147,13 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             self._save_data()
         
         logger.info(f"EmbedsCog loaded. {len(self.scheduled_data)} scheduled embed(s) in queue. Storage: {self.storage_file}")
-        self.schedule_loop.start()
+    
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start the schedule loop once the bot is fully connected and ready."""
+        if not self.schedule_loop.is_running():
+            self.schedule_loop.start()
+            logger.info("Schedule loop started from on_ready.")
     
     def cog_unload(self):
         self.schedule_loop.cancel()
@@ -279,9 +285,6 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             logger.error(f"Critical error in schedule_loop: {e}")
             logger.error(traceback.format_exc())
     
-    @schedule_loop.before_loop
-    async def before_loop(self):
-        await self.bot.wait_until_ready()
     
     # ─────────────────────────────────────────────────────────────────────
     # Helpers
