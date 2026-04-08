@@ -14,6 +14,7 @@ import datetime
 import logging
 import asyncio
 import copy
+import os
 from urllib.parse import urlparse, parse_qs, quote
 from io import BytesIO
 import pytz
@@ -95,11 +96,39 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.storage_file = "scheduled_embeds.json"
+        self.scheduled_data = {}
+        
+    def _load_data(self):
+        if os.path.exists(self.storage_file):
+            try:
+                with open(self.storage_file, 'r') as f:
+                    self.scheduled_data = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load scheduled embeds: {e}")
+                self.scheduled_data = {}
+        else:
+            self.scheduled_data = {}
+            
+    def _save_data(self):
+        try:
+            temp_file = self.storage_file + ".tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(self.scheduled_data, f, indent=4)
+            os.replace(temp_file, self.storage_file)
+        except Exception as e:
+            logger.error(f"Failed to save scheduled embeds: {e}")
     
     async def cog_load(self):
         """Start background task when cog is loaded."""
-        # Revert any embeds that got stuck in 'processing' if the bot previously halted unexpectedly
-        await db.execute("UPDATE scheduled_embeds SET status = 'pending' WHERE status = 'processing'")
+        self._load_data()
+        
+        # Reset any stuck processing states back to pending natively
+        for identifier, data in self.scheduled_data.items():
+            if data.get('status') == 'processing':
+                data['status'] = 'pending'
+        self._save_data()
+        
         self.schedule_loop.start()
     
     def cog_unload(self):
@@ -113,22 +142,22 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     async def schedule_loop(self):
         """Check and send pending scheduled embeds."""
         try:
-            now_utc = datetime.datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-            query = """
-                SELECT identifier, channel_id, user_id, content, embed_json 
-                FROM scheduled_embeds 
-                WHERE status = 'pending' AND schedule_for <= %s
-            """
-            rows = await db.fetch_all(query, (now_utc,))
-            if not rows:
+            now_unix = int(datetime.datetime.now(pytz.UTC).timestamp())
+            
+            # Find due embeds
+            due_keys = []
+            for identifier, data in self.scheduled_data.items():
+                if data.get('status') == 'pending' and data.get('schedule_for_utc', 0) <= now_unix:
+                    due_keys.append(identifier)
+                    
+            if not due_keys:
                 return
 
-            # Lock rows to prevent race conditions or infinite hanging loops
-            ids = [row['identifier'] for row in rows]
-            format_strings = ','.join(['%s'] * len(ids))
-            await db.execute(f"UPDATE scheduled_embeds SET status = 'processing' WHERE identifier IN ({format_strings})", tuple(ids))
-            
-            for row in rows:
+            for identifier in due_keys:
+                row = self.scheduled_data[identifier]
+                row['status'] = 'processing'
+                self._save_data()
+                
                 target_channel = None
                 log_embed_color = discord.Color.red()
                 log_title = "❌ Scheduled Embed Failed"
@@ -141,9 +170,12 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     
                     target_channel = channel
                     
-                    data = json.loads(row['embed_json'])
-                    embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in data.get("embeds", [])]
-                    view = discohook_to_view(data.get("components", []))
+                    payload = row['embed_json']
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                        
+                    embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in payload.get("embeds", [])]
+                    view = discohook_to_view(payload.get("components", []))
                     
                     # Fix empty string content throwing 400 Bad Request
                     content = row['content']
@@ -156,30 +188,32 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     )
                     message_link = f"https://discord.com/channels/{channel.guild.id}/{channel.id}/{sent_msg.id}"
                     
-                    # Mark as sent
-                    await db.execute(
-                        "UPDATE scheduled_embeds SET status = 'sent' WHERE identifier = %s",
-                        (row['identifier'],)
-                    )
+                    # Remove from JSON database completely
+                    self.scheduled_data.pop(identifier, None)
+                    self._save_data()
                     
                     log_title = "✅ Scheduled Embed Sent"
                     log_embed_color = 0x00FF00
                 
                 except asyncio.TimeoutError:
-                    logger.error(f"Timeout sending scheduled embed {row['identifier']}")
-                    await db.execute("UPDATE scheduled_embeds SET status = 'pending' WHERE identifier = %s", (row['identifier'],))
+                    logger.error(f"Timeout sending scheduled embed {identifier}")
+                    self.scheduled_data[identifier]['status'] = 'pending'
+                    self._save_data()
                     continue  # We will retry this silently next tick
                 except discord.HTTPException as e:
-                    logger.error(f"HTTPException sending scheduled embed {row['identifier']}: {e.status} - {e.text}")
+                    logger.error(f"HTTPException sending scheduled embed {identifier}: {e.status} - {e.text}")
                     if e.status >= 500 or e.status == 429:
-                        await db.execute("UPDATE scheduled_embeds SET status = 'pending' WHERE identifier = %s", (row['identifier'],))
+                        self.scheduled_data[identifier]['status'] = 'pending'
+                        self._save_data()
                         continue  # Transient error, silently retry next tick
                     else:
-                        await db.execute("UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s", (row['identifier'],))
+                        self.scheduled_data.pop(identifier, None)
+                        self._save_data()
                         log_title += f" (HTTP {e.status})"
                 except Exception as e:
-                    logger.error(f"Failed to send scheduled embed {row['identifier']}: {e}")
-                    await db.execute("UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s", (row['identifier'],))
+                    logger.error(f"Failed to send scheduled embed {identifier}: {e}")
+                    self.scheduled_data.pop(identifier, None)
+                    self._save_data()
                     log_title += " (Internal Error)"
                 
                 # Check target_channel available to log
@@ -308,18 +342,18 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 return
 
             identifier = generate_identifier()
-            full_json = json.dumps({"embeds": embeds_list, "components": components_list})
-            
-            # Convert TZ aware datetime to UTC format or string equivalent for DB
             dt_utc = dt.astimezone(pytz.UTC)
-            dt_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+            unix_utc = int(dt_utc.timestamp())
 
-            await db.execute(
-                """INSERT INTO scheduled_embeds 
-                   (identifier, channel_id, user_id, content, embed_json, schedule_for, status) 
-                   VALUES (%s, %s, %s, %s, %s, %s, 'pending')""",
-                (identifier, channel.id, interaction.user.id, content, full_json, dt_str)
-            )
+            self.scheduled_data[identifier] = {
+                "channel_id": channel.id,
+                "user_id": interaction.user.id,
+                "content": content,
+                "embed_json": {"embeds": embeds_list, "components": components_list},
+                "schedule_for_utc": unix_utc,
+                "status": "pending"
+            }
+            self._save_data()
             
             await interaction.followup.send(
                 f"⏰ Embed scheduled for {dt.strftime('%d/%m/%Y %H:%M')} in {channel.mention}.\n**ID:** `{identifier}`",
@@ -480,49 +514,40 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     @app_commands.default_permissions(administrator=True)
     async def manage_embeds(self, interaction: discord.Interaction):
         """Manage pending scheduled embeds."""
-        rows = await db.fetch_all(
-            "SELECT identifier, schedule_for FROM scheduled_embeds WHERE user_id = %s AND status = 'pending'",
-            (interaction.user.id,)
-        )
+        user_id = interaction.user.id
+        formatted_rows = []
         
-        if not rows:
+        for identifier, data in self.scheduled_data.items():
+            if data.get('user_id') == user_id and data.get('status') == 'pending':
+                sf_utc = datetime.datetime.fromtimestamp(data['schedule_for_utc'], tz=pytz.UTC)
+                sf_manila = sf_utc.astimezone(TZ_MANILA)
+                formatted_rows.append({
+                    'identifier': identifier,
+                    'schedule_for': sf_manila.strftime("%d/%m/%Y %H:%M")
+                })
+        
+        if not formatted_rows:
             await interaction.response.send_message("❌ You have no pending scheduled embeds.", ephemeral=True)
             return
 
-        formatted_rows = []
-        for r in rows:
-            sf = r['schedule_for']
-            if isinstance(sf, str):
-                sf = datetime.datetime.strptime(sf, "%Y-%m-%d %H:%M:%S")
-            sf_utc = sf.replace(tzinfo=pytz.UTC)
-            sf_manila = sf_utc.astimezone(TZ_MANILA)
-            
-            formatted_rows.append({
-                'identifier': r['identifier'],
-                'schedule_for': sf_manila.strftime("%d/%m/%Y %H:%M")
-            })
-            
         view = ManageScheduledEmbedView(formatted_rows, self, interaction.user)
         await interaction.response.send_message("Select an embed to preview and manage:", view=view, ephemeral=True)
         
     async def preview_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
-        row = await db.fetch_one("SELECT content, embed_json, schedule_for FROM scheduled_embeds WHERE identifier = %s", (identifier,))
+        row = self.scheduled_data.get(identifier)
         if not row:
             await interaction.response.edit_message(content="❌ Could not find that embed.", embeds=[], view=None)
             return
             
         try:
-            payload = json.loads(row['embed_json'])
+            payload = row['embed_json']
+            if isinstance(payload, str):
+                payload = json.loads(payload)
             content = row['content']
             
-            sf = row['schedule_for']
-            if isinstance(sf, str):
-                sf = datetime.datetime.strptime(sf, "%Y-%m-%d %H:%M:%S")
-            sf_utc = sf.replace(tzinfo=pytz.UTC)
-            unix_time = int(sf_utc.timestamp())
+            unix_time = row['schedule_for_utc']
             time_str = f"<t:{unix_time}:F> (<t:{unix_time}:R>)"
             
-            # The database saves just "embeds" and "components"
             embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in payload.get("embeds", [])]
             
             # Prepend preview warning
@@ -540,16 +565,17 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             
     async def cancel_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
         """Actually cancel the embed (called from the view)."""
-        await db.execute("DELETE FROM scheduled_embeds WHERE identifier = %s", (identifier,))
-        await interaction.response.edit_message(content=f"🗑️ Cancelled and deleted scheduled embed `{identifier}`.", embeds=[], view=None)
+        if identifier in self.scheduled_data:
+            self.scheduled_data.pop(identifier, None)
+            self._save_data()
+            await interaction.response.edit_message(content=f"🗑️ Cancelled and deleted scheduled embed `{identifier}`.", embeds=[], view=None)
+        else:
+            await interaction.response.edit_message(content="❌ Could not find that embed.", embeds=[], view=None)
 
     async def post_scheduled_embed_action(self, interaction: discord.Interaction, identifier: str):
         """Instantly post a scheduled embed right now."""
-        row = await db.fetch_one(
-            "SELECT channel_id, user_id, content, embed_json FROM scheduled_embeds WHERE identifier = %s AND status = 'pending'",
-            (identifier,)
-        )
-        if not row:
+        row = self.scheduled_data.get(identifier)
+        if not row or row.get('status') != 'pending':
             await interaction.response.edit_message(content="❌ Could not find that pending embed.", embeds=[], view=None)
             return
             
@@ -558,18 +584,18 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             if not channel:
                 channel = await self.bot.fetch_channel(row['channel_id'])
                 
-            data = json.loads(row['embed_json'])
+            payload = row['embed_json']
+            if isinstance(payload, str):
+                payload = json.loads(payload)
             
-            embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in data.get("embeds", [])]
-            view = discohook_to_view(data.get("components", []))
+            embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in payload.get("embeds", [])]
+            view = discohook_to_view(payload.get("components", []))
             content = row['content']
             
             sent_msg = await channel.send(content=content, embeds=embeds, view=view)
             
-            await db.execute(
-                "UPDATE scheduled_embeds SET status = 'sent' WHERE identifier = %s",
-                (identifier,)
-            )
+            self.scheduled_data.pop(identifier, None)
+            self._save_data()
             
             await interaction.response.edit_message(
                 content=f"✅ **Sent instantly!** Scheduled embed `{identifier}` has been published to {channel.mention}.",
