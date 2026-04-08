@@ -12,6 +12,7 @@ import random
 import string
 import datetime
 import logging
+import asyncio
 from urllib.parse import urlparse, parse_qs, quote
 from io import BytesIO
 import pytz
@@ -96,6 +97,8 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     
     async def cog_load(self):
         """Start background task when cog is loaded."""
+        # Revert any embeds that got stuck in 'processing' if the bot previously halted unexpectedly
+        await db.execute("UPDATE scheduled_embeds SET status = 'pending' WHERE status = 'processing'")
         self.schedule_loop.start()
     
     def cog_unload(self):
@@ -116,19 +119,40 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 WHERE status = 'pending' AND schedule_for <= %s
             """
             rows = await db.fetch_all(query, (now_utc,))
+            if not rows:
+                return
+
+            # Lock rows to prevent race conditions or infinite hanging loops
+            ids = [row['identifier'] for row in rows]
+            format_strings = ','.join(['%s'] * len(ids))
+            await db.execute(f"UPDATE scheduled_embeds SET status = 'processing' WHERE identifier IN ({format_strings})", tuple(ids))
             
             for row in rows:
+                target_channel = None
+                log_embed_color = discord.Color.red()
+                log_title = "❌ Scheduled Embed Failed"
+                message_link = None
+                
                 try:
                     channel = self.bot.get_channel(row['channel_id'])
                     if not channel:
                         channel = await self.bot.fetch_channel(row['channel_id'])
                     
+                    target_channel = channel
+                    
                     data = json.loads(row['embed_json'])
                     embeds = [discord.Embed.from_dict(e) for e in data.get("embeds", [])]
                     view = discohook_to_view(data.get("components", []))
-                    content = row['content']
                     
-                    sent_msg = await channel.send(content=content, embeds=embeds, view=view)
+                    # Fix empty string content throwing 400 Bad Request
+                    content = row['content']
+                    safe_content = content if content else None
+                    
+                    # Wrap send in wait_for to prevent infinite hangs on rate limits 
+                    sent_msg = await asyncio.wait_for(
+                        channel.send(content=safe_content, embeds=embeds, view=view),
+                        timeout=30.0
+                    )
                     message_link = f"https://discord.com/channels/{channel.guild.id}/{channel.id}/{sent_msg.id}"
                     
                     # Mark as sent
@@ -137,40 +161,55 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                         (row['identifier'],)
                     )
                     
-                    # Log success
-                    log_row = await db.fetch_one(
-                        "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
-                        (channel.guild.id,)
-                    )
-                    if log_row and log_row.get('embed_log_channel_id'):
-                        log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
-                        if log_channel:
-                            embed = discord.Embed(
-                                title="✅ Scheduled Embed Sent",
-                                color=0x00FF00,
-                                timestamp=datetime.datetime.now(TZ_MANILA)
-                            )
-                            embed.add_field(name="Identifier", value=f"`{row['identifier']}`")
-                            embed.add_field(name="Channel", value=channel.mention)
-                            embed.add_field(name="User", value=f"<@{row['user_id']}>")
-                            embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
-                            await log_channel.send(content=f"<@{row['user_id']}>", embed=embed)
+                    log_title = "✅ Scheduled Embed Sent"
+                    log_embed_color = 0x00FF00
                 
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout sending scheduled embed {row['identifier']}")
+                    await db.execute("UPDATE scheduled_embeds SET status = 'pending' WHERE identifier = %s", (row['identifier'],))
+                    continue  # We will retry this silently next tick
                 except discord.HTTPException as e:
                     logger.error(f"HTTPException sending scheduled embed {row['identifier']}: {e.status} - {e.text}")
                     if e.status >= 500 or e.status == 429:
-                        logger.warning(f"Transient error for embed {row['identifier']}, will retry next minute.")
+                        await db.execute("UPDATE scheduled_embeds SET status = 'pending' WHERE identifier = %s", (row['identifier'],))
+                        continue  # Transient error, silently retry next tick
                     else:
-                        await db.execute(
-                            "UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s",
-                            (row['identifier'],)
-                        )
+                        await db.execute("UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s", (row['identifier'],))
+                        log_title += f" (HTTP {e.status})"
                 except Exception as e:
                     logger.error(f"Failed to send scheduled embed {row['identifier']}: {e}")
-                    await db.execute(
-                        "UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s",
-                        (row['identifier'],)
-                    )
+                    await db.execute("UPDATE scheduled_embeds SET status = 'failed' WHERE identifier = %s", (row['identifier'],))
+                    log_title += " (Internal Error)"
+                
+                # Check target_channel available to log
+                try:
+                    guild_id = target_channel.guild.id if target_channel and hasattr(target_channel, 'guild') else None
+                    if guild_id:
+                        log_row = await db.fetch_one(
+                            "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                            (guild_id,)
+                        )
+                        if log_row and log_row.get('embed_log_channel_id'):
+                            log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
+                            if log_channel:
+                                embed = discord.Embed(
+                                    title=log_title,
+                                    color=log_embed_color,
+                                    timestamp=datetime.datetime.now(TZ_MANILA)
+                                )
+                                embed.add_field(name="Identifier", value=f"`{row['identifier']}`")
+                                embed.add_field(name="Channel", value=target_channel.mention)
+                                embed.add_field(name="User", value=f"<@{row['user_id']}>")
+                                if message_link:
+                                    embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
+                                
+                                await log_channel.send(content=f"<@{row['user_id']}>", embed=embed)
+                except Exception as log_e:
+                    logger.error(f"Failed to send log for scheduled embed {row['identifier']}: {log_e}")
+                
+                # Sleep between dispatches to organically circumvent spam filters
+                await asyncio.sleep(1)
+                
         except Exception as e:
             logger.error(f"Critical error in schedule_loop: {e}")
     
@@ -299,7 +338,8 @@ class EmbedsCog(commands.Cog, name="Embeds"):
 
         else:
             # Send immediately
-            sent_msg = await channel.send(content=content, embeds=embeds, view=view)
+            safe_content = content if content else None
+            sent_msg = await channel.send(content=safe_content, embeds=embeds, view=view)
             message_link = f"https://discord.com/channels/{interaction.guild_id}/{channel.id}/{sent_msg.id}"
             await interaction.followup.send(f"✅ Embed sent to {channel.mention}: [Jump to Message]({message_link})", ephemeral=True)
 
@@ -358,7 +398,8 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             new_view = discohook_to_view(components_list)
 
             if target_message.author.id == self.bot.user.id:
-                await target_message.edit(content=content, embeds=new_embeds, view=new_view)
+                safe_content = content if content else None
+                await target_message.edit(content=safe_content, embeds=new_embeds, view=new_view)
                 await interaction.followup.send(
                     f"✅ Edited: [Jump to Message]({message_link})", ephemeral=True,
                 )
@@ -368,8 +409,9 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 webhooks = await channel.webhooks()
                 webhook = next((w for w in webhooks if w.id == target_message.webhook_id), None)
                 if webhook and webhook.token:
+                    safe_content = content if content else None
                     await webhook.edit_message(
-                        message_id=target_message.id, content=content, embeds=new_embeds,
+                        message_id=target_message.id, content=safe_content, embeds=new_embeds,
                     )
                     await interaction.followup.send(
                         f"✅ Edited webhook message (components may not be supported on webhooks depending on discord config): [Jump]({message_link})",
