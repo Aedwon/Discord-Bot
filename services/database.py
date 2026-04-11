@@ -531,6 +531,22 @@ class Database:
                 FOREIGN KEY (quest_id) REFERENCES quests(id) ON DELETE CASCADE
             )
         ''')
+        
+        # Referral tracking system
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS referrals (
+                user_id BIGINT PRIMARY KEY,
+                own_code VARCHAR(20) NOT NULL UNIQUE,
+                used_code VARCHAR(20) DEFAULT NULL,
+                referred_by BIGINT DEFAULT NULL,
+                total_referrals INT DEFAULT 0,
+                prev_week_referrals INT DEFAULT 0,
+                curr_week_referrals INT DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ref_code (own_code),
+                INDEX idx_ref_total (total_referrals)
+            )
+        ''')
     
     async def close(self):
         """Close the database connection."""
@@ -618,6 +634,10 @@ class Database:
         """Delete all quest definitions and user progress."""
         await self.execute("DELETE FROM quest_progress")
         await self.execute("DELETE FROM quests")
+
+    async def wipe_referrals(self):
+        """Delete all referral data."""
+        await self.execute("DELETE FROM referrals")
 
 
 # Singleton instance

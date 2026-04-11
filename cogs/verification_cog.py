@@ -11,6 +11,7 @@ import logging
 
 from services.verification_service import verification_service
 from services.settings_service import settings_service
+from services.referral_service import referral_service
 from utils.checks import require_admin_auth
 
 logger = logging.getLogger("mlbb_bot.verification_cog")
@@ -47,6 +48,12 @@ class VerificationModal(discord.ui.Modal, title="📝 MLBB Account Verification"
         placeholder="e.g. 3456",
         required=True,
         max_length=10,
+    )
+    referral_code = discord.ui.TextInput(
+        label="Referral Code (optional)",
+        placeholder="e.g. MSL-21I3V9",
+        required=False,
+        max_length=20,
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -104,13 +111,31 @@ class VerificationModal(discord.ui.Modal, title="📝 MLBB Account Verification"
                 else:
                     msl_status = f"\n\n🎓 **Moonton Student Leader Detected!**\nMSL Name: **{msl_nickname}**"
 
+            # ── Referral Code (non-blocking) ──
+            referral_status = ""
+            ref_code = self.referral_code.value.strip()
+            if ref_code:
+                try:
+                    ref_result = await referral_service.link_referral(
+                        interaction.user.id,
+                        ref_code,
+                        interaction.user.joined_at,
+                    )
+                    if ref_result is None:
+                        referral_status = "\n\n🔗 Referral code applied!"
+                    else:
+                        referral_status = "\n\n⚠️ Referral code invalid — use `/referral-link` to try again."
+                except Exception as e:
+                    logger.error(f"Referral link error during verification: {e}")
+                    referral_status = ""
+
             embed = discord.Embed(
                 title="✅ Verification Successful!",
                 description=(
                     f"**Name:** {name}\n"
                     f"**MLBB UID:** {uid}\n"
                     f"**Server:** {server}\n\n"
-                    f"You can now earn XP and Event Points. Have fun! 🎉{msl_status}"
+                    f"You can now earn XP and Event Points. Have fun! 🎉{msl_status}{referral_status}"
                 ),
                 color=discord.Color.green(),
             )

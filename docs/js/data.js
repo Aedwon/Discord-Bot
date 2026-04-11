@@ -1857,5 +1857,64 @@ const DB_DATA = [
                 ]
             }
         ]
+    },
+    {
+        "category": "Referral System",
+        "emoji": "\ud83d\udd17",
+        "id": "referrals",
+        "features": [
+            {
+                "name": "Deterministic Code Generation",
+                "type": "passive",
+                "desc": "Each user gets a unique, permanent referral code derived from their Discord ID (base-36 encoded). The same user always gets the same code."
+            },
+            {
+                "name": "Verification Integration",
+                "type": "passive",
+                "desc": "The verification modal includes an optional Referral Code field. Valid codes are silently linked on successful verification without blocking the process."
+            },
+            {
+                "name": "Weekly Stats Reset",
+                "type": "passive",
+                "desc": "Every Sunday at midnight PHT, current week referral counts shift to previous week and reset. A settings flag prevents double-runs."
+            },
+            {
+                "name": "New Member Eligibility",
+                "type": "passive",
+                "desc": "Only members who joined within the last 30 days can use a referral code. Self-referrals and duplicate uses are blocked."
+            }
+        ],
+        "commands": [
+            {
+                "syntax": "/referral view",
+                "desc": "View your unique referral code and tracking stats (total, this week, last week). Share your code with new members during verification.",
+                "access": "general",
+                "params": []
+            },
+            {
+                "syntax": "/referral link",
+                "desc": "Link a referral code if you missed it during verification. Only works for members who joined within the last 30 days.",
+                "access": "general",
+                "params": [
+                    {
+                        "name": "code",
+                        "type": "string",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/referral leaderboard",
+                "desc": "View the top 10 referrers ranked by all-time total and current week counts in a single embed.",
+                "access": "general",
+                "params": []
+            },
+            {
+                "syntax": "/referral previous",
+                "desc": "Admin-only command showing all users who had referrals last week, sorted by count descending.",
+                "access": "admin",
+                "params": []
+            }
+        ]
     }
 ];

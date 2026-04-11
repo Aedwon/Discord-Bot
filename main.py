@@ -218,6 +218,7 @@ async def load_extensions():
         "cogs.anon_message_cog",
         "cogs.pomodoro_cog",
         "cogs.quest_cog",
+        "cogs.referral_cog",
     ]
     
     success_count = 0
@@ -290,6 +291,8 @@ async def reload(inter: discord.Interaction, cog: str = None):
         "pomodoro": "cogs.pomodoro_cog",
         "quest": "cogs.quest_cog",
         "quests": "cogs.quest_cog",
+        "referral": "cogs.referral_cog",
+        "referrals": "cogs.referral_cog",
     }
     
     if cog:
@@ -356,6 +359,9 @@ async def help_command(inter: discord.Interaction):
                 ("**`/pomodoro leave`**", "Leave the Pomodoro session"),
                 ("**`/pomodoro stop`**", "End Pomodoro for everyone (creator only)"),
                 ("**`/quests`**", "View your daily quests and progress"),
+                ("**`/referral view`**", "View your referral code and stats"),
+                ("**`/referral link <code>`**", "Link a referral code"),
+                ("**`/referral leaderboard`**", "View top referrers"),
             ]
         },
         "booster": {
@@ -440,6 +446,7 @@ async def help_command(inter: discord.Interaction):
                 ("**`/confessions deploy / sync`**", "Confessions panel + sync"),
                 ("**`/anon deploy / sync`**", "Anonymous messages panel + sync"),
                 ("**`/manage-quests`**", "Manage quest definition catalog"),
+                ("**`/referral previous`**", "Last week's referral stats"),
                 ("**`/reload [cog]`**", "Hot-reload cogs"),
             ]
         },
