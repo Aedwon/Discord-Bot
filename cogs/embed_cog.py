@@ -427,7 +427,8 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 if log_row and log_row.get('embed_log_channel_id'):
                     log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
                     if log_channel:
-                        preview_text = f"📝 **Scheduled embed PREVIEW**\n**ID:** `{identifier}`\n**User:** {interaction.user.mention}\n**Channel:** {channel.mention}\n**Scheduled for:** {dt.strftime('%d/%m/%Y %H:%M')} UTC+8\n\n{content or ''}"
+                        safe_preview_content = (content[:1800] + "\n...[truncated for preview]") if content and len(content) > 1800 else (content or "")
+                        preview_text = f"📝 **Scheduled embed PREVIEW**\n**ID:** `{identifier}`\n**User:** {interaction.user.mention}\n**Channel:** {channel.mention}\n**Scheduled for:** {dt.strftime('%d/%m/%Y %H:%M')} UTC+8\n\n{safe_preview_content}"
                         await log_channel.send(content=preview_text, embeds=embeds, view=view)
 
             else:
