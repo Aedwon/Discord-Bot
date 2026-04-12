@@ -685,6 +685,30 @@ class Database:
             )
         ''')
 
+        # ─── SOCIAL RP SYSTEM ────────────────────────────────────────
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS marriages (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                user1_id BIGINT NOT NULL,
+                user2_id BIGINT NOT NULL,
+                married_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_user1 (user1_id),
+                UNIQUE KEY uk_user2 (user2_id),
+                INDEX idx_marriage_pair (user1_id, user2_id)
+            )
+        ''')
+
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS family (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                parent_id BIGINT NOT NULL,
+                child_id BIGINT NOT NULL,
+                adopted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_child (child_id),
+                INDEX idx_family_parent (parent_id)
+            )
+        ''')
+
     
     async def close(self):
         """Close the database connection."""
