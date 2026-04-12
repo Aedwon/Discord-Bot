@@ -392,12 +392,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Ranking Table Renderers (All-Time) ──
     function drawRafflesTable(raffles) {
-        const items = raffles.map(r => ({ label: r.title || `Raffle #${r.raffle_id}`, value: `${Number(r.entries).toLocaleString()} entries` }));
+        const items = raffles.map(r => ({ label: r.title || `Raffle #${r.raffle_id}`, value: `${Number(r.total_entries).toLocaleString()} entries` }));
         renderRows('table-raffles', items, 'No raffle data available');
     }
 
     function drawEventsTable(events) {
-        const items = events.map(e => ({ label: e.title || `Event #${e.event_id}`, value: `${Number(e.participants).toLocaleString()} participants` }));
+        const items = events.map(e => ({ label: e.title || `Event #${e.event_id}`, value: `${Number(e.total_participants).toLocaleString()} participants` }));
         renderRows('table-events', items, 'No event data available');
     }
 

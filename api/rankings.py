@@ -63,12 +63,24 @@ class handler(BaseHTTPRequestHandler):
 
             connection.close()
 
+            # Safely cast BigInts → strings and counts → ints for JSON serialization
+            def safe_row(row):
+                result = {}
+                for k, v in row.items():
+                    if k in ('raffle_id', 'event_id'):
+                        result[k] = int(v) if v is not None else 0
+                    elif k in ('total_entries', 'total_participants'):
+                        result[k] = int(v) if v is not None else 0
+                    else:
+                        result[k] = v
+                return result
+
             response = {
                 "success": True,
-                "top_raffles": top_raffles,
-                "top_events": top_events,
+                "top_raffles": [safe_row(r) for r in top_raffles],
+                "top_events": [safe_row(r) for r in top_events],
             }
-            self.wfile.write(json.dumps(response).encode('utf-8'))
+            self.wfile.write(json.dumps(response, default=str).encode('utf-8'))
 
         except Exception as e:
             error_response = {"success": False, "error": str(e)}

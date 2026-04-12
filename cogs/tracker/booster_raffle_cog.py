@@ -32,6 +32,10 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         if not self.weekly_raffle.is_running():
             self.weekly_raffle.start()
 
+        # Crash recovery: if the bot missed this week's Sunday draw, fire immediately
+        import asyncio
+        asyncio.create_task(self._crash_recovery_check())
+
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=TZ_MANILA))
     async def weekly_raffle(self):
         """Executes automatically on Sunday at 8:00 AM UTC+8."""
@@ -55,6 +59,39 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
     @weekly_raffle.before_loop
     async def before_raffle(self):
         await self.bot.wait_until_ready()
+
+    async def _crash_recovery_check(self):
+        """If the bot missed the scheduled Sunday 8 AM draw (e.g., downtime),
+        fire the raffle immediately on startup. Idempotent — skips if this
+        ISO week already has a recorded draw."""
+        try:
+            await self.bot.wait_until_ready()
+            now = datetime.datetime.now(TZ_MANILA)
+
+            # Only trigger recovery if we're past Sunday 8:00 AM of this week
+            # (i.e., the draw window has passed)
+            iso_weekday = now.isoweekday()  # Mon=1 ... Sun=7
+            past_draw_window = (
+                iso_weekday == 7 and now.hour >= 8  # Sunday after 8 AM
+            ) or (
+                iso_weekday < 7  # Mon–Sat (Sunday draw was missed entirely)
+            )
+
+            if not past_draw_window:
+                return  # It's Sunday before 8 AM, the loop will handle it
+
+            existing = await db.fetch_one('''
+                SELECT COUNT(*) as cnt FROM booster_raffle_history
+                WHERE YEARWEEK(won_at, 1) = YEARWEEK(CURRENT_DATE(), 1)
+            ''')
+            if existing and existing['cnt'] > 0:
+                return  # Already ran this week
+
+            logger.info("Booster raffle crash recovery: missed this week's draw — executing now!")
+            await self._execute_raffle(is_manual=False)
+        except Exception as e:
+            logger.error(f"Booster raffle crash recovery failed: {e}")
+
 
     async def _get_target_slots(self) -> int:
         """Fetch configurable winner slot count (default 25)."""
