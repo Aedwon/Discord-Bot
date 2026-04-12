@@ -375,33 +375,41 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         if not messages_data:
             return
             
-        success_count = 0
+        # Fail early if scheduling format is broken
+        scheduled_time = None
+        if schedule_for:
+            try:
+                dt = datetime.datetime.strptime(schedule_for, "%d/%m/%Y %H:%M")
+                scheduled_time = TZ_MANILA.localize(dt)
+                now = datetime.datetime.now(TZ_MANILA)
+                if (scheduled_time - now).total_seconds() <= 0:
+                    await interaction.followup.send("❌ The scheduled time must be in the future.", ephemeral=True)
+                    return
+            except Exception:
+                await interaction.followup.send(
+                    "❌ Invalid date format. Use **DD/MM/YYYY HH:MM** (24-hour, UTC+8).\nExample: `23/04/2026 18:30`",
+                    ephemeral=True
+                )
+                return
+            
+        success_ids = []
+        failed_count = 0
+
         for msg_data in messages_data:
             content = msg_data.get("content", "")
             embeds_list = msg_data.get("embeds", [])
             components_list = msg_data.get("components", [])
 
+            if not content and not embeds_list and not components_list:
+                failed_count += 1
+                continue
+
             embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in embeds_list]
             view = discohook_to_view(components_list)
             
             if schedule_for:
-                # Parse DD/MM/YYYY HH:MM
-                try:
-                    dt = datetime.datetime.strptime(schedule_for, "%d/%m/%Y %H:%M")
-                    dt = TZ_MANILA.localize(dt)
-                    now = datetime.datetime.now(TZ_MANILA)
-                    if (dt - now).total_seconds() <= 0:
-                        await interaction.followup.send("❌ The scheduled time must be in the future.", ephemeral=True)
-                        return
-                except Exception:
-                    await interaction.followup.send(
-                        "❌ Invalid date format. Use **DD/MM/YYYY HH:MM** (24-hour, UTC+8).\nExample: `23/04/2026 18:30`",
-                        ephemeral=True
-                    )
-                    return
-
                 identifier = generate_identifier()
-                dt_utc = dt.astimezone(pytz.UTC)
+                dt_utc = scheduled_time.astimezone(pytz.UTC)
                 unix_utc = int(dt_utc.timestamp())
 
                 self.scheduled_data[identifier] = {
@@ -412,12 +420,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     "schedule_for_utc": unix_utc,
                     "status": "pending"
                 }
-                self._save_data()
-                
-                await interaction.followup.send(
-                    f"⏰ Embed scheduled for {dt.strftime('%d/%m/%Y %H:%M')} in {channel.mention}.\n**ID:** `{identifier}`",
-                    ephemeral=True
-                )
+                success_ids.append(identifier)
 
                 # Log preview
                 log_row = await db.fetch_one(
@@ -428,34 +431,60 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
                     if log_channel:
                         safe_preview_content = (content[:1800] + "\n...[truncated for preview]") if content and len(content) > 1800 else (content or "")
-                        preview_text = f"📝 **Scheduled embed PREVIEW**\n**ID:** `{identifier}`\n**User:** {interaction.user.mention}\n**Channel:** {channel.mention}\n**Scheduled for:** {dt.strftime('%d/%m/%Y %H:%M')} UTC+8\n\n{safe_preview_content}"
-                        await log_channel.send(content=preview_text, embeds=embeds, view=view)
+                        preview_text = f"📝 **Scheduled embed PREVIEW**\n**ID:** `{identifier}`\n**User:** {interaction.user.mention}\n**Channel:** {channel.mention}\n**Scheduled for:** {scheduled_time.strftime('%d/%m/%Y %H:%M')} UTC+8\n\n{safe_preview_content}"
+                        try:
+                            await log_channel.send(content=preview_text, embeds=embeds, view=view)
+                            await asyncio.sleep(0.5)
+                        except discord.HTTPException:
+                            pass
 
             else:
                 # Send immediately
-                safe_content = content if content else None
-                sent_msg = await channel.send(content=safe_content, embeds=embeds, view=view)
-                message_link = f"https://discord.com/channels/{interaction.guild_id}/{channel.id}/{sent_msg.id}"
-                
-                if success_count == 0:
-                    await interaction.followup.send(f"✅ Embed sent to {channel.mention}: [Jump to Message]({message_link})", ephemeral=True)
+                try:
+                    safe_content = content if content else None
+                    sent_msg = await channel.send(content=safe_content, embeds=embeds, view=view)
+                    message_link = f"https://discord.com/channels/{interaction.guild_id}/{channel.id}/{sent_msg.id}"
+                    
+                    success_ids.append(message_link)
 
-                # Log immediately
-                log_row = await db.fetch_one(
-                    "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
-                    (interaction.guild.id,)
-                )
-                if log_row and log_row.get('embed_log_channel_id'):
-                    log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
-                    if log_channel:
-                        log_embed = discord.Embed(title="📢 Embed Sent", color=discord.Color.gold())
-                        log_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-                        log_embed.add_field(name="User", value=interaction.user.mention, inline=True)
-                        log_embed.add_field(name="Channel", value=channel.mention, inline=True)
-                        log_embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
-                        await log_channel.send(embed=log_embed)
+                    # Log immediately
+                    log_row = await db.fetch_one(
+                        "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                        (interaction.guild.id,)
+                    )
+                    if log_row and log_row.get('embed_log_channel_id'):
+                        log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
+                        if log_channel:
+                            log_embed = discord.Embed(title="📢 Embed Sent", color=discord.Color.gold())
+                            log_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+                            log_embed.add_field(name="User", value=interaction.user.mention, inline=True)
+                            log_embed.add_field(name="Channel", value=channel.mention, inline=True)
+                            log_embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
+                            try:
+                                await log_channel.send(embed=log_embed)
+                                await asyncio.sleep(0.5)
+                            except discord.HTTPException:
+                                pass
+                except discord.HTTPException as e:
+                    logger.error(f"Error sending message immediately: {e}")
+                    failed_count += 1
                         
-            success_count += 1
+        if schedule_for and success_ids:
+            self._save_data()
+            batch_id_str = ', '.join([f'`{id_str}`' for id_str in success_ids])
+            await interaction.followup.send(
+                f"⏰ **{len(success_ids)} Embed(s)** scheduled for {scheduled_time.strftime('%d/%m/%Y %H:%M')} in {channel.mention}.\n**IDs:** {batch_id_str}",
+                ephemeral=True
+            )
+        elif not schedule_for and success_ids:
+            links_str = "\n".join([f"• [Jump to Message]({link})" for link in success_ids])
+            await interaction.followup.send(
+                f"✅ **{len(success_ids)} Embed(s)** sent to {channel.mention}!\n{links_str}",
+                ephemeral=True
+            )
+            
+        if failed_count > 0:
+            await interaction.followup.send(f"⚠️ **{failed_count} message(s) failed** due to empty payloads or Discord API blocks.", ephemeral=True)
     
     @embed_group.command(name="edit", description="Edit an existing message using a Discohook link or JSON File.")
     @app_commands.describe(
