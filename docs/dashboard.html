@@ -62,13 +62,17 @@
                 <!-- Line Chart: Growth Trajectory -->
                 <div class="feature-card chart-container">
                     <h3 style="margin-bottom:1rem;">Community Growth Trajectory</h3>
-                    <canvas id="growthChart"></canvas>
+                    <div style="position: relative; height: 300px; width: 100%;">
+                        <canvas id="growthChart"></canvas>
+                    </div>
                 </div>
                 
                 <!-- Bar Chart: Traffic Volume -->
                 <div class="feature-card chart-container">
                     <h3 style="margin-bottom:1rem;">Traffic Volume (Messages & Voice)</h3>
-                    <canvas id="trafficChart"></canvas>
+                    <div style="position: relative; height: 300px; width: 100%;">
+                        <canvas id="trafficChart"></canvas>
+                    </div>
                 </div>
             </div>
 
@@ -78,7 +82,9 @@
                 <!-- Doughnut Chart: Top Chat Channels -->
                 <div class="feature-card chart-container" style="display:flex; flex-direction:column; align-items:center;">
                     <h3 style="align-self:flex-start; margin-bottom:1rem;">Peak Chat Channels</h3>
-                    <div style="width: 80%; max-width:300px;"><canvas id="channelChart"></canvas></div>
+                    <div style="position: relative; width: 100%; max-width: 300px; height: 300px;">
+                        <canvas id="channelChart"></canvas>
+                    </div>
                 </div>
 
                 <!-- Mod / Support Summary list -->
