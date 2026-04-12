@@ -171,99 +171,51 @@ class AnalyticsCog(commands.Cog, name="analytics"):
 
             logger.info(f"Identity cache synced: {member_count} members, {channel_count} channels")
 
-            # Auto-repair historical rollups now that caches are fresh
-            await self._repair_granular_json()
+            # Exhaustive Backfill: Ensure past 7 days have all new data points (Heatmap, Social, etc.)
+            await self._auto_backfill_analytics(days=7)
         except Exception as e:
             logger.error(f"Identity cache sync error: {e}")
 
-    async def _repair_granular_json(self):
-        """Walk existing rollups and replace numeric-only names with resolved names
-        from the cache tables. Idempotent — already-resolved entries are skipped."""
+    async def _auto_backfill_analytics(self, days: int = 7):
+        """
+        Scans recent rollups and rebuilds them if they are in the 'old format' 
+        (missing exhaustive metrics like the heatmap).
+        """
         try:
-            import json as _json
-            member_rows = await db.fetch_all("SELECT user_id, display_name FROM member_names")
-            member_cache = {r['user_id']: r['display_name'] for r in member_rows}
-            channel_rows = await db.fetch_all("SELECT channel_id, channel_name FROM channel_names")
-            channel_cache = {r['channel_id']: r['channel_name'] for r in channel_rows}
+            from datetime import date, timedelta
+            today = date.today()
+            
+            rebuilt_count = 0
+            for i in range(1, days + 1):
+                target_date = today - timedelta(days=i)
+                target_str = str(target_date)
 
-            if not member_cache and not channel_cache:
-                return
+                # Check if this day needs a rebuild
+                row = await db.fetch_one(
+                    "SELECT granular_json FROM analytics_daily_rollups WHERE date = %s", 
+                    (target_str,)
+                )
+                
+                needs_rebuild = True
+                if row and row['granular_json']:
+                    try:
+                        import json
+                        g = json.loads(row['granular_json']) if isinstance(row['granular_json'], str) else row['granular_json']
+                        # If heatmap is present, we consider it the 'new exhaustive format'
+                        if g and 'heatmap_week' in g:
+                            needs_rebuild = False
+                    except Exception:
+                        pass
 
-            rows = await db.fetch_all(
-                "SELECT date, granular_json FROM analytics_daily_rollups WHERE granular_json IS NOT NULL"
-            )
-            repaired = 0
-            for row in rows:
-                try:
-                    g = _json.loads(row['granular_json']) if isinstance(row['granular_json'], str) else row['granular_json']
-                except (TypeError, _json.JSONDecodeError):
-                    continue
-                if not g:
-                    continue
-
-                changed = False
-
-                # Fix user names
-                for section_key, id_field in [('quiz_top_3', 'user_id'), ('thanks_top_3', 'user_id'), ('top_invites', 'inviter')]:
-                    for entry in g.get(section_key, []):
-                        uid = entry.get(id_field)
-                        cur = str(entry.get('name', ''))
-                        if uid and (cur.isdigit() or cur == str(uid)):
-                            resolved = member_cache.get(uid)
-                            if resolved:
-                                entry['name'] = resolved
-                                changed = True
-
-                # Fix channel names
-                for section_key in ['top_text_channels', 'top_voice_channels']:
-                    for entry in g.get(section_key, []):
-                        cid = entry.get('channel_id')
-                        cur = str(entry.get('name', ''))
-                        if cid and (cur.isdigit() or cur == str(cid)):
-                            resolved = channel_cache.get(cid)
-                            if resolved:
-                                entry['name'] = resolved
-                                changed = True
-
-                # Ensure counts are ints
-                for key in ['total_mod_actions', 'new_verifications', 'new_tickets',
-                            'quiz_sessions', 'quiz_score', 'thanks_given', 'quests_completed',
-                            'new_referrals', 'ep_redemptions', 'booster_raffle_wins',
-                            'event_raffles_created', 'event_raffle_entries',
-                            'event_participation_claims', 'event_ep_distributed',
-                            'event_registrations', 'ticket_ratings_count']:
-                    if key in g and g[key] is not None:
-                        try:
-                            g[key] = int(g[key])
-                        except (ValueError, TypeError):
-                            pass
-
-                if g.get('mod_actions'):
-                    for action in g['mod_actions']:
-                        try:
-                            g['mod_actions'][action] = int(g['mod_actions'][action])
-                        except (ValueError, TypeError):
-                            pass
-
-                if changed:
-                    import decimal, datetime as _dt
-                    def json_serial(obj):
-                        if isinstance(obj, decimal.Decimal): return float(obj)
-                        if isinstance(obj, (_dt.datetime, _dt.date)): return obj.isoformat()
-                        return str(obj)
-                    new_json = _json.dumps(g, default=json_serial)
-                    await db.execute(
-                        "UPDATE analytics_daily_rollups SET granular_json = %s WHERE date = %s",
-                        (new_json, row['date'])
-                    )
-                    repaired += 1
-
-            if repaired:
-                logger.info(f"Granular JSON repair: fixed {repaired} rollup(s)")
-            else:
-                logger.info("Granular JSON repair: all rollups already clean")
+                if needs_rebuild:
+                    success = await analytics_service.rebuild_rollup(target_str)
+                    if success:
+                        rebuilt_count += 1
+            
+            if rebuilt_count > 0:
+                logger.info(f"Automated backfill complete: {rebuilt_count} day(s) upgraded to exhaustive format.")
         except Exception as e:
-            logger.error(f"Granular JSON repair error: {e}")
+            logger.error(f"Automated backfill error: {e}")
 
     async def _flush_name_batch(self, batch: list[tuple[int, str]]):
         """Upsert a batch of (user_id, display_name) into member_names."""

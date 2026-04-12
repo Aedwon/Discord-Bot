@@ -639,6 +639,47 @@ class AnalyticsService:
 
         return stats
 
+    async def rebuild_rollup(self, date_str: str):
+        """
+        Regenerates the granular_json for a specific date to ensure it is 
+        'exhaustive' even if the original rollup was old format.
+        """
+        import json
+        import decimal
+        import datetime as dt
+
+        def json_serial(obj):
+            if isinstance(obj, decimal.Decimal): return float(obj)
+            if isinstance(obj, (dt.datetime, dt.date)): return obj.isoformat()
+            return str(obj)
+
+        try:
+            stats = await self.get_exhaustive_daily_stats(date_str)
+            stats_json = json.dumps(stats, default=json_serial)
+
+            await db.execute('''
+                INSERT INTO analytics_daily_rollups (date, total_messages, total_voice_minutes, new_joins, new_leaves, unique_messagers, unique_voice_users, total_reactions, granular_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                    granular_json = VALUES(granular_json),
+                    total_reactions = VALUES(total_reactions)
+            ''', (
+                date_str, 
+                stats.get('total_messages', 0),
+                stats.get('total_voice_minutes', 0),
+                stats.get('new_joins', 0),
+                stats.get('new_leaves', 0),
+                stats.get('unique_messagers', 0),
+                stats.get('unique_voice_users', 0),
+                stats.get('total_reactions', 0),
+                stats_json
+            ))
+            logger.info(f"Successfully rebuilt historical rollup for {date_str}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to rebuild rollup for {date_str}: {e}")
+            return False
+
     # ─── ALL-TIME RANKING QUERIES (for API / Dashboard) ─────────
 
     async def get_top_raffles(self, limit: int = 5) -> list:
