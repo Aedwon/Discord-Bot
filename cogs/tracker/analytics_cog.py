@@ -187,9 +187,10 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             
             # Find all dates that need a rebuild
             # Note: We check for 'heatmap_week' as the indicator of the new format.
+            # We use %% to escape the % for the database driver's format string.
             rows = await db.fetch_all('''
                 SELECT date, granular_json FROM analytics_daily_rollups 
-                WHERE granular_json NOT LIKE '%heatmap_week%' 
+                WHERE granular_json NOT LIKE '%%heatmap_week%%' 
                    OR granular_json IS NULL
             ''')
             
