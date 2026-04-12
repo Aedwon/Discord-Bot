@@ -17,10 +17,16 @@
                 ⚙️ MSL Console
                 <span class="badge">Analytics Dashboard</span>
             </div>
-            <div class="search-wrapper" style="display: flex; gap: 1rem; align-items: center;">
-                <label for="date-range" style="font-size:0.8rem; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Data Range</label>
-                <input type="number" id="days-limit" value="14" min="1" max="30" style="width:80px; padding: 0.5rem;" title="Days to look back">
-                <a href="index.html" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:0.9rem;">Return to Docs</a>
+            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                <button id="btn-7d" class="btn-preset active">7D</button>
+                <button id="btn-30d" class="btn-preset">30D</button>
+                <button id="btn-this-week" class="btn-preset" title="ISO 8601 (Mon-Sun)">This Week</button>
+                <button id="btn-this-month" class="btn-preset">This Month</button>
+                <button id="btn-this-year" class="btn-preset">This Year</button>
+                <span style="color:var(--border); margin:0 0.25rem;">|</span>
+                <input type="date" id="date-start" class="date-input">
+                <input type="date" id="date-end" class="date-input">
+                <a href="index.html" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:0.8rem; margin-left: 0.5rem;">Exit Console</a>
             </div>
         </div>
     </header>

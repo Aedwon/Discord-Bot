@@ -30,8 +30,8 @@ class handler(BaseHTTPRequestHandler):
             )
             
             with connection.cursor() as cursor:
-                # Fetch last 30 days of rollups securely (Read-Only)
-                cursor.execute("SELECT * FROM analytics_daily_rollups ORDER BY date DESC LIMIT 30")
+                # Fetch last 365 days of rollups securely
+                cursor.execute("SELECT * FROM analytics_daily_rollups ORDER BY date DESC LIMIT 365")
                 rows = cursor.fetchall()
             
             connection.close()

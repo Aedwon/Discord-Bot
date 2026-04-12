@@ -1,12 +1,76 @@
 document.addEventListener('DOMContentLoaded', () => {
     const loader = document.getElementById('loader');
-    const daysInput = document.getElementById('days-limit');
     
+    // UI Elements
+    const btn7d = document.getElementById('btn-7d');
+    const btn30d = document.getElementById('btn-30d');
+    const btnWeek = document.getElementById('btn-this-week');
+    const btnMonth = document.getElementById('btn-this-month');
+    const btnYear = document.getElementById('btn-this-year');
+    const dateStartElem = document.getElementById('date-start');
+    const dateEndElem = document.getElementById('date-end');
+    
+    const allBtns = [btn7d, btn30d, btnWeek, btnMonth, btnYear];
+
     let rawData = [];
     let charts = {};
 
     Chart.defaults.color = '#CCCCCC';
     Chart.defaults.font.family = 'Inter';
+
+    // Utility: Format Date as YYYY-MM-DD
+    function toStr(dateObj) {
+        return dateObj.toISOString().split('T')[0];
+    }
+    
+    // Set Active Button
+    function setActive(target) {
+        allBtns.forEach(b => b.classList.remove('active'));
+        if(target) target.classList.add('active');
+    }
+
+    // Handle Time Windows
+    function setDateBounds(preset) {
+        const today = new Date();
+        let startD = new Date();
+        let endD = new Date();
+
+        switch(preset) {
+            case '7d':
+                startD.setDate(today.getDate() - 7);
+                break;
+            case '30d':
+                startD.setDate(today.getDate() - 30);
+                break;
+            case 'week':
+                // ISO 8601 Week (Monday start)
+                let day = today.getDay() || 7; 
+                startD.setDate(today.getDate() - day + 1);
+                break;
+            case 'month':
+                // This Month (1st to current)
+                startD = new Date(today.getFullYear(), today.getMonth(), 1);
+                break;
+            case 'year':
+                // This Year (Jan 1st to current)
+                startD = new Date(today.getFullYear(), 0, 1);
+                break;
+        }
+
+        dateStartElem.value = toStr(startD);
+        dateEndElem.value = toStr(endD);
+        renderDashboard();
+    }
+
+    // Event Listeners
+    btn7d.addEventListener('click', () => { setActive(btn7d); setDateBounds('7d'); });
+    btn30d.addEventListener('click', () => { setActive(btn30d); setDateBounds('30d'); });
+    btnWeek.addEventListener('click', () => { setActive(btnWeek); setDateBounds('week'); });
+    btnMonth.addEventListener('click', () => { setActive(btnMonth); setDateBounds('month'); });
+    btnYear.addEventListener('click', () => { setActive(btnYear); setDateBounds('year'); });
+    
+    dateStartElem.addEventListener('change', () => { setActive(null); renderDashboard(); });
+    dateEndElem.addEventListener('change', () => { setActive(null); renderDashboard(); });
 
     async function fetchStats() {
         try {
@@ -17,11 +81,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const resData = await response.json();
             
             if (resData.success && resData.data) {
-                // Ensure dates are sorted chronologically
                 rawData = resData.data.sort((a, b) => new Date(a.date) - new Date(b.date));
                 loader.innerText = "● Live synced";
                 loader.style.color = "var(--green)";
-                renderDashboard();
+                
+                // Trigger default 7D view
+                setDateBounds('7d');
+                setActive(btn7d);
             } else {
                 throw new Error("Invalid format");
             }
@@ -33,18 +99,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderDashboard() {
-        const limit = parseInt(daysInput.value) || 14;
-        const d = rawData.slice(-limit); // Keep last N days
-        if (d.length === 0) return;
+        const startStr = dateStartElem.value;
+        const endStr = dateEndElem.value;
 
-        // Cumulative Totals for Header
+        // Slice data according to bounds
+        const d = rawData.filter(row => {
+            if (startStr && row.date < startStr) return false;
+            if (endStr && row.date > endStr) return false;
+            return true;
+        });
+
         let sumMsgs = 0, sumVc = 0, sumJoins = 0, sumLeaves = 0, sumVerif = 0;
-        let labels = [];
-        let joinsData = [], leavesData = [], netData = [];
-        let msgData = [], vcData = [];
+        let labels = [], joinsData = [], leavesData = [], netData = [], msgData = [], vcData = [];
         let channelAggr = {};
 
-        // Parse metrics over the sliced range
         for (let row of d) {
             sumMsgs += row.total_messages || 0;
             sumVc += row.total_voice_minutes || 0;
@@ -58,14 +126,11 @@ document.addEventListener('DOMContentLoaded', () => {
             msgData.push(row.total_messages || 0);
             vcData.push(row.total_voice_minutes || 0);
 
-            // Granular parsing
             if (row.granular_json) {
                 sumVerif += row.granular_json.new_verifications || 0;
-                
-                // Aggregate top text channels
                 if (row.granular_json.top_text_channels) {
                     row.granular_json.top_text_channels.forEach(ch => {
-                        let chName = `#${ch.channel_id}`; // Generic fallback
+                        let chName = `#${ch.channel_id}`; 
                         channelAggr[chName] = (channelAggr[chName] || 0) + (ch.count || 0);
                     });
                 }
@@ -74,15 +139,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         document.getElementById('stat-msgs').innerText = sumMsgs.toLocaleString();
         document.getElementById('stat-vc').innerText = sumVc.toLocaleString();
-        document.getElementById('stat-growth').innerText = `${sumJoins > sumLeaves ? '+' : ''}${(sumJoins - sumLeaves).toLocaleString()} (▲${sumJoins})`;
+        document.getElementById('stat-growth').innerText = `${sumJoins > sumLeaves ? '+' : ''}${(sumJoins - sumLeaves).toLocaleString()}`;
         document.getElementById('stat-verifs').innerText = sumVerif.toLocaleString();
 
         drawGrowthChart(labels, joinsData, leavesData, netData);
         drawTrafficChart(labels, msgData, vcData);
         drawChannelChart(channelAggr);
         
-        // Draw Quick Ops table out of the very latest row
-        drawOps(d[d.length - 1]);
+        // Draw Ops using latest available day in range
+        drawOps(d.length > 0 ? d[d.length - 1] : null);
     }
 
     function drawGrowthChart(labels, joins, leaves, net) {
@@ -124,9 +189,14 @@ document.addEventListener('DOMContentLoaded', () => {
         let ctx = document.getElementById('channelChart').getContext('2d');
         if (charts.channels) charts.channels.destroy();
 
-        // Sort and pick top 5
         let sorted = Object.keys(channelAggr).sort((a,b) => channelAggr[b] - channelAggr[a]).slice(0,5);
         let data = sorted.map(k => channelAggr[k]);
+        
+        // Fallback for empty data
+        if(sorted.length === 0) {
+           sorted = ["No Data"];
+           data = [1];
+        }
 
         charts.channels = new Chart(ctx, {
             type: 'doughnut',
@@ -134,18 +204,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 labels: sorted,
                 datasets: [{
                     data: data,
-                    backgroundColor: ['#F2C21A', '#e67e22', '#e74c3c', '#9b59b6', '#3498db'],
+                    backgroundColor: sorted[0] === 'No Data' ? ['#2A2A2A'] : ['#F2C21A', '#e67e22', '#e74c3c', '#9b59b6', '#3498db'],
                     borderWidth: 0
                 }]
             },
-            options: { responsive: true }
+            options: { responsive: true, maintainAspectRatio: false }
         });
     }
 
     function drawOps(latestRow) {
         let ops = document.getElementById('ops-container');
         ops.innerHTML = "";
-        if (!latestRow || !latestRow.granular_json) return;
+        if (!latestRow || !latestRow.granular_json) {
+            ops.innerHTML = "<div style='color:var(--text-muted); font-size:0.9rem; padding: 1rem;'>Waiting for midnight sync (granular data empty for this day).</div>";
+            return;
+        }
         
         let g = latestRow.granular_json;
         let html = "";
@@ -157,8 +230,6 @@ document.addEventListener('DOMContentLoaded', () => {
         
         ops.innerHTML = html;
     }
-
-    daysInput.addEventListener('change', renderDashboard);
 
     // Init
     fetchStats();

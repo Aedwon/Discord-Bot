@@ -503,3 +503,9 @@
 @media (max-width: 600px) {
     .dashboard-grid { grid-template-columns: 1fr; }
 }
+
+.btn-preset { background:var(--bg-card); border:1px solid var(--border); color:var(--text-secondary); padding: 0.4rem 0.75rem; border-radius:6px; font-size:0.75rem; font-weight: 600; cursor:pointer; text-transform: uppercase; transition: all 0.2s;}
+.btn-preset.active { border-color:var(--accent); color:var(--bg-primary); background:var(--accent); }
+.btn-preset:hover:not(.active) { border-color:var(--text-muted); color:var(--text-primary); }
+.date-input { padding: 0.4rem; border-radius:4px; font-size:0.75rem; border:1px solid var(--border); background:var(--bg-card); color:var(--text-primary); font-family: 'JetBrains Mono', monospace; outline: none;}
+.date-input:focus { border-color:var(--accent); }
