@@ -212,9 +212,17 @@ class AnalyticsService:
             "SELECT COUNT(*) as c FROM analytics_reactions WHERE DATE(created_at) = %s", (yesterday,))
 
         import json
+        def json_serial(obj):
+            import decimal, datetime
+            if isinstance(obj, decimal.Decimal):
+                return float(obj)
+            if isinstance(obj, (datetime.datetime, datetime.date)):
+                return obj.isoformat()
+            return str(obj)
+
         try:
             granular_stats = await self.get_exhaustive_daily_stats(yesterday)
-            granular_json_str = json.dumps(granular_stats)
+            granular_json_str = json.dumps(granular_stats, default=json_serial)
         except Exception as e:
             logger.error(f"Failed to generate granular json for rollup: {e}")
             granular_json_str = None

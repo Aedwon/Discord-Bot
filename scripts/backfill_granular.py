@@ -27,7 +27,16 @@ async def run_backfill(days=14):
         print(f"[{target_str}] Processing granular data...")
         try:
             granular_stats = await analytics_service.get_exhaustive_daily_stats(target_str)
-            granular_json_str = json.dumps(granular_stats)
+            
+            def json_serial(obj):
+                import decimal, datetime
+                if isinstance(obj, decimal.Decimal):
+                    return float(obj)
+                if isinstance(obj, (datetime.datetime, datetime.date)):
+                    return obj.isoformat()
+                return str(obj)
+                
+            granular_json_str = json.dumps(granular_stats, default=json_serial)
             
             await db.execute(
                 "UPDATE analytics_daily_rollups SET granular_json = %s WHERE date = %s",
