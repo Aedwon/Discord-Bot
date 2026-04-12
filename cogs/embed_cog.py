@@ -3,6 +3,7 @@ Embeds Cog - Discohook Embed Manager with Scheduling
 Allows admins to send, edit, schedule, and extract embeds from Discohook links.
 """
 
+
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands

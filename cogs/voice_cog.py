@@ -4,6 +4,7 @@ When users join a designated "master" channel, a personal VC is created for them
 The channel is auto-deleted when empty.
 """
 
+
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
