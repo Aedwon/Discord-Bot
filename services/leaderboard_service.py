@@ -82,14 +82,15 @@ class LeaderboardService:
 
     @staticmethod
     def _build_exclusion_clause_alias(
-        alias: str, exclude_ids: set[int], param_list: list
+        alias: str, exclude_ids: set[int], param_list: list,
+        column: str = "user_id"
     ) -> str:
-        """Same as above but with a table alias prefix, e.g. 'u.user_id'."""
+        """Same as above but with a table alias prefix, e.g. 'u.user_id' or 'm.author_id'."""
         if not exclude_ids:
             return ""
         placeholders = ", ".join(["%s"] * len(exclude_ids))
         param_list.extend(exclude_ids)
-        return f" AND {alias}.user_id NOT IN ({placeholders})"
+        return f" AND {alias}.{column} NOT IN ({placeholders})"
 
     # ═══════════════════════════════════════════════════════════════════
     #  ALL-TIME QUERIES
@@ -192,7 +193,7 @@ class LeaderboardService:
     async def get_alltime_messages(self, limit: int = 10, exclude_ids: set[int] | None = None) -> list[dict]:
         """Top users by message count (all-time, 3+ word messages only)."""
         params: list = []
-        excl = self._build_exclusion_clause_alias("m", exclude_ids or set(), params)
+        excl = self._build_exclusion_clause_alias("m", exclude_ids or set(), params, column="author_id")
         params.append(limit)
         return await db.fetch_all(
             f"""SELECT m.author_id as user_id, COUNT(*) as total_messages
@@ -299,7 +300,7 @@ class LeaderboardService:
         """Top users by message count this week (3+ words, not deleted)."""
         week_start = self.get_week_start()
         params: list = [week_start]
-        excl = self._build_exclusion_clause_alias("m", exclude_ids or set(), params)
+        excl = self._build_exclusion_clause_alias("m", exclude_ids or set(), params, column="author_id")
         params.append(limit)
         return await db.fetch_all(
             f"""SELECT m.author_id as user_id, COUNT(*) as total_messages
