@@ -622,7 +622,7 @@ class AnalyticsService:
         clicks = await db.fetch_one("SELECT COUNT(*) as c FROM analytics_link_clicks WHERE DATE(clicked_at) = %s", (date_str,))
         stats['total_link_clicks'] = int(clicks['c']) if clicks else 0
         
-        rsvps = await db.fetch_one("SELECT COUNT(*) as c FROM analytics_event_rsvps WHERE DATE(created_at) = %s", (date_str,))
+        rsvps = await db.fetch_one("SELECT COUNT(*) as c FROM analytics_event_rsvps WHERE DATE(rsvped_at) = %s", (date_str,))
         stats['new_event_rsvps'] = int(rsvps['c']) if rsvps else 0
         
         # Heatmap snapshot
