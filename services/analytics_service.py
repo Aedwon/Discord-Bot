@@ -41,6 +41,39 @@ class AnalyticsService:
             GROUP BY hour_of_day, day_of_week
         ''', (days,))
 
+    async def generate_activity_heatmap(self, days: int = 7) -> str:
+        """
+        Generates a 24x7 text-based heatmap using Unicode density blocks.
+        Rows = Day of Week (Mon-Sun), Columns = Hour of Day (0-23).
+        """
+        raw = await self.get_peak_hours(days)
+        # grid[day][hour] = count
+        grid = [[0 for _ in range(24)] for _ in range(7)]
+        max_val = 0
+        for row in raw:
+            # MySQL DAYOFWEEK is 1 (Sun) to 7 (Sat)
+            # We want 0 (Mon) to 6 (Sun)
+            d = (row['day_of_week'] + 5) % 7
+            h = row['hour_of_day']
+            grid[d][h] = row['msg_count']
+            if row['msg_count'] > max_val:
+                max_val = row['msg_count']
+
+        blocks = ["░", "▒", "▓", "█"]
+        def get_block(val):
+            if val == 0: return "·"
+            if max_val == 0: return "░"
+            idx = int((val / max_val) * (len(blocks) - 1))
+            return blocks[idx]
+
+        days_labels = ["M", "T", "W", "T", "F", "S", "S"]
+        lines = ["    " + " ".join(f"{h:02}"[1:] for h in range(24))] # Hour headers (units only)
+        for i, day_row in enumerate(grid):
+            row_str = " ".join(get_block(v) for v in day_row)
+            lines.append(f"{days_labels[i]} | {row_str}")
+        
+        return "\n".join(lines)
+
     async def get_communicator_ratio(self, guild_member_count: int, days: int = 7) -> dict:
         """Calculate visitor vs communicator ratio."""
         msg_users = await db.fetch_one('''
@@ -564,6 +597,45 @@ class AnalyticsService:
         # 15. New Event Registrations
         reg = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE DATE(registered_at) = %s", (date_str,))
         stats['event_registrations'] = int(reg['c']) if reg else 0
+
+        # 16. EXHAUSTIVE ADDITIONS
+        
+        # Social RP Actions
+        social = await db.fetch_all('''
+            SELECT action_type, COUNT(*) as c FROM analytics_social_interactions 
+            WHERE DATE(created_at) = %s GROUP BY action_type
+        ''', (date_str,))
+        stats['social_actions'] = {row['action_type']: int(row['c']) for row in social}
+        
+        # Relationships
+        marriages = await db.fetch_one("SELECT COUNT(*) as c FROM marriages WHERE DATE(married_at) = %s", (date_str,))
+        stats['new_marriages'] = int(marriages['c']) if marriages else 0
+        
+        adoptions = await db.fetch_one("SELECT COUNT(*) as c FROM family WHERE DATE(adopted_at) = %s", (date_str,))
+        stats['new_adoptions'] = int(adoptions['c']) if adoptions else 0
+        
+        # Economy (Total Distributed)
+        # XP distribution is hard to track without a log, but we can count Quiz/Quests contribution
+        stats['xp_minted_approx'] = stats['quiz_score'] # Primary source of tracked new XP
+        
+        # Link Clicks & RSVPs
+        clicks = await db.fetch_one("SELECT COUNT(*) as c FROM analytics_link_clicks WHERE DATE(clicked_at) = %s", (date_str,))
+        stats['total_link_clicks'] = int(clicks['c']) if clicks else 0
+        
+        rsvps = await db.fetch_one("SELECT COUNT(*) as c FROM analytics_event_rsvps WHERE DATE(created_at) = %s", (date_str,))
+        stats['new_event_rsvps'] = int(rsvps['c']) if rsvps else 0
+        
+        # Heatmap snapshot
+        stats['heatmap_week'] = await self.generate_activity_heatmap(7)
+        
+        # User Metrics (Current snapshot)
+        active = await self.get_active_users()
+        stats['active_metrics'] = {
+            "dau": active['dau'],
+            "wau": active['wau'],
+            "mau": active['mau'],
+            "stickiness": active['stickiness']
+        }
 
         return stats
 

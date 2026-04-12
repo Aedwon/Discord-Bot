@@ -717,7 +717,19 @@ class Database:
                 PRIMARY KEY (user_id, blocked_id),
                 INDEX idx_sb_blocked (blocked_id)
             )
-        ''')    
+        ''')
+
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_social_interactions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                action_type VARCHAR(50) NOT NULL,
+                user_id BIGINT NOT NULL,
+                target_id BIGINT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_asi_date (created_at),
+                INDEX idx_asi_action (action_type)
+            )
+        ''')
     async def close(self):
         """Close the database connection."""
         if self._pool:

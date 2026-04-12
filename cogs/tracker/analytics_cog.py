@@ -611,17 +611,25 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             
             e1 = discord.Embed(title=f"📱 Traffic & Engagement ({yesterday})", color=discord.Color.from_str("#F2C21A"))
             e1.add_field(name="Total Traffic", value=f"**Messages:** {rollup_data['total_messages']:,} (by {rollup_data['unique_messagers']:,} unique)\n**Voice Mins:** {rollup_data['total_voice_minutes']:,} (by {rollup_data['unique_voice_users']:,} unique)", inline=False)
+            e1.add_field(name="Engagement Details", value=f"**Total Reactions:** {rollup_data['total_reactions']:,}\n**Link Clicks:** {extra.get('total_link_clicks', 0)}\n**Event RSVPs:** {extra.get('new_event_rsvps', 0)}", inline=False)
             e1.add_field(name="Top 5 Text Channels", value=top_tx, inline=True)
             e1.add_field(name="Top 3 Voice Channels", value=top_vc, inline=True)
             
+            # Heatmap Preview (if available)
+            if 'heatmap_week' in extra:
+                e1.add_field(name="📉 Activity Heatmap (7D)", value=f"```\n{extra['heatmap_week']}\n```", inline=False)
+
             # ── 📈 Embed 2: Growth & Retention ──
             ret = extra['retention_day_1']
             ret_str = f"{ret['rate']}% ({ret['retained']}/{ret['joined']} returned)" if ret else "No data"
             
             invs = "\n".join([f"`{i['code']}` (by <@{i['inviter']}>): {i['count']} joins" for i in extra['top_invites']]) or "No invites tracked"
+            am = extra.get('active_metrics', {})
+            active_str = f"**DAU:** {am.get('dau', 0)} | **WAU:** {am.get('wau', 0)} | **MAU:** {am.get('mau', 0)}\n**Stickiness:** {am.get('stickiness', 0)}%"
             
             e2 = discord.Embed(title=f"📈 Growth & Retention", color=discord.Color.from_str("#2ECC71"))
             e2.add_field(name="Daily Growth", value=f"**New Joins:** {rollup_data['new_joins']} | **Leaves:** {rollup_data['new_leaves']}\n**Day-1 Retention:** {ret_str}\n**New Verifications:** {extra['new_verifications']}", inline=False)
+            e2.add_field(name="Active User Metrics", value=active_str, inline=False)
             e2.add_field(name="Top 3 Invite Codes", value=invs, inline=False)
             
             # ── ⚔️ Embed 3: Economy & Gameplay ──
@@ -630,21 +638,30 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             
             e3 = discord.Embed(title=f"⚔️ Economy & Gameplay", color=discord.Color.from_str("#E74C3C"))
             e3.add_field(name="System Totals", value=f"**Quests Done:** {extra['quests_completed']:,}\n**EP Redemptions:** {extra['ep_redemptions']:,}\n**Total Thanks:** {extra['thanks_given']}\n**Referrals Linked:** {extra['new_referrals']}", inline=False)
+            e3.add_field(name="Economy Flow", value=f"**XP Minted (Approx):** {extra.get('xp_minted_approx', 0):,}\n**EP Distributed:** {extra.get('event_ep_distributed', 0):,}\n**Event Registrations:** {extra.get('event_registrations', 0)}", inline=False)
             e3.add_field(name="Top 3 Quiz Players", value=f"Total matches: {extra['quiz_sessions']}\n{qt}", inline=True)
             e3.add_field(name="Most Thanked Members", value=tht, inline=True)
             
-            # ── 🛡️ Embed 4: Operations & Moderation ──
+            # ── 💞 Embed 4: Social & Relationships ──
+            sa_map = extra.get('social_actions', {})
+            sa_str = ", ".join([f"{k}: {v}" for k, v in sa_map.items()]) if sa_map else "No interactions"
+            
+            e4 = discord.Embed(title=f"💞 Social & Relationships", color=discord.Color.from_str("#FF69B4"))
+            e4.add_field(name="Relationship Changes", value=f"**Marriages:** {extra.get('new_marriages', 0)}\n**Adoptions:** {extra.get('new_adoptions', 0)}", inline=True)
+            e4.add_field(name="RP Interaction Log", value=f"**Daily Actions:** {sum(sa_map.values()) if sa_map else 0}\n**Actions Breakdown:** {sa_str}", inline=False)
+
+            # ── 🛡️ Embed 5: Operations & Moderation ──
             tc_map = extra['tickets_by_category']
             tc_str = "\n".join([f"{k}: {v}" for k, v in tc_map.items()]) if tc_map else "No new tickets"
             ma_str = ", ".join(f"{k}: {v}" for k,v in extra['mod_actions'].items()) if extra['mod_actions'] else "None"
             
-            e4 = discord.Embed(title=f"🛡️ Operations & Moderation", color=discord.Color.from_str("#3498DB"))
-            e4.add_field(name="Tickets Opened By Category", value=tc_str, inline=True)
-            e4.add_field(name="Support metrics", value=f"**Total Ratings:** {extra['ticket_ratings_count']}\n**Average Rating:** ⭐ {extra['ticket_avg_rating']}/5", inline=True)
-            e4.add_field(name="Moderation Log", value=f"**Total Actions:** {extra['total_mod_actions']} ({ma_str})", inline=False)
-            e4.add_field(name="📌 Live Midnight Snapshot", value=f"**Total Members:** {total_members:,} | **Server Boosts:** {boosts} | **Active Threads:** {threads} | **Scheduled Events:** {events}", inline=False)
+            e5 = discord.Embed(title=f"🛡️ Operations & Moderation", color=discord.Color.from_str("#3498DB"))
+            e5.add_field(name="Tickets Opened By Category", value=tc_str, inline=True)
+            e5.add_field(name="Support metrics", value=f"**Total Ratings:** {extra['ticket_ratings_count']}\n**Average Rating:** ⭐ {extra['ticket_avg_rating']}/5", inline=True)
+            e5.add_field(name="Moderation Log", value=f"**Total Actions:** {extra['total_mod_actions']} ({ma_str})", inline=False)
+            e5.add_field(name="📌 Live Midnight Snapshot", value=f"**Total Members:** {total_members:,} | **Server Boosts:** {boosts} | **Active Threads:** {threads} | **Scheduled Events:** {events}", inline=False)
             
-            await channel.send(embeds=[e1, e2, e3, e4])
+            await channel.send(embeds=[e1, e2, e3, e4, e5])
         except Exception as e:
             logger.error(f"Failed to post daily analytics embed: {e}")
 

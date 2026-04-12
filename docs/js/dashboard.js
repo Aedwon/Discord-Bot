@@ -135,10 +135,11 @@ document.addEventListener('DOMContentLoaded', () => {
         let sumMod=0, sumTickets=0, sumTixRatings=0, tixRatingSum=0;
         let maxUniqueMsg=0, maxUniqueVc=0;
         let sumEventRegs=0, sumEventClaims=0, sumEpDist=0, sumRaffleEntries=0, sumRafflesCreated=0, sumBoosterWins=0;
+        let sumMarriages=0, sumAdoptions=0, sumSocialTotal=0, sumLinks=0, sumRsvps=0, sumXpMinted=0;
 
         let labels=[], joinsArr=[], leavesArr=[], netArr=[], msgArr=[], vcArr=[];
-        let questArr=[], quizArr=[], thanksArr=[], modArr=[];
-        let channelAggr={}, ticketCatAggr={};
+        let questArr=[], quizArr=[], thanksArr=[], modArr=[], stickinessArr=[];
+        let channelAggr={}, ticketCatAggr={}, socialAggr={};
 
         for (const row of d) {
             sumMsgs += row.total_messages || 0;
@@ -192,8 +193,25 @@ document.addEventListener('DOMContentLoaded', () => {
                         ticketCatAggr[cat] = (ticketCatAggr[cat] || 0) + cnt;
                     });
                 }
+                
+                sumMarriages += g.new_marriages || 0;
+                sumAdoptions += g.new_adoptions || 0;
+                sumLinks     += g.total_link_clicks || 0;
+                sumRsvps     += g.new_event_rsvps || 0;
+                sumXpMinted  += g.xp_minted_approx || 0;
+
+                const am = g.active_metrics || {};
+                stickinessArr.push(am.stickiness || 0);
+
+                if (g.social_actions) {
+                    Object.entries(g.social_actions).forEach(([act, cnt]) => {
+                        socialAggr[act] = (socialAggr[act] || 0) + cnt;
+                        sumSocialTotal += cnt;
+                    });
+                }
             } else {
                 questArr.push(0); quizArr.push(0); thanksArr.push(0); modArr.push(0);
+                stickinessArr.push(0);
             }
         }
 
@@ -231,6 +249,13 @@ document.addEventListener('DOMContentLoaded', () => {
         setText('stat-raffles-created', sumRafflesCreated.toLocaleString());
         setText('stat-booster-wins', sumBoosterWins.toLocaleString());
 
+        setText('stat-marriages', sumMarriages.toLocaleString());
+        setText('stat-adoptions', sumAdoptions.toLocaleString());
+        setText('stat-social-total', sumSocialTotal.toLocaleString());
+        setText('stat-links', sumLinks.toLocaleString());
+        setText('stat-rsvps', sumRsvps.toLocaleString());
+        setText('stat-xp-minted', sumXpMinted.toLocaleString());
+
         // ── Draw Charts ──
         drawGrowth(labels, joinsArr, leavesArr, netArr);
         drawMsg(labels, msgArr);
@@ -239,6 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
         drawChannels(channelAggr);
         drawMod(labels, modArr);
         drawTickets(ticketCatAggr);
+        drawStickiness(labels, stickinessArr);
 
         // ── Draw Detail Tables ──
         const latest = d.length > 0 ? d[d.length - 1] : null;
@@ -247,6 +273,8 @@ document.addEventListener('DOMContentLoaded', () => {
         drawInvitesTable(latest);
         drawModTable(latest);
         drawRetentionTable(latest);
+        drawSocialTable(socialAggr);
+        drawHeatmap(latest);
     }
 
     function setText(id, val) { document.getElementById(id).innerText = val; }
@@ -414,6 +442,67 @@ document.addEventListener('DOMContentLoaded', () => {
             { label: 'Joined (Cohort)', value: `${ret.joined || 0}` },
         ];
         renderRows('table-retention', items, 'No retention data');
+    }
+
+    function drawSocialTable(aggr) {
+        const items = Object.entries(aggr)
+            .sort((a,b) => b[1] - a[1])
+            .map(([act, cnt]) => ({ label: act, value: cnt.toLocaleString() }));
+        renderRows('table-social', items, 'No social interactions in range');
+    }
+
+    function drawStickiness(labels, data) {
+        if (charts.stickiness) charts.stickiness.destroy();
+        charts.stickiness = new Chart(document.getElementById('stickinessChart'), {
+            type: 'line',
+            data: { labels, datasets: [
+                { label: 'Stickiness (DAU/WAU %)', data: data, borderColor: '#F2C21A', tension: 0.3, fill: false, pointRadius: 0 }
+            ]},
+            options: makeOpts({ scales: { y: { ticks: { callback: v => v + '%' } } } })
+        });
+    }
+
+    function drawHeatmap(row) {
+        const container = document.getElementById('heatmap-container');
+        const heatmapRaw = row?.granular_json?.heatmap_week;
+        if (!heatmapRaw) {
+            container.innerHTML = '<div class="empty-state">No heatmap data available</div>';
+            return;
+        }
+
+        // Parse the text-based heatmap from backend
+        // Format: M | · · ▒ █ ...
+        const lines = heatmapRaw.split('\n').slice(1); // Skip header
+        container.innerHTML = '';
+        
+        // Add header row for hours
+        container.appendChild(Object.assign(document.createElement('div'), { className: 'hm-label' })); 
+        for(let h=0; h<24; h++) {
+            const hLabel = document.createElement('div');
+            hLabel.className = 'hm-label';
+            hLabel.textContent = h;
+            container.appendChild(hLabel);
+        }
+
+        lines.forEach(line => {
+            const dayLabel = line.split('|')[0].trim();
+            const cells = line.split('|')[1].trim().split(' ');
+
+            const labelEl = document.createElement('div');
+            labelEl.className = 'hm-label';
+            labelEl.textContent = dayLabel;
+            container.appendChild(labelEl);
+
+            cells.forEach(cell => {
+                const cellEl = document.createElement('div');
+                cellEl.className = 'hm-cell';
+                if (cell === '█') cellEl.classList.add('lvl-3');
+                else if (cell === '▓') cellEl.classList.add('lvl-2');
+                else if (cell === '▒') cellEl.classList.add('lvl-1');
+                else cellEl.classList.add('lvl-0');
+                container.appendChild(cellEl);
+            });
+        });
     }
 
     // ── Init ──

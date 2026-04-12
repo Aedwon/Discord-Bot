@@ -664,8 +664,17 @@ class SocialCog(commands.GroupCog, name="social"):
         return row is not None
 
     async def _do_interaction(self, interaction: discord.Interaction, target: discord.Member, action_key: str):
-        """Central handler for all RP interaction commands."""
-        if target.id == interaction.user.id:
+        # 0. Background Logging (Exhaustive Analytics)
+        try:
+            await db.execute(
+                "INSERT INTO analytics_social_interactions (action_type, user_id, target_id) VALUES (%s, %s, %s)",
+                (action_key, interaction.user.id, target.id)
+            )
+        except Exception as e:
+            logger.error(f"Failed to log social interaction {action_key}: {e}")
+
+        # 1. Block Check
+        if await self._is_blocked(target.id, interaction.user.id):
             return await interaction.response.send_message("❌ You can't do that to yourself!", ephemeral=True)
 
         if await self._is_blocked(interaction.user.id, target.id):
@@ -772,6 +781,14 @@ class SocialCog(commands.GroupCog, name="social"):
         if user2 is None:
             user2 = interaction.user
 
+        # 0. Background Logging
+        try:
+            await db.execute(
+                "INSERT INTO analytics_social_interactions (action_type, user_id, target_id) VALUES (%s, %s, %s)",
+                ("ship", interaction.user.id, user1.id if user1.id != interaction.user.id else user2.id)
+            )
+        except Exception: pass
+
         if user1.id == user2.id:
             return await interaction.response.send_message("❌ You can't ship someone with themselves!", ephemeral=True)
 
@@ -838,6 +855,14 @@ class SocialCog(commands.GroupCog, name="social"):
     @app_commands.command(name="8ball", description="Ask the Magic 8-Ball a question!")
     @app_commands.checks.cooldown(1, 5, key=lambda i: i.user.id)
     async def eight_ball(self, interaction: discord.Interaction, question: str):
+        # 0. Background Logging
+        try:
+            await db.execute(
+                "INSERT INTO analytics_social_interactions (action_type, user_id) VALUES (%s, %s)",
+                ("8ball", interaction.user.id)
+            )
+        except Exception: pass
+
         answer = random.choice(EIGHT_BALL_RESPONSES)
 
         # Color based on answer type

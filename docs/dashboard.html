@@ -165,6 +165,67 @@
             </div>
         </div>
 
+        <!-- Heatmap Section -->
+        <div class="section-title">🕒 Peak Activity Heatmap</div>
+        <div class="chart-row wide">
+            <div class="chart-panel heatmap-panel">
+                <h3>📅 Hourly Message Distribution (Last 7 Days)</h3>
+                <div id="heatmap-container" class="heatmap-grid-container">
+                    <!-- JS will populate this -->
+                </div>
+                <div class="heatmap-legend">
+                    <span>Less Active ░</span>
+                    <div class="legend-scale">
+                        <div class="l-cell lvl-0"></div>
+                        <div class="l-cell lvl-1"></div>
+                        <div class="l-cell lvl-2"></div>
+                        <div class="l-cell lvl-3"></div>
+                    </div>
+                    <span>More Active █</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Social & Relationships Row -->
+        <div class="section-title">💞 Social & Community RP</div>
+        <div class="kpi-row compact">
+            <div class="stat-card mini accent-pink">
+                <div class="stat-label">Marriages</div>
+                <div class="stat-value" id="stat-marriages">--</div>
+            </div>
+            <div class="stat-card mini accent-pink">
+                <div class="stat-label">Adoptions</div>
+                <div class="stat-value" id="stat-adoptions">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Total RP Actions</div>
+                <div class="stat-value" id="stat-social-total">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Link Clicks</div>
+                <div class="stat-value" id="stat-links">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">New RSVPs</div>
+                <div class="stat-value" id="stat-rsvps">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">XP Minted (Est)</div>
+                <div class="stat-value" id="stat-xp-minted">--</div>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="chart-panel table-panel">
+                <h3>🧩 Social Interaction Breakdown</h3>
+                <div id="table-social" class="detail-table"></div>
+            </div>
+            <div class="chart-panel">
+                <h3>📊 Community Stickiness Ratio (DAU/WAU)</h3>
+                <div class="canvas-wrap"><canvas id="stickinessChart"></canvas></div>
+            </div>
+        </div>
+
         <div class="chart-row">
             <div class="chart-panel table-panel">
                 <h3>🎰 Top Raffles (By Entries — All Time)</h3>
