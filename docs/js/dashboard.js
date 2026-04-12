@@ -471,29 +471,46 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Parse the text-based heatmap from backend
-        // Format: M | · · ▒ █ ...
-        const lines = heatmapRaw.split('\n').slice(1); // Skip header
+        // Format line 0 (header):  "    0 1 2 3 ..."
+        // Format lines 1-7:         "M | · · ▒ █ ..."
+        const allLines = heatmapRaw.split('\n');
+        const dataLines = allLines.filter(l => l.includes('|'));
+
+        if (dataLines.length === 0) {
+            container.innerHTML = '<div class="empty-state">Heatmap data format unrecognized</div>';
+            return;
+        }
+
         container.innerHTML = '';
-        
-        // Add header row for hours
-        container.appendChild(Object.assign(document.createElement('div'), { className: 'hm-label' })); 
-        for(let h=0; h<24; h++) {
+
+        // Add header row (blank corner + 24 hour labels)
+        const corner = document.createElement('div');
+        corner.className = 'hm-label';
+        container.appendChild(corner);
+        for (let h = 0; h < 24; h++) {
             const hLabel = document.createElement('div');
             hLabel.className = 'hm-label';
             hLabel.textContent = h;
             container.appendChild(hLabel);
         }
 
-        lines.forEach(line => {
-            const dayLabel = line.split('|')[0].trim();
-            const cells = line.split('|')[1].trim().split(' ');
+        dataLines.forEach(line => {
+            const parts = line.split('|');
+            if (parts.length < 2) return;
+
+            const dayLabel = parts[0].trim();
+            const cellStr = parts[1].trim();
+            // Split by whitespace to handle variable spacing
+            const cells = cellStr.split(/\s+/).filter(c => c.length > 0);
 
             const labelEl = document.createElement('div');
             labelEl.className = 'hm-label';
             labelEl.textContent = dayLabel;
             container.appendChild(labelEl);
 
-            cells.forEach(cell => {
+            // Ensure we always render exactly 24 cells per row
+            for (let i = 0; i < 24; i++) {
+                const cell = cells[i] || '·';
                 const cellEl = document.createElement('div');
                 cellEl.className = 'hm-cell';
                 if (cell === '█') cellEl.classList.add('lvl-3');
@@ -501,7 +518,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (cell === '▒') cellEl.classList.add('lvl-1');
                 else cellEl.classList.add('lvl-0');
                 container.appendChild(cellEl);
-            });
+            }
         });
     }
 

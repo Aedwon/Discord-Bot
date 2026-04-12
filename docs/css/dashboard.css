@@ -305,6 +305,90 @@
     border-radius: 6px;
 }
 
+/* ── Heatmap Grid ────────────────────────────────── */
+.heatmap-panel {
+    grid-column: 1 / -1;
+}
+
+.heatmap-grid-container {
+    display: grid;
+    grid-template-columns: 28px repeat(24, 1fr);
+    gap: 2px;
+    padding: 0.5rem 0;
+    overflow-x: auto;
+}
+
+.hm-label {
+    font-size: 0.6rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    user-select: none;
+}
+
+.hm-cell {
+    aspect-ratio: 1;
+    border-radius: 3px;
+    min-width: 12px;
+    min-height: 12px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    cursor: default;
+}
+
+.hm-cell:hover {
+    transform: scale(1.4);
+    box-shadow: 0 0 8px rgba(242, 194, 26, 0.4);
+    z-index: 2;
+    position: relative;
+}
+
+.hm-cell.lvl-0 { background: rgba(255, 255, 255, 0.04); }
+.hm-cell.lvl-1 { background: rgba(242, 194, 26, 0.2); }
+.hm-cell.lvl-2 { background: rgba(242, 194, 26, 0.5); }
+.hm-cell.lvl-3 { background: rgba(242, 194, 26, 0.85); }
+
+.heatmap-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.legend-scale {
+    display: flex;
+    gap: 2px;
+}
+
+.l-cell {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+}
+
+.l-cell.lvl-0 { background: rgba(255, 255, 255, 0.04); }
+.l-cell.lvl-1 { background: rgba(242, 194, 26, 0.2); }
+.l-cell.lvl-2 { background: rgba(242, 194, 26, 0.5); }
+.l-cell.lvl-3 { background: rgba(242, 194, 26, 0.85); }
+
+/* ── Social Accent Cards ────────────────────────── */
+.stat-card.accent-pink {
+    border-color: rgba(255, 105, 180, 0.25);
+    background: linear-gradient(145deg, var(--bg-card), rgba(255, 105, 180, 0.04));
+}
+
+.stat-card.accent-pink:hover {
+    border-color: rgba(255, 105, 180, 0.4);
+}
+
+.stat-card.accent-pink:hover::after {
+    background: #ff69b4;
+}
+
 /* ── Responsive ──────────────────────────────────── */
 @media (max-width: 1100px) {
     .kpi-row { grid-template-columns: repeat(3, 1fr); }
@@ -318,6 +402,9 @@
     .kpi-row.compact { grid-template-columns: repeat(2, 1fr); }
     .filter-bar { gap: 0.35rem; }
     .preset-group { flex-wrap: wrap; }
+    .heatmap-grid-container {
+        grid-template-columns: 28px repeat(24, minmax(10px, 1fr));
+    }
 }
 
 @media (max-width: 600px) {

@@ -202,7 +202,7 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             
             rebuilt_count = 0
             for row in rows:
-                target_str = row['date']
+                target_str = str(row['date'])  # Ensure string — aiomysql returns datetime.date
                 
                 # Double check the JSON content in case LIKE % was imprecise
                 needs_rebuild = True
