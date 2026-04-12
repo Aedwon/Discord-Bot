@@ -171,37 +171,43 @@ class AnalyticsCog(commands.Cog, name="analytics"):
 
             logger.info(f"Identity cache synced: {member_count} members, {channel_count} channels")
 
-            # Exhaustive Backfill: Ensure past 7 days have all new data points (Heatmap, Social, etc.)
-            await self._auto_backfill_analytics(days=7)
+            # Exhaustive Backfill: Scan all historical records and upgrade those in old format
+            await self._auto_backfill_analytics()
         except Exception as e:
             logger.error(f"Identity cache sync error: {e}")
 
-    async def _auto_backfill_analytics(self, days: int = 7):
+    async def _auto_backfill_analytics(self):
         """
-        Scans recent rollups and rebuilds them if they are in the 'old format' 
+        Scans all historical rollups and rebuilds them if they are in the 'old format' 
         (missing exhaustive metrics like the heatmap).
         """
         try:
-            from datetime import date, timedelta
-            today = date.today()
+            import asyncio
+            import json
+            
+            # Find all dates that need a rebuild
+            # Note: We check for 'heatmap_week' as the indicator of the new format.
+            rows = await db.fetch_all('''
+                SELECT date, granular_json FROM analytics_daily_rollups 
+                WHERE granular_json NOT LIKE '%heatmap_week%' 
+                   OR granular_json IS NULL
+            ''')
+            
+            if not rows:
+                logger.info("Automated backfill: All historical records are already exhaustive.")
+                return
+
+            logger.info(f"Automated backfill starting: {len(rows)} day(s) identified for exhaustive upgrade.")
             
             rebuilt_count = 0
-            for i in range(1, days + 1):
-                target_date = today - timedelta(days=i)
-                target_str = str(target_date)
-
-                # Check if this day needs a rebuild
-                row = await db.fetch_one(
-                    "SELECT granular_json FROM analytics_daily_rollups WHERE date = %s", 
-                    (target_str,)
-                )
+            for row in rows:
+                target_str = row['date']
                 
+                # Double check the JSON content in case LIKE % was imprecise
                 needs_rebuild = True
-                if row and row['granular_json']:
+                if row['granular_json']:
                     try:
-                        import json
                         g = json.loads(row['granular_json']) if isinstance(row['granular_json'], str) else row['granular_json']
-                        # If heatmap is present, we consider it the 'new exhaustive format'
                         if g and 'heatmap_week' in g:
                             needs_rebuild = False
                     except Exception:
@@ -211,9 +217,11 @@ class AnalyticsCog(commands.Cog, name="analytics"):
                     success = await analytics_service.rebuild_rollup(target_str)
                     if success:
                         rebuilt_count += 1
+                        # Small delay to keep bot responsive if backfilling large history
+                        await asyncio.sleep(0.5)
             
             if rebuilt_count > 0:
-                logger.info(f"Automated backfill complete: {rebuilt_count} day(s) upgraded to exhaustive format.")
+                logger.info(f"Automated backfill complete: {rebuilt_count} historical day(s) upgraded to exhaustive format.")
         except Exception as e:
             logger.error(f"Automated backfill error: {e}")
 
