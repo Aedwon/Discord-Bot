@@ -66,6 +66,8 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         # RAM write buffers (flushed every 60s)
         self.msg_buffer: list[dict] = []
         self.reaction_buffer: list[dict] = []
+        self.name_cache_buffer: dict[int, str] = {}  # user_id -> display_name
+        self.channel_name_buffer: dict[int, str] = {}  # channel_id -> name
         self.voice_active: dict[int, dict] = {}  # user_id -> {channel_id, joined_at}
 
         # Invite cache for attribution
@@ -94,6 +96,7 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         asyncio.create_task(self._init_keywords())
         asyncio.create_task(self._cleanup_orphaned_voice())
         asyncio.create_task(self._register_tracked_link_views())
+        asyncio.create_task(self._sync_identity_caches())
 
     # ─── INITIALIZATION ─────────────────────────────────────────────
 
@@ -132,6 +135,160 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             view.add_item(TrackedLinkButton(link['id'], link['label']))
             self.bot.add_view(view)
 
+    async def _sync_identity_caches(self):
+        """Bulk-sync all guild members' display names and channel names into the DB cache.
+        Runs once on startup. Processes in chunks to avoid memory pressure."""
+        try:
+            member_count = 0
+            channel_count = 0
+            for guild in self.bot.guilds:
+                # Sync member names in batches of 500
+                batch = []
+                for member in guild.members:
+                    if member.bot:
+                        continue
+                    batch.append((member.id, member.display_name))
+                    if len(batch) >= 500:
+                        await self._flush_name_batch(batch)
+                        member_count += len(batch)
+                        batch = []
+                if batch:
+                    await self._flush_name_batch(batch)
+                    member_count += len(batch)
+
+                # Sync channel names
+                ch_batch = []
+                for channel in guild.channels:
+                    if hasattr(channel, 'name') and channel.name:
+                        ch_batch.append((channel.id, channel.name))
+                        if len(ch_batch) >= 500:
+                            await self._flush_channel_name_batch(ch_batch)
+                            channel_count += len(ch_batch)
+                            ch_batch = []
+                if ch_batch:
+                    await self._flush_channel_name_batch(ch_batch)
+                    channel_count += len(ch_batch)
+
+            logger.info(f"Identity cache synced: {member_count} members, {channel_count} channels")
+
+            # Auto-repair historical rollups now that caches are fresh
+            await self._repair_granular_json()
+        except Exception as e:
+            logger.error(f"Identity cache sync error: {e}")
+
+    async def _repair_granular_json(self):
+        """Walk existing rollups and replace numeric-only names with resolved names
+        from the cache tables. Idempotent — already-resolved entries are skipped."""
+        try:
+            import json as _json
+            member_rows = await db.fetch_all("SELECT user_id, display_name FROM member_names")
+            member_cache = {r['user_id']: r['display_name'] for r in member_rows}
+            channel_rows = await db.fetch_all("SELECT channel_id, channel_name FROM channel_names")
+            channel_cache = {r['channel_id']: r['channel_name'] for r in channel_rows}
+
+            if not member_cache and not channel_cache:
+                return
+
+            rows = await db.fetch_all(
+                "SELECT date, granular_json FROM analytics_daily_rollups WHERE granular_json IS NOT NULL"
+            )
+            repaired = 0
+            for row in rows:
+                try:
+                    g = _json.loads(row['granular_json']) if isinstance(row['granular_json'], str) else row['granular_json']
+                except (TypeError, _json.JSONDecodeError):
+                    continue
+                if not g:
+                    continue
+
+                changed = False
+
+                # Fix user names
+                for section_key, id_field in [('quiz_top_3', 'user_id'), ('thanks_top_3', 'user_id'), ('top_invites', 'inviter')]:
+                    for entry in g.get(section_key, []):
+                        uid = entry.get(id_field)
+                        cur = str(entry.get('name', ''))
+                        if uid and (cur.isdigit() or cur == str(uid)):
+                            resolved = member_cache.get(uid)
+                            if resolved:
+                                entry['name'] = resolved
+                                changed = True
+
+                # Fix channel names
+                for section_key in ['top_text_channels', 'top_voice_channels']:
+                    for entry in g.get(section_key, []):
+                        cid = entry.get('channel_id')
+                        cur = str(entry.get('name', ''))
+                        if cid and (cur.isdigit() or cur == str(cid)):
+                            resolved = channel_cache.get(cid)
+                            if resolved:
+                                entry['name'] = resolved
+                                changed = True
+
+                # Ensure counts are ints
+                for key in ['total_mod_actions', 'new_verifications', 'new_tickets',
+                            'quiz_sessions', 'quiz_score', 'thanks_given', 'quests_completed',
+                            'new_referrals', 'ep_redemptions', 'booster_raffle_wins',
+                            'event_raffles_created', 'event_raffle_entries',
+                            'event_participation_claims', 'event_ep_distributed',
+                            'event_registrations', 'ticket_ratings_count']:
+                    if key in g and g[key] is not None:
+                        try:
+                            g[key] = int(g[key])
+                        except (ValueError, TypeError):
+                            pass
+
+                if g.get('mod_actions'):
+                    for action in g['mod_actions']:
+                        try:
+                            g['mod_actions'][action] = int(g['mod_actions'][action])
+                        except (ValueError, TypeError):
+                            pass
+
+                if changed:
+                    import decimal, datetime as _dt
+                    def json_serial(obj):
+                        if isinstance(obj, decimal.Decimal): return float(obj)
+                        if isinstance(obj, (_dt.datetime, _dt.date)): return obj.isoformat()
+                        return str(obj)
+                    new_json = _json.dumps(g, default=json_serial)
+                    await db.execute(
+                        "UPDATE analytics_daily_rollups SET granular_json = %s WHERE date = %s",
+                        (new_json, row['date'])
+                    )
+                    repaired += 1
+
+            if repaired:
+                logger.info(f"Granular JSON repair: fixed {repaired} rollup(s)")
+            else:
+                logger.info("Granular JSON repair: all rollups already clean")
+        except Exception as e:
+            logger.error(f"Granular JSON repair error: {e}")
+
+    async def _flush_name_batch(self, batch: list[tuple[int, str]]):
+        """Upsert a batch of (user_id, display_name) into member_names."""
+        for user_id, name in batch:
+            try:
+                await db.execute(
+                    "INSERT INTO member_names (user_id, display_name) VALUES (%s, %s) "
+                    "ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), last_updated = NOW()",
+                    (user_id, name)
+                )
+            except Exception:
+                pass
+
+    async def _flush_channel_name_batch(self, batch: list[tuple[int, str]]):
+        """Upsert a batch of (channel_id, channel_name) into channel_names."""
+        for channel_id, name in batch:
+            try:
+                await db.execute(
+                    "INSERT INTO channel_names (channel_id, channel_name) VALUES (%s, %s) "
+                    "ON DUPLICATE KEY UPDATE channel_name = VALUES(channel_name), last_updated = NOW()",
+                    (channel_id, name)
+                )
+            except Exception:
+                pass
+
     # ─── PASSIVE LISTENERS ──────────────────────────────────────────
 
     @commands.Cog.listener()
@@ -151,6 +308,11 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             "hour_of_day": now.hour,
             "day_of_week": now.weekday(),
         })
+
+        # Buffer name cache update (deduplicated per flush cycle)
+        self.name_cache_buffer[message.author.id] = message.author.display_name
+        if hasattr(message.channel, 'name') and message.channel.name:
+            self.channel_name_buffer[message.channel.id] = message.channel.name
 
         # Keyword tracking — check against tracked keywords
         content_lower = content.lower()
@@ -240,6 +402,16 @@ class AnalyticsCog(commands.Cog, name="analytics"):
             (member.id, invite_code, inviter_id)
         )
 
+        # Cache the new member's name immediately (low frequency event)
+        try:
+            await db.execute(
+                "INSERT INTO member_names (user_id, display_name) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), last_updated = NOW()",
+                (member.id, member.display_name)
+            )
+        except Exception:
+            pass
+
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         """Record leave timestamp for retention analysis."""
@@ -313,6 +485,34 @@ class AnalyticsCog(commands.Cog, name="analytics"):
                     )
                 except Exception as e:
                     logger.error(f"Reaction flush error: {e}")
+
+        # Flush name cache buffer
+        if self.name_cache_buffer:
+            names = self.name_cache_buffer.copy()
+            self.name_cache_buffer.clear()
+            for user_id, name in names.items():
+                try:
+                    await db.execute(
+                        "INSERT INTO member_names (user_id, display_name) VALUES (%s, %s) "
+                        "ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), last_updated = NOW()",
+                        (user_id, name)
+                    )
+                except Exception:
+                    pass
+
+        # Flush channel name buffer
+        if self.channel_name_buffer:
+            channels = self.channel_name_buffer.copy()
+            self.channel_name_buffer.clear()
+            for channel_id, name in channels.items():
+                try:
+                    await db.execute(
+                        "INSERT INTO channel_names (channel_id, channel_name) VALUES (%s, %s) "
+                        "ON DUPLICATE KEY UPDATE channel_name = VALUES(channel_name), last_updated = NOW()",
+                        (channel_id, name)
+                    )
+                except Exception:
+                    pass
 
     @flush_buffer.before_loop
     async def before_flush(self):

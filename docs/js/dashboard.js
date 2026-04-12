@@ -100,6 +100,24 @@ document.addEventListener('DOMContentLoaded', () => {
             loader.innerText = "✕ Connection failed";
             loader.style.color = "var(--red)";
         }
+
+        // Fetch all-time rankings (separate endpoint, non-blocking)
+        fetchRankings();
+    }
+
+    async function fetchRankings() {
+        try {
+            const res = await fetch('/api/rankings');
+            const body = await res.json();
+            if (body.success) {
+                drawRafflesTable(body.top_raffles || []);
+                drawEventsTable(body.top_events || []);
+            }
+        } catch(err) {
+            console.error('Rankings fetch failed:', err);
+            drawRafflesTable([]);
+            drawEventsTable([]);
+        }
     }
 
     // ── Render ──
@@ -165,7 +183,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 modArr.push(g.total_mod_actions || 0);
 
                 (g.top_text_channels || []).forEach(ch => {
-                    let k = `#${ch.channel_id}`;
+                    // Use resolved name from backend, fallback to channel_id
+                    let k = ch.name && !(/^\d+$/.test(ch.name)) ? `#${ch.name}` : `#${ch.channel_id}`;
                     channelAggr[k] = (channelAggr[k] || 0) + (ch.count || 0);
                 });
                 if (g.tickets_by_category) {
@@ -240,7 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
             plugins: { legend: { position: 'top' } },
             scales: {
                 x: { grid: { color: gridColor }, ticks: { color: tickColor, maxRotation: 45, font: { size: 10 } } },
-                y: { grid: { color: gridColor }, ticks: { color: tickColor, font: { size: 10 } }, beginAtZero: true }
+                y: { grid: { color: gridColor }, ticks: { color: tickColor, font: { size: 10 }, precision: 0 }, beginAtZero: true }
             },
             ...extra
         };
@@ -367,8 +386,19 @@ document.addEventListener('DOMContentLoaded', () => {
             renderRows('table-mod', [], 'No moderation actions');
             return;
         }
-        const items = Object.entries(g.mod_actions).map(([action, count]) => ({ label: action, value: count }));
+        const items = Object.entries(g.mod_actions).map(([action, count]) => ({ label: action, value: Math.round(Number(count)) }));
         renderRows('table-mod', items, 'No moderation actions');
+    }
+
+    // ── Ranking Table Renderers (All-Time) ──
+    function drawRafflesTable(raffles) {
+        const items = raffles.map(r => ({ label: r.title || `Raffle #${r.raffle_id}`, value: `${Number(r.entries).toLocaleString()} entries` }));
+        renderRows('table-raffles', items, 'No raffle data available');
+    }
+
+    function drawEventsTable(events) {
+        const items = events.map(e => ({ label: e.title || `Event #${e.event_id}`, value: `${Number(e.participants).toLocaleString()} participants` }));
+        renderRows('table-events', items, 'No event data available');
     }
 
     function drawRetentionTable(row) {

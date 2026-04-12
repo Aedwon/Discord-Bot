@@ -708,6 +708,26 @@ async def _finish_closure(interaction: discord.Interaction, reason: str, remarks
     creator_id = ticket.get("creator_id")
     added_ids = json.loads(ticket["added_users"]) if ticket.get("added_users") else []
 
+    # Archive into ticket_history BEFORE purging from active_tickets
+    try:
+        await db.execute(
+            "INSERT INTO ticket_history (channel_name, creator_id, category_key, subject, handler_id, close_reason, is_test, created_at, closed_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                interaction.channel.name,
+                creator_id,
+                ticket.get("category_key", ""),
+                ticket.get("subject"),
+                ticket.get("claimed_by"),
+                reason,
+                bool(ticket.get("is_test")),
+                ticket.get("created_at"),
+                interaction.user.id,
+            )
+        )
+    except Exception as e:
+        logger.error(f"Failed to archive ticket to history: {e}")
+
     # Delete from active tickets
     await db.execute("DELETE FROM active_tickets WHERE channel_id = %s", (cid,))
 

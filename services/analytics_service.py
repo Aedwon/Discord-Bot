@@ -407,53 +407,76 @@ class AnalyticsService:
 
 
     async def get_exhaustive_daily_stats(self, date_str: str, bot=None) -> dict:
-        """Fetch multiple exhaustive data points for a specific date (YYYY-MM-DD)."""
+        """Fetch multiple exhaustive data points for a specific date (YYYY-MM-DD).
+        Name resolution uses the persistent member_names / channel_names DB cache
+        so the Vercel dashboard (which has no bot connection) can display them."""
         stats = {}
         
-        # Helper to gently resolve names
-        def resolve_member_name(user_id):
-            if not bot: return str(user_id)
-            for g in bot.guilds:
-                m = g.get_member(user_id)
-                if m: return m.display_name
-            return str(user_id)
+        # Helper to resolve names — tries bot first, then falls back to DB cache
+        async def resolve_member_name(user_id):
+            if bot:
+                for g in bot.guilds:
+                    m = g.get_member(user_id)
+                    if m: return m.display_name
+            # Fallback: DB cache
+            row = await db.fetch_one(
+                "SELECT display_name FROM member_names WHERE user_id = %s", (user_id,)
+            )
+            return row['display_name'] if row else str(user_id)
 
-        def resolve_channel_name(channel_id):
-            if not bot: return str(channel_id)
-            for g in bot.guilds:
-                c = g.get_channel(channel_id)
-                if c: return c.name
-            return str(channel_id)
+        async def resolve_channel_name(channel_id):
+            if bot:
+                for g in bot.guilds:
+                    c = g.get_channel(channel_id)
+                    if c: return c.name
+            # Fallback: DB cache
+            row = await db.fetch_one(
+                "SELECT channel_name FROM channel_names WHERE channel_id = %s", (channel_id,)
+            )
+            return row['channel_name'] if row else str(channel_id)
 
-        # 1. Moderation Actions
+        # 1. Moderation Actions — cast to int to guarantee whole numbers
         mods = await db.fetch_all('''
             SELECT action_type, COUNT(*) as c 
             FROM mod_logs 
             WHERE DATE(timestamp) = %s 
             GROUP BY action_type
         ''', (date_str,))
-        stats['mod_actions'] = {row['action_type']: row['c'] for row in mods}
-        stats['total_mod_actions'] = sum(row['c'] for row in mods)
+        stats['mod_actions'] = {row['action_type']: int(row['c']) for row in mods}
+        stats['total_mod_actions'] = int(sum(row['c'] for row in mods))
         
         # 2. Verifications
         v = await db.fetch_one("SELECT COUNT(*) as c FROM verified_users WHERE DATE(verified_at) = %s", (date_str,))
-        stats['new_verifications'] = v['c'] if v else 0
+        stats['new_verifications'] = int(v['c']) if v else 0
         
-        # 3. Tickets & Category Breakdown
-        t = await db.fetch_one("SELECT COUNT(*) as c FROM active_tickets WHERE DATE(created_at) = %s AND is_test = FALSE", (date_str,))
-        stats['new_tickets'] = t['c'] if t else 0
+        # 3. Tickets & Category Breakdown — query BOTH active_tickets and ticket_history
+        # ticket_history captures closed tickets; active_tickets captures still-open ones
+        t_active = await db.fetch_one(
+            "SELECT COUNT(*) as c FROM active_tickets WHERE DATE(created_at) = %s AND is_test = FALSE", (date_str,))
+        t_history = await db.fetch_one(
+            "SELECT COUNT(*) as c FROM ticket_history WHERE DATE(created_at) = %s AND is_test = FALSE", (date_str,))
+        stats['new_tickets'] = int(t_active['c'] if t_active else 0) + int(t_history['c'] if t_history else 0)
         
-        tc = await db.fetch_all("SELECT category_key, COUNT(*) as c FROM active_tickets WHERE DATE(created_at) = %s AND is_test = FALSE GROUP BY category_key", (date_str,))
-        stats['tickets_by_category'] = {row['category_key']: row['c'] for row in tc}
+        # Category breakdown from both tables
+        tc_active = await db.fetch_all(
+            "SELECT category_key, COUNT(*) as c FROM active_tickets WHERE DATE(created_at) = %s AND is_test = FALSE GROUP BY category_key", (date_str,))
+        tc_history = await db.fetch_all(
+            "SELECT category_key, COUNT(*) as c FROM ticket_history WHERE DATE(created_at) = %s AND is_test = FALSE GROUP BY category_key", (date_str,))
+        merged_cats = {}
+        for row in tc_active:
+            merged_cats[row['category_key']] = int(row['c'])
+        for row in tc_history:
+            merged_cats[row['category_key']] = merged_cats.get(row['category_key'], 0) + int(row['c'])
+        stats['tickets_by_category'] = merged_cats
         
         tr = await db.fetch_one("SELECT COUNT(*) as c, AVG(stars) as avg_rating FROM ticket_ratings WHERE DATE(rated_at) = %s", (date_str,))
-        stats['ticket_ratings_count'] = tr['c'] if tr else 0
-        stats['ticket_avg_rating'] = round(tr['avg_rating'], 1) if tr and tr['avg_rating'] else 0.0
+        stats['ticket_ratings_count'] = int(tr['c']) if tr else 0
+        stats['ticket_avg_rating'] = round(float(tr['avg_rating']), 1) if tr and tr['avg_rating'] else 0.0
         
         # 4. Quiz History & Top 3
         q = await db.fetch_one("SELECT COUNT(*) as sessions, SUM(score) as total_score FROM quiz_history WHERE DATE(earned_at) = %s", (date_str,))
-        stats['quiz_sessions'] = q['sessions'] if q and q['sessions'] else 0
-        stats['quiz_score'] = q['total_score'] if q and q['total_score'] else 0
+        stats['quiz_sessions'] = int(q['sessions']) if q and q['sessions'] else 0
+        stats['quiz_score'] = int(q['total_score']) if q and q['total_score'] else 0
         
         q_top = await db.fetch_all('''
             SELECT user_id, SUM(score) as sum_score 
@@ -462,11 +485,11 @@ class AnalyticsService:
             GROUP BY user_id 
             ORDER BY sum_score DESC LIMIT 3
         ''', (date_str,))
-        stats['quiz_top_3'] = [{"user_id": r['user_id'], "name": resolve_member_name(r['user_id']), "score": r['sum_score']} for r in q_top]
+        stats['quiz_top_3'] = [{"user_id": r['user_id'], "name": await resolve_member_name(r['user_id']), "score": int(r['sum_score'])} for r in q_top]
         
         # 5. Thanks System & Top 3 Receivers
         th = await db.fetch_one("SELECT COUNT(*) as c FROM thanks_history WHERE DATE(created_at) = %s", (date_str,))
-        stats['thanks_given'] = th['c'] if th else 0
+        stats['thanks_given'] = int(th['c']) if th else 0
         
         th_top = await db.fetch_all('''
             SELECT receiver_id, COUNT(*) as received 
@@ -475,15 +498,15 @@ class AnalyticsService:
             GROUP BY receiver_id 
             ORDER BY received DESC LIMIT 3
         ''', (date_str,))
-        stats['thanks_top_3'] = [{"user_id": r['receiver_id'], "name": resolve_member_name(r['receiver_id']), "count": r['received']} for r in th_top]
+        stats['thanks_top_3'] = [{"user_id": r['receiver_id'], "name": await resolve_member_name(r['receiver_id']), "count": int(r['received'])} for r in th_top]
         
         # 6. Quest Progress
         qp = await db.fetch_one("SELECT COUNT(*) as c FROM quest_progress WHERE completed = TRUE AND DATE(completed_at) = %s", (date_str,))
-        stats['quests_completed'] = qp['c'] if qp else 0
+        stats['quests_completed'] = int(qp['c']) if qp else 0
         
         # 7. Referrals & Invites
         ref = await db.fetch_one("SELECT COUNT(*) as c FROM referrals WHERE DATE(created_at) = %s", (date_str,))
-        stats['new_referrals'] = ref['c'] if ref else 0
+        stats['new_referrals'] = int(ref['c']) if ref else 0
         
         invites = await db.fetch_all('''
             SELECT invite_code, inviter_id, COUNT(*) as c 
@@ -492,17 +515,17 @@ class AnalyticsService:
             GROUP BY invite_code, inviter_id 
             ORDER BY c DESC LIMIT 3
         ''', (date_str,))
-        stats['top_invites'] = [{"code": r['invite_code'], "inviter": r['inviter_id'], "name": resolve_member_name(r['inviter_id']), "count": r['c']} for r in invites]
+        stats['top_invites'] = [{"code": r['invite_code'], "inviter": r['inviter_id'], "name": await resolve_member_name(r['inviter_id']), "count": int(r['c'])} for r in invites]
         
         # 8. Event Redemptions (EP Economy)
         ep = await db.fetch_one("SELECT COUNT(*) as redemptions FROM event_redemptions WHERE DATE(redeemed_at) = %s", (date_str,))
-        stats['ep_redemptions'] = ep['redemptions'] if ep and ep['redemptions'] else 0
+        stats['ep_redemptions'] = int(ep['redemptions']) if ep and ep['redemptions'] else 0
         
         # 9. Day-1 Retention
         ret_1 = await self.get_retention(1)
         stats['retention_day_1'] = ret_1
         
-        # 10. Top 5 Text Channels
+        # 10. Top 5 Text Channels — with resolved names
         tx = await db.fetch_all('''
             SELECT channel_id, COUNT(*) as c 
             FROM analytics_messages 
@@ -510,9 +533,9 @@ class AnalyticsService:
             GROUP BY channel_id 
             ORDER BY c DESC LIMIT 5
         ''', (date_str,))
-        stats['top_text_channels'] = [{"channel_id": r['channel_id'], "name": resolve_channel_name(r['channel_id']), "count": r['c']} for r in tx]
+        stats['top_text_channels'] = [{"channel_id": r['channel_id'], "name": await resolve_channel_name(r['channel_id']), "count": int(r['c'])} for r in tx]
         
-        # 11. Top 3 Voice Channels
+        # 11. Top 3 Voice Channels — with resolved names
         vx = await db.fetch_all('''
             SELECT channel_id, ROUND(SUM(TIMESTAMPDIFF(MINUTE, joined_at, COALESCE(left_at, NOW())))) as mins 
             FROM analytics_voice_sessions 
@@ -520,29 +543,62 @@ class AnalyticsService:
             GROUP BY channel_id 
             ORDER BY mins DESC LIMIT 3
         ''', (date_str,))
-        stats['top_voice_channels'] = [{"channel_id": r['channel_id'], "name": resolve_channel_name(r['channel_id']), "mins": r['mins'] or 0} for r in vx]
+        stats['top_voice_channels'] = [{"channel_id": r['channel_id'], "name": await resolve_channel_name(r['channel_id']), "mins": int(r['mins'] or 0)} for r in vx]
 
         # 12. Booster Raffle Performance
         br_wins = await db.fetch_one("SELECT COUNT(*) as c FROM booster_raffle_history WHERE DATE(won_at) = %s", (date_str,))
-        stats['booster_raffle_wins'] = br_wins['c'] if br_wins else 0
+        stats['booster_raffle_wins'] = int(br_wins['c']) if br_wins else 0
 
         # 13. Event Raffle Performance
         er_created = await db.fetch_one("SELECT COUNT(*) as c FROM event_raffles WHERE DATE(created_at) = %s", (date_str,))
-        stats['event_raffles_created'] = er_created['c'] if er_created else 0
+        stats['event_raffles_created'] = int(er_created['c']) if er_created else 0
         
         er_entries = await db.fetch_one("SELECT COUNT(*) as c FROM event_raffle_entries WHERE DATE(entered_at) = %s", (date_str,))
-        stats['event_raffle_entries'] = er_entries['c'] if er_entries else 0
+        stats['event_raffle_entries'] = int(er_entries['c']) if er_entries else 0
 
         # 14. Event EP Claims
         ep_claims = await db.fetch_one("SELECT COUNT(*) as c, SUM(ep_awarded) as total_ep FROM guild_event_rewards WHERE DATE(awarded_at) = %s", (date_str,))
-        stats['event_participation_claims'] = ep_claims['c'] if ep_claims else 0
-        stats['event_ep_distributed'] = ep_claims['total_ep'] if ep_claims and ep_claims['total_ep'] else 0
+        stats['event_participation_claims'] = int(ep_claims['c']) if ep_claims else 0
+        stats['event_ep_distributed'] = int(ep_claims['total_ep']) if ep_claims and ep_claims['total_ep'] else 0
 
         # 15. New Event Registrations
         reg = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE DATE(registered_at) = %s", (date_str,))
-        stats['event_registrations'] = reg['c'] if reg else 0
+        stats['event_registrations'] = int(reg['c']) if reg else 0
 
         return stats
 
+    # ─── ALL-TIME RANKING QUERIES (for API / Dashboard) ─────────
+
+    async def get_top_raffles(self, limit: int = 5) -> list:
+        """Return the top raffles of all time ranked by total entries.
+        Includes resolved raffle title and entry count."""
+        rows = await db.fetch_all('''
+            SELECT er.raffle_id,
+                   r.title,
+                   COUNT(*) as total_entries
+            FROM event_raffle_entries er
+            JOIN event_raffles r ON r.id = er.raffle_id
+            GROUP BY er.raffle_id, r.title
+            ORDER BY total_entries DESC
+            LIMIT %s
+        ''', (limit,))
+        return [{"raffle_id": r['raffle_id'], "title": r['title'] or f"Raffle #{r['raffle_id']}", "entries": int(r['total_entries'])} for r in rows]
+
+    async def get_top_events(self, limit: int = 5) -> list:
+        """Return the top events of all time ranked by total registrations.
+        Includes resolved event title and participant count."""
+        rows = await db.fetch_all('''
+            SELECT ere.event_id,
+                   COALESCE(er.title, CONCAT('Event #', ere.event_id)) as title,
+                   COUNT(*) as total_participants
+            FROM event_registration_entries ere
+            LEFT JOIN event_registrations er ON er.event_id = ere.event_id
+            GROUP BY ere.event_id, er.title
+            ORDER BY total_participants DESC
+            LIMIT %s
+        ''', (limit,))
+        return [{"event_id": r['event_id'], "title": r['title'], "participants": int(r['total_participants'])} for r in rows]
+
 # Singleton export
 analytics_service = AnalyticsService()
+

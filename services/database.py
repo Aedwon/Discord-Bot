@@ -634,6 +634,47 @@ class Database:
             )
         ''')
 
+        # ─── ANALYTICS IDENTITY CACHE ────────────────────────────────
+        # Stores resolved Discord display names so the Vercel dashboard
+        # (which has no bot connection) can show human-readable names.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS member_names (
+                user_id BIGINT PRIMARY KEY,
+                display_name VARCHAR(255) NOT NULL,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Channel name cache (same purpose as member_names)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS channel_names (
+                channel_id BIGINT PRIMARY KEY,
+                channel_name VARCHAR(255) NOT NULL,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # ─── TICKET HISTORY (Permanent Archive) ─────────────────────
+        # Active tickets are deleted when the channel is purged.
+        # This table preserves records forever for analytics.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS ticket_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                channel_name VARCHAR(255),
+                creator_id BIGINT NOT NULL,
+                category_key VARCHAR(10) NOT NULL,
+                subject VARCHAR(255),
+                handler_id BIGINT DEFAULT NULL,
+                close_reason VARCHAR(100) DEFAULT NULL,
+                is_test BOOLEAN DEFAULT FALSE,
+                created_at DATETIME NOT NULL,
+                closed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                closed_by BIGINT DEFAULT NULL,
+                INDEX idx_th_created (created_at),
+                INDEX idx_th_cat (category_key)
+            )
+        ''')
+
     
     async def close(self):
         """Close the database connection."""
