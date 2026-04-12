@@ -326,11 +326,12 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     # Slash Commands
     # ─────────────────────────────────────────────────────────────────────
     
-    @embed_group.command(name="send", description="Send an embed from a Discohook link")
+    @embed_group.command(name="send", description="Send an embed from a Discohook link or Backup File")
     @app_commands.describe(
         channel="Channel to send the embed to",
         link="Discohook share link (if under 512 chars)",
         long_link="Alternative: Paste the full Discohook link here if it's too long",
+        data_file="If link is too long for Discord (>6000 chars), upload a .txt with the link or the Discohook .json backup",
         schedule_for="(Optional) Date and time to send (DD/MM/YYYY HH:MM, UTC+8)"
     )
     async def send_embed(
@@ -339,16 +340,39 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         channel: discord.TextChannel,
         link: str | None = None,
         long_link: str | None = None,
+        data_file: discord.Attachment | None = None,
         schedule_for: str | None = None
     ):
         """Send or schedule an embed from a Discohook link."""
         await interaction.response.defer(ephemeral=True)
-        final_link = long_link or link
-        if not final_link:
-            await interaction.followup.send("❌ Please provide a Discohook link.", ephemeral=True)
-            return
-            
-        data = await self._process_link(final_link, interaction)
+        
+        data = None
+        if data_file:
+            try:
+                file_bytes = await data_file.read()
+                file_text = file_bytes.decode('utf-8').strip()
+                if file_text.startswith("http"):
+                    # Process as text link
+                    data = await self._process_link(file_text, interaction)
+                else:
+                    # Process directly as JSON backup
+                    json_payload = json.loads(file_text)
+                    if "messages" in json_payload and len(json_payload["messages"]) > 0:
+                        data = json_payload["messages"][0]["data"]
+                    else:
+                        await interaction.followup.send("❌ Could not extract message data from the provided JSON file.", ephemeral=True)
+                        return
+            except Exception as e:
+                logger.error(f"Failed to process data_file: {e}")
+                await interaction.followup.send("❌ Error parsing the uploaded file. Ensure it's a valid link in a .txt or a valid discohook JSON backup.", ephemeral=True)
+                return
+        else:
+            final_link = long_link or link
+            if not final_link:
+                await interaction.followup.send("❌ Please provide a Discohook link or a data_file.", ephemeral=True)
+                return
+            data = await self._process_link(final_link, interaction)
+
         if not data:
             return
         
@@ -427,25 +451,47 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     log_embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
                     await log_channel.send(embed=log_embed)
     
-    @embed_group.command(name="edit", description="Edit an existing message using a Discohook link.")
+    @embed_group.command(name="edit", description="Edit an existing message using a Discohook link or JSON File.")
     @app_commands.describe(
         message_link="The message link to edit",
         link="Short Discohook link (if under 512 characters)",
         long_link="Alternative: Paste the full Discohook link here if it's too long",
+        data_file="If link is too long (>6000 chars), upload a .txt with the link or the Discohook .json backup"
     )
     async def edit_embed(
         self, interaction: discord.Interaction,
         message_link: str,
         link: str | None = None,
         long_link: str | None = None,
+        data_file: discord.Attachment | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
-        final_link = long_link or link
-        if not final_link:
-            await interaction.followup.send("❌ No Discohook link provided.", ephemeral=True)
-            return
+        
+        data = None
+        if data_file:
+            try:
+                file_bytes = await data_file.read()
+                file_text = file_bytes.decode('utf-8').strip()
+                if file_text.startswith("http"):
+                    data = await self._process_link(file_text, interaction)
+                else:
+                    json_payload = json.loads(file_text)
+                    if "messages" in json_payload and len(json_payload["messages"]) > 0:
+                        data = json_payload["messages"][0]["data"]
+                    else:
+                        await interaction.followup.send("❌ Could not extract message data from the provided JSON file.", ephemeral=True)
+                        return
+            except Exception as e:
+                logger.error(f"Failed to process data_file on edit: {e}")
+                await interaction.followup.send("❌ Error parsing the uploaded file. Ensure it's a valid link in a .txt or a valid discohook JSON backup.", ephemeral=True)
+                return
+        else:
+            final_link = long_link or link
+            if not final_link:
+                await interaction.followup.send("❌ No Discohook link or file provided.", ephemeral=True)
+                return
+            data = await self._process_link(final_link, interaction)
 
-        data = await self._process_link(final_link, interaction)
         if not data:
             return
         
