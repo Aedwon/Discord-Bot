@@ -314,9 +314,9 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             decoded = base64.urlsafe_b64decode(encoded).decode("utf-8")
             data = json.loads(decoded)
             
-            # Discohook format: messages[0].data
-            msg_data = data["messages"][0]["data"]
-            return msg_data
+            # Discohook format: array of messages
+            messages_data = [msg["data"] for msg in data.get("messages", []) if "data" in msg]
+            return messages_data
         
         except Exception as e:
             logger.error(f"Link parse error: {e}")
@@ -347,19 +347,17 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         """Send or schedule an embed from a Discohook link."""
         await interaction.response.defer(ephemeral=True)
         
-        data = None
+        messages_data = []
         if data_file:
             try:
                 file_bytes = await data_file.read()
                 file_text = file_bytes.decode('utf-8').strip()
                 if file_text.startswith("http"):
-                    # Process as text link
-                    data = await self._process_link(file_text, interaction)
+                    messages_data = await self._process_link(file_text, interaction)
                 else:
-                    # Process directly as JSON backup
                     json_payload = json.loads(file_text)
                     if "messages" in json_payload and len(json_payload["messages"]) > 0:
-                        data = json_payload["messages"][0]["data"]
+                        messages_data = [msg["data"] for msg in json_payload.get("messages", []) if "data" in msg]
                     else:
                         await interaction.followup.send("❌ Could not extract message data from the provided JSON file.", ephemeral=True)
                         return
@@ -372,85 +370,91 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             if not final_link:
                 await interaction.followup.send("❌ Please provide a Discohook link or a data_file.", ephemeral=True)
                 return
-            data = await self._process_link(final_link, interaction)
+            messages_data = await self._process_link(final_link, interaction)
 
-        if not data:
+        if not messages_data:
             return
-        
-        content = data.get("content", "")
-        embeds_list = data.get("embeds", [])
-        components_list = data.get("components", [])
+            
+        success_count = 0
+        for msg_data in messages_data:
+            content = msg_data.get("content", "")
+            embeds_list = msg_data.get("embeds", [])
+            components_list = msg_data.get("components", [])
 
-        embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in embeds_list]
-        view = discohook_to_view(components_list)
-        
-        if schedule_for:
-            # Parse DD/MM/YYYY HH:MM
-            try:
-                dt = datetime.datetime.strptime(schedule_for, "%d/%m/%Y %H:%M")
-                dt = TZ_MANILA.localize(dt)
-                now = datetime.datetime.now(TZ_MANILA)
-                if (dt - now).total_seconds() <= 0:
-                    await interaction.followup.send("❌ The scheduled time must be in the future.", ephemeral=True)
+            embeds = [discord.Embed.from_dict(copy.deepcopy(e)) for e in embeds_list]
+            view = discohook_to_view(components_list)
+            
+            if schedule_for:
+                # Parse DD/MM/YYYY HH:MM
+                try:
+                    dt = datetime.datetime.strptime(schedule_for, "%d/%m/%Y %H:%M")
+                    dt = TZ_MANILA.localize(dt)
+                    now = datetime.datetime.now(TZ_MANILA)
+                    if (dt - now).total_seconds() <= 0:
+                        await interaction.followup.send("❌ The scheduled time must be in the future.", ephemeral=True)
+                        return
+                except Exception:
+                    await interaction.followup.send(
+                        "❌ Invalid date format. Use **DD/MM/YYYY HH:MM** (24-hour, UTC+8).\nExample: `23/04/2026 18:30`",
+                        ephemeral=True
+                    )
                     return
-            except Exception:
+
+                identifier = generate_identifier()
+                dt_utc = dt.astimezone(pytz.UTC)
+                unix_utc = int(dt_utc.timestamp())
+
+                self.scheduled_data[identifier] = {
+                    "channel_id": channel.id,
+                    "user_id": interaction.user.id,
+                    "content": content,
+                    "embed_json": {"embeds": embeds_list, "components": components_list},
+                    "schedule_for_utc": unix_utc,
+                    "status": "pending"
+                }
+                self._save_data()
+                
                 await interaction.followup.send(
-                    "❌ Invalid date format. Use **DD/MM/YYYY HH:MM** (24-hour, UTC+8).\nExample: `23/04/2026 18:30`",
+                    f"⏰ Embed scheduled for {dt.strftime('%d/%m/%Y %H:%M')} in {channel.mention}.\n**ID:** `{identifier}`",
                     ephemeral=True
                 )
-                return
 
-            identifier = generate_identifier()
-            dt_utc = dt.astimezone(pytz.UTC)
-            unix_utc = int(dt_utc.timestamp())
+                # Log preview
+                log_row = await db.fetch_one(
+                    "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                    (interaction.guild.id,)
+                )
+                if log_row and log_row.get('embed_log_channel_id'):
+                    log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
+                    if log_channel:
+                        preview_text = f"📝 **Scheduled embed PREVIEW**\n**ID:** `{identifier}`\n**User:** {interaction.user.mention}\n**Channel:** {channel.mention}\n**Scheduled for:** {dt.strftime('%d/%m/%Y %H:%M')} UTC+8\n\n{content or ''}"
+                        await log_channel.send(content=preview_text, embeds=embeds, view=view)
 
-            self.scheduled_data[identifier] = {
-                "channel_id": channel.id,
-                "user_id": interaction.user.id,
-                "content": content,
-                "embed_json": {"embeds": embeds_list, "components": components_list},
-                "schedule_for_utc": unix_utc,
-                "status": "pending"
-            }
-            self._save_data()
-            
-            await interaction.followup.send(
-                f"⏰ Embed scheduled for {dt.strftime('%d/%m/%Y %H:%M')} in {channel.mention}.\n**ID:** `{identifier}`",
-                ephemeral=True
-            )
+            else:
+                # Send immediately
+                safe_content = content if content else None
+                sent_msg = await channel.send(content=safe_content, embeds=embeds, view=view)
+                message_link = f"https://discord.com/channels/{interaction.guild_id}/{channel.id}/{sent_msg.id}"
+                
+                if success_count == 0:
+                    await interaction.followup.send(f"✅ Embed sent to {channel.mention}: [Jump to Message]({message_link})", ephemeral=True)
 
-            # Log preview
-            log_row = await db.fetch_one(
-                "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
-                (interaction.guild.id,)
-            )
-            if log_row and log_row.get('embed_log_channel_id'):
-                log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
-                if log_channel:
-                    preview_text = f"📝 **Scheduled embed PREVIEW**\n**ID:** `{identifier}`\n**User:** {interaction.user.mention}\n**Channel:** {channel.mention}\n**Scheduled for:** {dt.strftime('%d/%m/%Y %H:%M')} UTC+8\n\n{content or ''}"
-                    await log_channel.send(content=preview_text, embeds=embeds, view=view)
-
-        else:
-            # Send immediately
-            safe_content = content if content else None
-            sent_msg = await channel.send(content=safe_content, embeds=embeds, view=view)
-            message_link = f"https://discord.com/channels/{interaction.guild_id}/{channel.id}/{sent_msg.id}"
-            await interaction.followup.send(f"✅ Embed sent to {channel.mention}: [Jump to Message]({message_link})", ephemeral=True)
-
-            # Log immediately
-            log_row = await db.fetch_one(
-                "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
-                (interaction.guild.id,)
-            )
-            if log_row and log_row.get('embed_log_channel_id'):
-                log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
-                if log_channel:
-                    log_embed = discord.Embed(title="📢 Embed Sent", color=discord.Color.gold())
-                    log_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-                    log_embed.add_field(name="User", value=interaction.user.mention, inline=True)
-                    log_embed.add_field(name="Channel", value=channel.mention, inline=True)
-                    log_embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
-                    await log_channel.send(embed=log_embed)
+                # Log immediately
+                log_row = await db.fetch_one(
+                    "SELECT embed_log_channel_id FROM guild_settings WHERE guild_id = %s",
+                    (interaction.guild.id,)
+                )
+                if log_row and log_row.get('embed_log_channel_id'):
+                    log_channel = self.bot.get_channel(log_row['embed_log_channel_id'])
+                    if log_channel:
+                        log_embed = discord.Embed(title="📢 Embed Sent", color=discord.Color.gold())
+                        log_embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+                        log_embed.add_field(name="User", value=interaction.user.mention, inline=True)
+                        log_embed.add_field(name="Channel", value=channel.mention, inline=True)
+                        log_embed.add_field(name="Link", value=f"[Jump to Message]({message_link})", inline=False)
+                        await log_channel.send(embed=log_embed)
+                        
+            success_count += 1
     
     @embed_group.command(name="edit", description="Edit an existing message using a Discohook link or JSON File.")
     @app_commands.describe(
@@ -468,17 +472,17 @@ class EmbedsCog(commands.Cog, name="Embeds"):
     ):
         await interaction.response.defer(ephemeral=True)
         
-        data = None
+        messages_data = []
         if data_file:
             try:
                 file_bytes = await data_file.read()
                 file_text = file_bytes.decode('utf-8').strip()
                 if file_text.startswith("http"):
-                    data = await self._process_link(file_text, interaction)
+                    messages_data = await self._process_link(file_text, interaction)
                 else:
                     json_payload = json.loads(file_text)
                     if "messages" in json_payload and len(json_payload["messages"]) > 0:
-                        data = json_payload["messages"][0]["data"]
+                        messages_data = [msg["data"] for msg in json_payload.get("messages", []) if "data" in msg]
                     else:
                         await interaction.followup.send("❌ Could not extract message data from the provided JSON file.", ephemeral=True)
                         return
@@ -491,10 +495,12 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             if not final_link:
                 await interaction.followup.send("❌ No Discohook link or file provided.", ephemeral=True)
                 return
-            data = await self._process_link(final_link, interaction)
+            messages_data = await self._process_link(final_link, interaction)
 
-        if not data:
+        if not messages_data:
             return
+            
+        data = messages_data[0] # Edit targets a single message
         
         content = data.get("content", "")
         embeds_list = data.get("embeds", [])
