@@ -7,7 +7,7 @@
     <meta name="description" content="Secure live analytics portal tracking all metrics across MSL.">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/styles.css">
-    <!-- Chart.js -->
+    <link rel="stylesheet" href="css/dashboard.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -17,92 +17,184 @@
                 ⚙️ MSL Console
                 <span class="badge">Analytics Dashboard</span>
             </div>
-            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-                <button id="btn-7d" class="btn-preset active">7D</button>
-                <button id="btn-30d" class="btn-preset">30D</button>
-                <button id="btn-this-week" class="btn-preset" title="ISO 8601 (Mon-Sun)">This Week</button>
-                <button id="btn-this-month" class="btn-preset">This Month</button>
-                <button id="btn-this-year" class="btn-preset">This Year</button>
-                <span style="color:var(--border); margin:0 0.25rem;">|</span>
-                <input type="date" id="date-start" class="date-input">
-                <input type="date" id="date-end" class="date-input">
-                <a href="index.html" style="color:var(--accent); text-decoration:none; font-weight:600; font-size:0.8rem; margin-left: 0.5rem;">Exit Console</a>
+            <div class="filter-bar">
+                <div class="preset-group">
+                    <button id="btn-7d" class="btn-preset active">7D</button>
+                    <button id="btn-14d" class="btn-preset">14D</button>
+                    <button id="btn-30d" class="btn-preset">30D</button>
+                    <button id="btn-this-week" class="btn-preset" title="ISO 8601 (Mon–Sun)">This Week</button>
+                    <button id="btn-last-week" class="btn-preset" title="Previous ISO Week">Last Week</button>
+                    <button id="btn-this-month" class="btn-preset">This Month</button>
+                    <button id="btn-this-year" class="btn-preset">YTD</button>
+                </div>
+                <span class="divider">|</span>
+                <div class="custom-range">
+                    <input type="date" id="date-start" class="date-input" title="Start date">
+                    <span class="range-arrow">→</span>
+                    <input type="date" id="date-end" class="date-input" title="End date">
+                </div>
+                <a href="index.html" class="exit-link">← Docs</a>
             </div>
         </div>
     </header>
 
-    <div class="layout" style="display: block;">
-        <main class="main">
-            <div class="hero">
-                <h1 style="display: flex; justify-content: space-between; align-items: center;">
-                    Server Analytics
-                    <span id="loader" style="font-size:1rem; color:var(--text-muted);">Syncing secure connection...</span>
-                </h1>
-                <p>Live, comprehensive graphical data tracking growth, engagement, and operational traffic.</p>
+    <div class="dash-container">
+        <!-- Status bar -->
+        <div class="status-bar">
+            <span id="loader">Syncing secure connection...</span>
+            <span id="range-label" class="range-label"></span>
+        </div>
+
+        <!-- KPI Row 1: Core -->
+        <div class="kpi-row">
+            <div class="stat-card">
+                <div class="stat-label">Total Messages</div>
+                <div class="stat-value" id="stat-msgs">--</div>
+                <div class="stat-sub" id="sub-msgs"></div>
             </div>
-
-            <!-- Top Line Stats -->
-            <div class="dashboard-grid">
-                <div class="stat-card">
-                    <h3>Messages (Filtered)</h3>
-                    <div class="stat-value" id="stat-msgs">--</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Voice Mins (Filtered)</h3>
-                    <div class="stat-value" id="stat-vc">--</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Net Growth</h3>
-                    <div class="stat-value" id="stat-growth">--</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Total Verifications</h3>
-                    <div class="stat-value" id="stat-verifs">--</div>
-                </div>
+            <div class="stat-card">
+                <div class="stat-label">Voice Minutes</div>
+                <div class="stat-value" id="stat-vc">--</div>
+                <div class="stat-sub" id="sub-vc"></div>
             </div>
-
-            <div style="height: 2rem;"></div>
-
-            <!-- Charts Grid -->
-            <div class="dashboard-grid charts-grid">
-                <!-- Line Chart: Growth Trajectory -->
-                <div class="feature-card chart-container">
-                    <h3 style="margin-bottom:1rem;">Community Growth Trajectory</h3>
-                    <div style="position: relative; height: 300px; width: 100%;">
-                        <canvas id="growthChart"></canvas>
-                    </div>
-                </div>
-                
-                <!-- Bar Chart: Traffic Volume -->
-                <div class="feature-card chart-container">
-                    <h3 style="margin-bottom:1rem;">Traffic Volume (Messages & Voice)</h3>
-                    <div style="position: relative; height: 300px; width: 100%;">
-                        <canvas id="trafficChart"></canvas>
-                    </div>
-                </div>
+            <div class="stat-card accent">
+                <div class="stat-label">Net Growth</div>
+                <div class="stat-value" id="stat-growth">--</div>
+                <div class="stat-sub" id="sub-growth"></div>
             </div>
-
-            <div style="height: 2rem;"></div>
-            
-            <div class="dashboard-grid charts-grid">
-                <!-- Doughnut Chart: Top Chat Channels -->
-                <div class="feature-card chart-container" style="display:flex; flex-direction:column; align-items:center;">
-                    <h3 style="align-self:flex-start; margin-bottom:1rem;">Peak Chat Channels</h3>
-                    <div style="position: relative; width: 100%; max-width: 300px; height: 300px;">
-                        <canvas id="channelChart"></canvas>
-                    </div>
-                </div>
-
-                <!-- Mod / Support Summary list -->
-                <div class="feature-card">
-                    <h3 style="margin-bottom:1rem;">Operational Highlights</h3>
-                    <div class="cmd-params" id="ops-container" style="background:transparent; border:none; padding:0;">
-                        <!-- Injected via JS -->
-                    </div>
-                </div>
+            <div class="stat-card">
+                <div class="stat-label">Reactions</div>
+                <div class="stat-value" id="stat-reactions">--</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-label">Verifications</div>
+                <div class="stat-value" id="stat-verifs">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Unique Active Users</div>
+                <div class="stat-value" id="stat-unique">--</div>
+                <div class="stat-sub" id="sub-unique"></div>
+            </div>
+        </div>
 
-        </main>
+        <!-- Charts Row 1 -->
+        <div class="chart-row">
+            <div class="chart-panel wide">
+                <h3>📈 Community Growth Trajectory</h3>
+                <div class="canvas-wrap"><canvas id="growthChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="chart-panel">
+                <h3>💬 Daily Message Volume</h3>
+                <div class="canvas-wrap"><canvas id="msgChart"></canvas></div>
+            </div>
+            <div class="chart-panel">
+                <h3>🎙️ Daily Voice Activity</h3>
+                <div class="canvas-wrap"><canvas id="vcChart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- KPI Row 2: Economy & Gameplay -->
+        <div class="section-title">⚔️ Economy & Gameplay</div>
+        <div class="kpi-row compact">
+            <div class="stat-card mini">
+                <div class="stat-label">Quests Done</div>
+                <div class="stat-value" id="stat-quests">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Quiz Sessions</div>
+                <div class="stat-value" id="stat-quiz">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Quiz Points</div>
+                <div class="stat-value" id="stat-quiz-pts">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Thanks Given</div>
+                <div class="stat-value" id="stat-thanks">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">EP Redemptions</div>
+                <div class="stat-value" id="stat-ep">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Referrals</div>
+                <div class="stat-value" id="stat-referrals">--</div>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="chart-panel">
+                <h3>🏆 Economy Trends</h3>
+                <div class="canvas-wrap"><canvas id="economyChart"></canvas></div>
+            </div>
+            <div class="chart-panel narrow">
+                <h3>📊 Peak Text Channels</h3>
+                <div class="canvas-wrap doughnut-wrap"><canvas id="channelChart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Operations Row -->
+        <div class="section-title">🛡️ Operations & Moderation</div>
+        <div class="kpi-row compact">
+            <div class="stat-card mini">
+                <div class="stat-label">Mod Actions</div>
+                <div class="stat-value" id="stat-mod">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Tickets Opened</div>
+                <div class="stat-value" id="stat-tickets">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Ticket Ratings</div>
+                <div class="stat-value" id="stat-tix-ratings">--</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Avg Ticket Rating</div>
+                <div class="stat-value" id="stat-tix-avg">--</div>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="chart-panel">
+                <h3>🛡️ Moderation Actions Over Time</h3>
+                <div class="canvas-wrap"><canvas id="modChart"></canvas></div>
+            </div>
+            <div class="chart-panel narrow">
+                <h3>🎫 Tickets by Category</h3>
+                <div class="canvas-wrap doughnut-wrap"><canvas id="ticketChart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Detailed Tables -->
+        <div class="section-title">📋 Detailed Breakdown (Latest Day in Range)</div>
+        <div class="chart-row">
+            <div class="chart-panel table-panel">
+                <h3>🏅 Top Quiz Players</h3>
+                <div id="table-quiz" class="detail-table"></div>
+            </div>
+            <div class="chart-panel table-panel">
+                <h3>🤝 Most Thanked Members</h3>
+                <div id="table-thanks" class="detail-table"></div>
+            </div>
+            <div class="chart-panel table-panel">
+                <h3>📨 Top Invite Codes</h3>
+                <div id="table-invites" class="detail-table"></div>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="chart-panel table-panel">
+                <h3>🔨 Moderation Log Breakdown</h3>
+                <div id="table-mod" class="detail-table"></div>
+            </div>
+            <div class="chart-panel table-panel">
+                <h3>📌 Retention</h3>
+                <div id="table-retention" class="detail-table"></div>
+            </div>
+        </div>
     </div>
 
     <script src="js/dashboard.js"></script>
