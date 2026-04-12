@@ -197,6 +197,13 @@ class Database:
             )
         ''')
         
+        # Track dynamically created virtual channels so they aren't orphaned on bot restart.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS autocreate_active_vcs (
+                channel_id BIGINT PRIMARY KEY
+            )
+        ''')
+        
         # Quiz History table (for weekly leaderboards)
         await self.execute('''
             CREATE TABLE IF NOT EXISTS quiz_history (

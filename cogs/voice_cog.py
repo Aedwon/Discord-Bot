@@ -5,7 +5,7 @@ The channel is auto-deleted when empty.
 """
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import asyncio
 import logging
@@ -167,8 +167,60 @@ class VoiceCog(commands.Cog, name="Voice"):
             for row in rows:
                 self.config_cache[row['voice_channel_id']] = row['category_id']
             logger.info(f"Loaded {len(self.config_cache)} autocreate configs.")
+            
+            # Load active virtual channels so they aren't orphaned
+            active_vcs = await db.fetch_all("SELECT channel_id FROM autocreate_active_vcs")
+            self.temp_channels = {row['channel_id'] for row in active_vcs}
+            logger.info(f"Loaded {len(self.temp_channels)} active auto-created channels from DB.")
         except Exception as e:
             logger.error(f"Failed to load autocreate configs: {e}")
+            
+    def cog_unload(self):
+        self.vc_cleanup_task.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.vc_cleanup_task.is_running():
+            self.vc_cleanup_task.start()
+
+    @tasks.loop(minutes=1)
+    async def vc_cleanup_task(self):
+        """Sweep orphaned empty VCs every minute."""
+        guild = self.bot.guilds[0] if self.bot.guilds else None
+        if not guild: return
+
+        to_remove = []
+        # Clone self.temp_channels to iterate safely
+        for channel_id in list(self.temp_channels):
+            channel = guild.get_channel(channel_id)
+            if not channel:
+                # Channel no longer exists (e.g. manually deleted)
+                to_remove.append(channel_id)
+            elif isinstance(channel, discord.VoiceChannel) and len(channel.members) == 0:
+                # Channel is empty
+                try:
+                    await channel.delete(reason="Auto VC Sweep: Empty")
+                    to_remove.append(channel_id)
+                except discord.NotFound:
+                    # Native deletion or manual deletion raced us
+                    to_remove.append(channel_id)
+                except discord.HTTPException as e:
+                    # E.g. Rate limit, we will retry next sweep
+                    logger.warning(f"Sweep: Failed to delete VC {channel_id}: {e}")
+                    
+        if to_remove:
+            placeholders = ','.join(['%s'] * len(to_remove))
+            try:
+                await db.execute(f"DELETE FROM autocreate_active_vcs WHERE channel_id IN ({placeholders})", tuple(to_remove))
+            except Exception as e:
+                logger.error(f"Failed to flush sweat channels from DB: {e}")
+            
+            for cid in to_remove:
+                self.temp_channels.discard(cid)
+
+    @vc_cleanup_task.before_loop
+    async def before_cleanup(self):
+        await self.bot.wait_until_ready()
     
     @voice_group.command(name="setup", description="Setup a voice channel that auto-creates when joined")
     @app_commands.describe(channel="The master voice channel to use")
@@ -249,6 +301,10 @@ class VoiceCog(commands.Cog, name="Voice"):
                 )
                 
                 self.temp_channels.add(temp_channel.id)
+                try:
+                    await db.execute("INSERT IGNORE INTO autocreate_active_vcs (channel_id) VALUES (%s)", (temp_channel.id,))
+                except Exception as e:
+                    logger.error(f"Failed to save temp VC to DB: {e}")
                 
                 # Move member to their new channel
                 await member.move_to(temp_channel)
@@ -273,19 +329,14 @@ class VoiceCog(commands.Cog, name="Voice"):
                 try:
                     await before.channel.delete()
                     self.temp_channels.discard(before.channel.id)
+                    await db.execute("DELETE FROM autocreate_active_vcs WHERE channel_id = %s", (before.channel.id,))
                 except discord.NotFound:
                     self.temp_channels.discard(before.channel.id)
+                    await db.execute("DELETE FROM autocreate_active_vcs WHERE channel_id = %s", (before.channel.id,))
                 except discord.HTTPException as e:
-                    if e.status == 429:  # Rate limited
-                        logger.warning(f"Rate limited on channel delete. Retrying in {e.retry_after}s")
-                        await asyncio.sleep(e.retry_after)
-                        try:
-                            await before.channel.delete()
-                            self.temp_channels.discard(before.channel.id)
-                        except:
-                            pass
-                    else:
-                        logger.error(f"Failed to delete channel: {e}")
+                    # If rate limited, the 1-minute sweep will handle it safely instead of blocking.
+                    if e.status != 429:
+                        logger.error(f"Failed to delete channel immediately: {e}")
 
 
 async def setup(bot: commands.Bot):
