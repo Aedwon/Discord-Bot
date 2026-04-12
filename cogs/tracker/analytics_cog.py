@@ -452,6 +452,42 @@ class AnalyticsCog(commands.Cog, name="analytics"):
 
     analytics_group = app_commands.Group(name="analytics", description="Community analytics and metrics dashboard.", default_permissions=discord.Permissions(administrator=True))
 
+    @analytics_group.command(name="fetch_date", description="Fetch the granular daily dashboard for a specific date.")
+    @app_commands.describe(date="The date to fetch (Format: YYYY-MM-DD)")
+    async def analytics_fetch_date(self, interaction: discord.Interaction, date: str):
+        import re
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+            await interaction.response.send_message("Invalid date format. Please use YYYY-MM-DD.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=False)
+        
+        # Check if the core rollup data exists for this past date
+        from services.database import db
+        row = await db.fetch_one("SELECT * FROM analytics_daily_rollups WHERE date = %s", (date,))
+        
+        if not row:
+            await interaction.followup.send(f"❌ No aggregated log data found for `{date}`. Make sure it is a valid date from the past.", ephemeral=True)
+            return
+            
+        rollup_data = {
+            "date": date,
+            "total_messages": row.get('total_messages', 0),
+            "unique_messagers": row.get('unique_messagers', 0),
+            "total_voice_minutes": row.get('total_voice_minutes', 0),
+            "unique_voice_users": row.get('unique_voice_users', 0),
+            "new_joins": row.get('new_joins', 0),
+            "new_leaves": row.get('new_leaves', 0),
+            "total_reactions": row.get('total_reactions', 0)
+        }
+        
+        try:
+            await self._post_daily_analytics_log(interaction.guild, interaction.channel.id, rollup_data, date)
+            await interaction.followup.send(f"✅ Successfully extracted and generated the Mega-Log for `{date}`.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to generate explicit fetch_date dashboard: {e}")
+            await interaction.followup.send(f"❌ Encountered an error generating the log: {e}", ephemeral=True)
+
     @analytics_group.command(name="overview", description="7-day community health summary.")
     async def analytics_overview(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
