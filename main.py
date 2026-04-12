@@ -104,6 +104,10 @@ async def on_ready():
     except Exception as e:
         logger.error(f'Failed to sync commands: {e}')
     
+    # Check if historic granular data is missing and quietly auto-fill it
+    from scripts.backfill_granular import run_backfill
+    asyncio.create_task(run_backfill(14))
+
     logger.info('✅ Bot startup complete!')
 
 

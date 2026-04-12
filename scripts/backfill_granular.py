@@ -23,6 +23,9 @@ async def run_backfill(days=14):
         if not row:
             print(f"[{target_str}] SKIP: No base core data found.")
             continue
+        if row.get('granular_json'):
+            # Already backfilled, safe to skip
+            continue
             
         print(f"[{target_str}] Processing granular data...")
         try:
