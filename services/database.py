@@ -421,9 +421,16 @@ class Database:
                 new_joins INT DEFAULT 0,
                 new_leaves INT DEFAULT 0,
                 total_reactions INT DEFAULT 0,
-                total_threads INT DEFAULT 0
+                total_threads INT DEFAULT 0,
+                granular_json MEDIUMTEXT DEFAULT NULL
             )
         ''')
+        
+        # Safe migration for granular_json
+        try:
+            await self.execute("ALTER TABLE analytics_daily_rollups ADD COLUMN granular_json MEDIUMTEXT DEFAULT NULL")
+        except Exception:
+            pass
         
         # Keyword match tracking for sentiment export
         await self.execute('''

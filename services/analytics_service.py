@@ -211,10 +211,18 @@ class AnalyticsService:
         reactions = await db.fetch_one(
             "SELECT COUNT(*) as c FROM analytics_reactions WHERE DATE(created_at) = %s", (yesterday,))
 
+        import json
+        try:
+            granular_stats = await self.get_exhaustive_daily_stats(yesterday)
+            granular_json_str = json.dumps(granular_stats)
+        except Exception as e:
+            logger.error(f"Failed to generate granular json for rollup: {e}")
+            granular_json_str = None
+
         await db.execute('''
             INSERT INTO analytics_daily_rollups 
-            (date, total_messages, unique_messagers, total_voice_minutes, unique_voice_users, new_joins, new_leaves, total_reactions)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (date, total_messages, unique_messagers, total_voice_minutes, unique_voice_users, new_joins, new_leaves, total_reactions, granular_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 total_messages = VALUES(total_messages),
                 unique_messagers = VALUES(unique_messagers),
@@ -222,7 +230,8 @@ class AnalyticsService:
                 unique_voice_users = VALUES(unique_voice_users),
                 new_joins = VALUES(new_joins),
                 new_leaves = VALUES(new_leaves),
-                total_reactions = VALUES(total_reactions)
+                total_reactions = VALUES(total_reactions),
+                granular_json = VALUES(granular_json)
         ''', (
             yesterday,
             msgs['total'] if msgs else 0,
@@ -232,6 +241,7 @@ class AnalyticsService:
             joins['c'] if joins else 0,
             leaves['c'] if leaves else 0,
             reactions['c'] if reactions else 0,
+            granular_json_str
         ))
         logger.info(f"Daily rollup completed for {yesterday}")
         
