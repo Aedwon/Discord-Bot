@@ -13,8 +13,8 @@ Leaderboard categories:
 import discord
 from discord.ext import commands, tasks
 import logging
-import time
-from datetime import datetime, timedelta, timezone
+import time as time_module
+from datetime import datetime, timedelta, timezone, time
 
 from services.database import db
 from services.settings_service import settings_service
@@ -44,14 +44,35 @@ CLR_ALLTIME_HEADER = 0xF2C21A  # Gold
 MEDALS = ["👑", "🥈", "🥉"]
 
 # Weekly reset: Monday 00:00 PHT = Sunday 16:00 UTC
-RESET_TIME_UTC = datetime.now(timezone.utc).replace(
-    hour=16, minute=0, second=0, microsecond=0
-).timetz()
+RESET_TIME_UTC = time(hour=16, minute=0, second=0, tzinfo=timezone.utc)
 
 
 class LeaderboardCog(commands.Cog, name="leaderboards"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self):
+        """Ensure required tables exist even on hot-reload."""
+        try:
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS weekly_leaderboard_snapshots (
+                    user_id BIGINT PRIMARY KEY,
+                    xp_snapshot INT DEFAULT 0,
+                    ep_snapshot INT DEFAULT 0,
+                    snapshot_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS counting_weekly_contributors (
+                    guild_id BIGINT,
+                    user_id BIGINT,
+                    count INT DEFAULT 0,
+                    PRIMARY KEY (guild_id, user_id)
+                )
+            ''')
+            logger.info("Leaderboard tables verified/created.")
+        except Exception as e:
+            logger.error(f"Failed to ensure leaderboard tables: {e}")
 
     def cog_unload(self):
         self.update_leaderboards.cancel()
@@ -61,8 +82,10 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
     async def on_ready(self):
         if not self.update_leaderboards.is_running():
             self.update_leaderboards.start()
+            logger.info("Leaderboard 5-min update loop started.")
         if not self.weekly_reset_task.is_running():
             self.weekly_reset_task.start()
+            logger.info("Leaderboard weekly reset task started.")
 
     # ═══════════════════════════════════════════════════════════════════
     #  5-MINUTE UPDATE LOOP
@@ -76,9 +99,17 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                 # Fetch MSL exclusion set once per cycle
                 exclude_ids = await leaderboard_service.get_msl_user_ids()
 
-                # Update each channel independently
-                await self._update_alltime_channel(guild, exclude_ids)
-                await self._update_weekly_channel(guild, exclude_ids)
+                # Update each channel independently — one failing shouldn't
+                # prevent the other from updating
+                try:
+                    await self._update_alltime_channel(guild, exclude_ids)
+                except Exception as e:
+                    logger.error(f"All-time leaderboard update failed: {e}", exc_info=True)
+
+                try:
+                    await self._update_weekly_channel(guild, exclude_ids)
+                except Exception as e:
+                    logger.error(f"Weekly leaderboard update failed: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Fatal error in leaderboard loop: {e}", exc_info=True)
@@ -119,6 +150,18 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         await self.bot.wait_until_ready()
 
     # ═══════════════════════════════════════════════════════════════════
+    #  SAFE QUERY WRAPPER
+    # ═══════════════════════════════════════════════════════════════════
+
+    async def _safe_query(self, coro, label: str, default=None):
+        """Run a query coroutine with error handling. Returns default on failure."""
+        try:
+            return await coro
+        except Exception as e:
+            logger.error(f"Leaderboard query failed [{label}]: {e}")
+            return default if default is not None else []
+
+    # ═══════════════════════════════════════════════════════════════════
     #  ALL-TIME CHANNEL
     # ═══════════════════════════════════════════════════════════════════
 
@@ -129,9 +172,11 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         channel = guild.get_channel(int(channel_id_str))
         if not channel:
+            logger.warning(f"All-time leaderboard channel {channel_id_str} not found in guild.")
             return
 
-        next_update = int(time.time() + 300)
+        logger.debug("Generating all-time leaderboard embeds...")
+        next_update = int(time_module.time() + 300)
 
         # ── Header embed ──
         header = discord.Embed(
@@ -145,38 +190,40 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         )
         header.set_footer(text="🕐 Updates every 5 minutes")
 
-        # ── Generate all 8 category embeds ──
-        xp_embed = await self._build_xp_embed(
-            await leaderboard_service.get_alltime_xp(10, exclude_ids),
-            is_weekly=False, next_update=next_update,
+        # ── Generate all 8 category embeds (each query is individually guarded) ──
+        xp_data = await self._safe_query(
+            leaderboard_service.get_alltime_xp(10, exclude_ids), "alltime_xp"
         )
-        ep_embed = await self._build_ep_embed(
-            await leaderboard_service.get_alltime_ep(10, exclude_ids),
-            is_weekly=False, next_update=next_update,
+        ep_data = await self._safe_query(
+            leaderboard_service.get_alltime_ep(10, exclude_ids), "alltime_ep"
         )
-        quiz_embed = await self._build_quiz_embed(
-            await leaderboard_service.get_alltime_quiz(10, exclude_ids),
-            is_weekly=False, next_update=next_update,
+        quiz_data = await self._safe_query(
+            leaderboard_service.get_alltime_quiz(10, exclude_ids), "alltime_quiz"
         )
-        counting_data = await leaderboard_service.get_alltime_counting()
-        counting_embed = self._build_counting_embed_alltime(counting_data, next_update)
+        counting_data = await self._safe_query(
+            leaderboard_service.get_alltime_counting(), "alltime_counting", default={}
+        )
+        referral_data = await self._safe_query(
+            leaderboard_service.get_alltime_referrals(10, exclude_ids), "alltime_referrals"
+        )
+        boost_data = await self._safe_query(
+            leaderboard_service.get_alltime_boosting(10, exclude_ids), "alltime_boosting"
+        )
+        voice_data = await self._safe_query(
+            leaderboard_service.get_alltime_voice(10, exclude_ids), "alltime_voice"
+        )
+        msg_data = await self._safe_query(
+            leaderboard_service.get_alltime_messages(10, exclude_ids), "alltime_messages"
+        )
 
-        referral_embed = self._build_referral_embed(
-            await leaderboard_service.get_alltime_referrals(10, exclude_ids),
-            is_weekly=False, next_update=next_update,
-        )
-        boost_embed = await self._build_boosting_embed(
-            await leaderboard_service.get_alltime_boosting(10, exclude_ids),
-            next_update=next_update,
-        )
-        voice_embed = self._build_voice_embed(
-            await leaderboard_service.get_alltime_voice(10, exclude_ids),
-            is_weekly=False, next_update=next_update,
-        )
-        msg_embed = self._build_message_embed(
-            await leaderboard_service.get_alltime_messages(10, exclude_ids),
-            is_weekly=False, next_update=next_update,
-        )
+        xp_embed = self._build_xp_embed(xp_data, is_weekly=False)
+        ep_embed = self._build_ep_embed(ep_data, is_weekly=False)
+        quiz_embed = self._build_quiz_embed(quiz_data, is_weekly=False)
+        counting_embed = self._build_counting_embed_alltime(counting_data)
+        referral_embed = self._build_referral_embed(referral_data, is_weekly=False)
+        boost_embed = self._build_boosting_embed(boost_data)
+        voice_embed = self._build_voice_embed(voice_data, is_weekly=False)
+        msg_embed = self._build_message_embed(msg_data, is_weekly=False)
 
         # Split into message groups (max ~4 embeds per message for readability)
         groups = [
@@ -188,6 +235,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         await self._send_or_edit_groups(
             channel, guild, groups, key_prefix="leaderboard_alltime"
         )
+        logger.debug("All-time leaderboard updated successfully.")
 
     # ═══════════════════════════════════════════════════════════════════
     #  WEEKLY CHANNEL
@@ -200,9 +248,11 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         channel = guild.get_channel(int(channel_id_str))
         if not channel:
+            logger.warning(f"Weekly leaderboard channel {channel_id_str} not found in guild.")
             return
 
-        next_update = int(time.time() + 300)
+        logger.debug("Generating weekly leaderboard embeds...")
+        next_update = int(time_module.time() + 300)
         week_start = leaderboard_service.get_week_start()
         next_reset = leaderboard_service.get_next_week_start()
         next_reset_ts = int(next_reset.timestamp())
@@ -227,33 +277,35 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         header.set_footer(text="🕐 Updates every 5 minutes • Resets Monday 12:00 AM PHT")
 
         # ── Generate 7 category embeds (no boosting on weekly) ──
-        xp_embed = await self._build_xp_embed(
-            await leaderboard_service.get_weekly_xp(10, exclude_ids),
-            is_weekly=True, next_update=next_update,
+        xp_data = await self._safe_query(
+            leaderboard_service.get_weekly_xp(10, exclude_ids), "weekly_xp"
         )
-        ep_embed = await self._build_ep_embed(
-            await leaderboard_service.get_weekly_ep(10, exclude_ids),
-            is_weekly=True, next_update=next_update,
+        ep_data = await self._safe_query(
+            leaderboard_service.get_weekly_ep(10, exclude_ids), "weekly_ep"
         )
-        quiz_embed = await self._build_quiz_embed(
-            await leaderboard_service.get_weekly_quiz(10, exclude_ids),
-            is_weekly=True, next_update=next_update,
+        quiz_data = await self._safe_query(
+            leaderboard_service.get_weekly_quiz(10, exclude_ids), "weekly_quiz"
         )
-        counting_data = await leaderboard_service.get_weekly_counting()
-        counting_embed = self._build_counting_embed_weekly(counting_data, next_update)
+        counting_data = await self._safe_query(
+            leaderboard_service.get_weekly_counting(), "weekly_counting", default={}
+        )
+        referral_data = await self._safe_query(
+            leaderboard_service.get_weekly_referrals(10, exclude_ids), "weekly_referrals"
+        )
+        voice_data = await self._safe_query(
+            leaderboard_service.get_weekly_voice(10, exclude_ids), "weekly_voice"
+        )
+        msg_data = await self._safe_query(
+            leaderboard_service.get_weekly_messages(10, exclude_ids), "weekly_messages"
+        )
 
-        referral_embed = self._build_referral_embed(
-            await leaderboard_service.get_weekly_referrals(10, exclude_ids),
-            is_weekly=True, next_update=next_update,
-        )
-        voice_embed = self._build_voice_embed(
-            await leaderboard_service.get_weekly_voice(10, exclude_ids),
-            is_weekly=True, next_update=next_update,
-        )
-        msg_embed = self._build_message_embed(
-            await leaderboard_service.get_weekly_messages(10, exclude_ids),
-            is_weekly=True, next_update=next_update,
-        )
+        xp_embed = self._build_xp_embed(xp_data, is_weekly=True)
+        ep_embed = self._build_ep_embed(ep_data, is_weekly=True)
+        quiz_embed = self._build_quiz_embed(quiz_data, is_weekly=True)
+        counting_embed = self._build_counting_embed_weekly(counting_data)
+        referral_embed = self._build_referral_embed(referral_data, is_weekly=True)
+        voice_embed = self._build_voice_embed(voice_data, is_weekly=True)
+        msg_embed = self._build_message_embed(msg_data, is_weekly=True)
 
         groups = [
             [header, xp_embed, ep_embed, quiz_embed],
@@ -264,6 +316,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         await self._send_or_edit_groups(
             channel, guild, groups, key_prefix="leaderboard_weekly"
         )
+        logger.debug("Weekly leaderboard updated successfully.")
 
     # ═══════════════════════════════════════════════════════════════════
     #  MESSAGE MANAGEMENT (edit-or-create)
@@ -291,15 +344,16 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                     await msg.edit(embeds=embeds)
                     continue  # Edited successfully
                 except discord.NotFound:
-                    pass  # Message deleted — will re-create below
+                    logger.info(f"Leaderboard message {msg_id_str} was deleted. Re-creating...")
                 except discord.HTTPException as e:
                     logger.error(f"Leaderboard edit error ({key_prefix} #{idx}): {e}")
-                    continue
+                    # Fall through to recreate
 
             # Create new message
             try:
                 new_msg = await channel.send(embeds=embeds)
                 await settings_service.set(msg_key, str(new_msg.id))
+                logger.info(f"Created leaderboard message #{idx} for {key_prefix} (msg_id={new_msg.id})")
             except discord.HTTPException as e:
                 logger.error(f"Leaderboard send error ({key_prefix} #{idx}): {e}")
 
@@ -324,7 +378,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
     # ── XP ──────────────────────────────────────────────────────────
 
-    async def _build_xp_embed(self, data: list[dict], is_weekly: bool, next_update: int) -> discord.Embed:
+    def _build_xp_embed(self, data: list[dict], is_weekly: bool) -> discord.Embed:
         label = "This Week" if is_weekly else "All-Time"
         xp_key = "weekly_xp" if is_weekly else "xp"
 
@@ -345,9 +399,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         # Top 3 podium
         podium = []
         for i, row in enumerate(data[:3]):
-            xp = row.get(xp_key, row.get("xp", 0))
-            level = xp_service.get_level(row.get("xp", xp) if not is_weekly else xp)
-            # For weekly, show the delta; for alltime, show full level info
+            xp = row.get(xp_key, row.get("xp", 0)) or 0
             if is_weekly:
                 podium.append(
                     f"{MEDALS[i]} <@{row['user_id']}>\n"
@@ -366,7 +418,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if len(data) > 3:
             runners = []
             for i, row in enumerate(data[3:], 4):
-                xp = row.get(xp_key, row.get("xp", 0))
+                xp = row.get(xp_key, row.get("xp", 0)) or 0
                 if is_weekly:
                     runners.append(f"`{i}.` <@{row['user_id']}> — **+{xp:,} XP**")
                 else:
@@ -374,12 +426,12 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                     runners.append(f"`{i}.` <@{row['user_id']}> — **{xp:,} XP** · Lv. {level}")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
 
-        embed.set_footer(text=f"Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── EP ──────────────────────────────────────────────────────────
 
-    async def _build_ep_embed(self, data: list[dict], is_weekly: bool, next_update: int) -> discord.Embed:
+    def _build_ep_embed(self, data: list[dict], is_weekly: bool) -> discord.Embed:
         label = "This Week" if is_weekly else "All-Time"
         ep_key = "weekly_ep" if is_weekly else "event_points"
 
@@ -399,7 +451,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         podium = []
         for i, row in enumerate(data[:3]):
-            ep = row.get(ep_key, 0)
+            ep = row.get(ep_key, 0) or 0
             if is_weekly:
                 podium.append(
                     f"{MEDALS[i]} <@{row['user_id']}>\n"
@@ -407,7 +459,10 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                 )
             else:
                 events = row.get("total_events", 0) or 0
-                role_name = ep_service.get_sub_tier(ep)
+                try:
+                    role_name = ep_service.get_sub_tier(ep)
+                except Exception:
+                    role_name = "Unknown"
                 podium.append(
                     f"{MEDALS[i]} <@{row['user_id']}>\n"
                     f"╰ **{ep:,} EP** · {events} Events ({role_name})"
@@ -417,20 +472,23 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if len(data) > 3:
             runners = []
             for i, row in enumerate(data[3:], 4):
-                ep = row.get(ep_key, 0)
+                ep = row.get(ep_key, 0) or 0
                 if is_weekly:
                     runners.append(f"`{i}.` <@{row['user_id']}> — **+{ep:,} EP**")
                 else:
-                    role_name = ep_service.get_sub_tier(ep)
+                    try:
+                        role_name = ep_service.get_sub_tier(ep)
+                    except Exception:
+                        role_name = "Unknown"
                     runners.append(f"`{i}.` <@{row['user_id']}> — **{ep:,} EP** ({role_name})")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
 
-        embed.set_footer(text="Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── Quiz ────────────────────────────────────────────────────────
 
-    async def _build_quiz_embed(self, data: list[dict], is_weekly: bool, next_update: int) -> discord.Embed:
+    def _build_quiz_embed(self, data: list[dict], is_weekly: bool) -> discord.Embed:
         label = "This Week" if is_weekly else "All-Time"
 
         embed = discord.Embed(
@@ -449,8 +507,8 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         podium = []
         for i, row in enumerate(data[:3]):
-            score = row["total_score"]
-            sessions = row.get("sessions", 0)
+            score = row.get("total_score", 0) or 0
+            sessions = row.get("sessions", 0) or 0
             podium.append(
                 f"{MEDALS[i]} <@{row['user_id']}>\n"
                 f"╰ **{score:,} pts** · {sessions} session{'s' if sessions != 1 else ''}"
@@ -460,22 +518,23 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if len(data) > 3:
             runners = []
             for i, row in enumerate(data[3:], 4):
-                runners.append(f"`{i}.` <@{row['user_id']}> — **{row['total_score']:,} pts**")
+                score = row.get("total_score", 0) or 0
+                runners.append(f"`{i}.` <@{row['user_id']}> — **{score:,} pts**")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
 
-        embed.set_footer(text="Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── Counting (All-Time) ─────────────────────────────────────────
 
-    def _build_counting_embed_alltime(self, data: dict, next_update: int) -> discord.Embed:
+    def _build_counting_embed_alltime(self, data: dict) -> discord.Embed:
         embed = discord.Embed(
             title="🔢 Counting Challenge — All-Time",
             color=CLR_COUNTING,
             timestamp=discord.utils.utcnow(),
         )
 
-        state = data.get("state")
+        state = data.get("state") if data else None
         if not state:
             embed.description = "> *The counting game hasn't started yet!*"
             return embed
@@ -506,20 +565,20 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             lines.append("\n*No record set yet — start counting!*")
 
         embed.description = "\n".join(lines)
-        embed.set_footer(text="Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── Counting (Weekly) ───────────────────────────────────────────
 
-    def _build_counting_embed_weekly(self, data: dict, next_update: int) -> discord.Embed:
+    def _build_counting_embed_weekly(self, data: dict) -> discord.Embed:
         embed = discord.Embed(
             title="🔢 Counting Challenge — This Week",
             color=CLR_COUNTING,
             timestamp=discord.utils.utcnow(),
         )
 
-        state = data.get("state")
-        weekly_contrib = data.get("weekly_contributors", [])
+        state = data.get("state") if data else None
+        weekly_contrib = data.get("weekly_contributors", []) if data else []
 
         if not weekly_contrib:
             embed.description = "> *No counting contributions this week yet. Head to the counting channel!*"
@@ -539,12 +598,12 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             lines.append(f"{medal} <@{c['user_id']}> — **{c['count']}** counts")
 
         embed.description = "\n".join(lines)
-        embed.set_footer(text="Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── Referral ────────────────────────────────────────────────────
 
-    def _build_referral_embed(self, data: list[dict], is_weekly: bool, next_update: int) -> discord.Embed:
+    def _build_referral_embed(self, data: list[dict], is_weekly: bool) -> discord.Embed:
         label = "This Week" if is_weekly else "All-Time"
         count_key = "curr_week_referrals" if is_weekly else "total_referrals"
 
@@ -564,7 +623,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         podium = []
         for i, row in enumerate(data[:3]):
-            count = row.get(count_key, 0)
+            count = row.get(count_key, 0) or 0
             suffix = "referral" if count == 1 else "referrals"
             podium.append(
                 f"{MEDALS[i]} <@{row['user_id']}>\n"
@@ -575,16 +634,16 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if len(data) > 3:
             runners = []
             for i, row in enumerate(data[3:], 4):
-                count = row.get(count_key, 0)
+                count = row.get(count_key, 0) or 0
                 runners.append(f"`{i}.` <@{row['user_id']}> — **{count}** referrals")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
 
-        embed.set_footer(text="Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── Boosting (All-Time only) ────────────────────────────────────
 
-    async def _build_boosting_embed(self, data: list[dict], next_update: int) -> discord.Embed:
+    def _build_boosting_embed(self, data: list[dict]) -> discord.Embed:
         embed = discord.Embed(
             title="💎 Boosting Streak — All-Time",
             color=CLR_BOOST,
@@ -614,12 +673,12 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                 runners.append(f"`{i}.` <@{row['user_id']}> — **{days:,}** days")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
 
-        embed.set_footer(text="Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── Voice Activity ──────────────────────────────────────────────
 
-    def _build_voice_embed(self, data: list[dict], is_weekly: bool, next_update: int) -> discord.Embed:
+    def _build_voice_embed(self, data: list[dict], is_weekly: bool) -> discord.Embed:
         label = "This Week" if is_weekly else "All-Time"
 
         embed = discord.Embed(
@@ -638,7 +697,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         podium = []
         for i, row in enumerate(data[:3]):
-            minutes = row.get("total_minutes", 0) or 0
+            minutes = int(row.get("total_minutes", 0) or 0)
             hours = minutes // 60
             mins = minutes % 60
             time_str = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
@@ -651,19 +710,19 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if len(data) > 3:
             runners = []
             for i, row in enumerate(data[3:], 4):
-                minutes = row.get("total_minutes", 0) or 0
+                minutes = int(row.get("total_minutes", 0) or 0)
                 hours = minutes // 60
                 mins = minutes % 60
                 time_str = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
                 runners.append(f"`{i}.` <@{row['user_id']}> — **{time_str}**")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
 
-        embed.set_footer(text="Updates every 5 min · Next refresh")
+        embed.set_footer(text="Updates every 5 min")
         return embed
 
     # ── Message Activity ────────────────────────────────────────────
 
-    def _build_message_embed(self, data: list[dict], is_weekly: bool, next_update: int) -> discord.Embed:
+    def _build_message_embed(self, data: list[dict], is_weekly: bool) -> discord.Embed:
         label = "This Week" if is_weekly else "All-Time"
 
         embed = discord.Embed(
@@ -682,7 +741,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         podium = []
         for i, row in enumerate(data[:3]):
-            msgs = row.get("total_messages", 0)
+            msgs = row.get("total_messages", 0) or 0
             podium.append(
                 f"{MEDALS[i]} <@{row['user_id']}>\n"
                 f"╰ **{msgs:,}** messages"
@@ -692,7 +751,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if len(data) > 3:
             runners = []
             for i, row in enumerate(data[3:], 4):
-                msgs = row.get("total_messages", 0)
+                msgs = row.get("total_messages", 0) or 0
                 runners.append(f"`{i}.` <@{row['user_id']}> — **{msgs:,}** messages")
             embed.add_field(name="── Runners Up ──", value="\n".join(runners), inline=False)
 
