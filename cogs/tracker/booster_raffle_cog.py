@@ -23,10 +23,14 @@ DEFAULT_WINNER_SLOTS = 25  # Configurable via settings: booster_raffle_slots
 class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.weekly_raffle.start()
         
     def cog_unload(self):
         self.weekly_raffle.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.weekly_raffle.is_running():
+            self.weekly_raffle.start()
 
     @tasks.loop(time=datetime.time(hour=8, minute=0, tzinfo=TZ_MANILA))
     async def weekly_raffle(self):

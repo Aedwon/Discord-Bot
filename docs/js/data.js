@@ -769,9 +769,14 @@ const DB_DATA = [
         "id": "tournaments",
         "features": [
             {
-                "name": "Strict Budget Economy",
+                "name": "Rigid Prize Pools",
                 "type": "passive",
-                "desc": "Placements enforce mathematical event caps. A 10K budget ensures admins cannot accidentally disburse beyond the limit."
+                "desc": "Event payouts enforce pre-configured prize tiers via UI modals, mathematically preventing unauthorized bonus EP limits."
+            },
+            {
+                "name": "Automated Embed Lifecycle",
+                "type": "passive",
+                "desc": "The event embed organically evolves from a Registration panel into a Final Results leaderboard upon conclusion."
             },
             {
                 "name": "Peak Voice Tracking",
@@ -781,8 +786,20 @@ const DB_DATA = [
         ],
         "commands": [
             {
-                "syntax": "/event kiosk",
-                "desc": "Spawn a Participation Check-In button for a Native Discord Scheduled Event.",
+                "syntax": "Step 1: /event setup-rewards",
+                "desc": "Define the exact prize pool structure manually using the UI modal prior to deployment.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "event_id",
+                        "type": "autocomplete",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "Step 2: /event register",
+                "desc": "Deploy the public-facing announcement embed with interactive Registration buttons and optional private threads.",
                 "access": "admin",
                 "params": [
                     {
@@ -791,37 +808,42 @@ const DB_DATA = [
                         "required": true
                     },
                     {
-                        "name": "ep",
-                        "type": "number",
+                        "name": "channel",
+                        "type": "#channel",
                         "required": true
                     },
                     {
-                        "name": "description",
-                        "type": "string",
+                        "name": "discohook_link",
+                        "type": "url",
+                        "required": true
+                    },
+                    {
+                        "name": "max_participants",
+                        "type": "number",
+                        "required": false
+                    },
+                    {
+                        "name": "thread_mode",
+                        "type": "choice",
                         "required": false
                     }
                 ]
             },
             {
-                "syntax": "/event cap-placement",
-                "desc": "Lock a strict budget limit on an event\u2019s placement payouts.",
+                "syntax": "Step 3: /event award",
+                "desc": "(Post-Event) Natively open the dropdown UI menuboard to securely award the predefined prize pools to the correct winners.",
                 "access": "admin",
                 "params": [
                     {
                         "name": "event_id",
                         "type": "autocomplete",
-                        "required": true
-                    },
-                    {
-                        "name": "total_budget",
-                        "type": "number",
                         "required": true
                     }
                 ]
             },
             {
-                "syntax": "/event placement",
-                "desc": "Award a winner\u2019s placement payout (1st, 2nd, MVP, etc). Enforces budget caps.",
+                "syntax": "Step 4: /event close-registration",
+                "desc": "Close the event natively. The bot automatically evolves the announcement embed into an 'Official Results' leaderboard and bulk-awards standard participation EP to all remaining registrants.",
                 "access": "admin",
                 "params": [
                     {
@@ -830,18 +852,20 @@ const DB_DATA = [
                         "required": true
                     },
                     {
-                        "name": "user",
-                        "type": "@mention",
-                        "required": true
-                    },
+                        "name": "payout_participation",
+                        "type": "boolean",
+                        "required": false
+                    }
+                ]
+            },
+            {
+                "syntax": "/event export_winners",
+                "desc": "Export an event's placement winners as a CSV file.",
+                "access": "admin",
+                "params": [
                     {
-                        "name": "placement",
-                        "type": "string",
-                        "required": true
-                    },
-                    {
-                        "name": "total_ep_value",
-                        "type": "number",
+                        "name": "event_id",
+                        "type": "autocomplete",
                         "required": true
                     }
                 ]
@@ -910,13 +934,67 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/event export_winners",
-                "desc": "Export an event's placement winners as a CSV file.",
+                "syntax": "/event kiosk (Legacy)",
+                "desc": "Spawn an ad-hoc Participation Check-In button (Unmanaged).",
                 "access": "admin",
                 "params": [
                     {
                         "name": "event_id",
                         "type": "autocomplete",
+                        "required": true
+                    },
+                    {
+                        "name": "ep",
+                        "type": "number",
+                        "required": true
+                    },
+                    {
+                        "name": "description",
+                        "type": "string",
+                        "required": false
+                    }
+                ]
+            },
+            {
+                "syntax": "/event cap-placement (Legacy)",
+                "desc": "Lock a strict budget limit on an event\u2019s placement payouts (Unmanaged).",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "event_id",
+                        "type": "autocomplete",
+                        "required": true
+                    },
+                    {
+                        "name": "total_budget",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/event placement (Legacy)",
+                "desc": "Award an arbitrary winner\u2019s placement payout. Use `/event award` instead.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "event_id",
+                        "type": "autocomplete",
+                        "required": true
+                    },
+                    {
+                        "name": "user",
+                        "type": "@mention",
+                        "required": true
+                    },
+                    {
+                        "name": "placement",
+                        "type": "string",
+                        "required": true
+                    },
+                    {
+                        "name": "total_ep_value",
+                        "type": "number",
                         "required": true
                     }
                 ]
@@ -961,7 +1039,7 @@ const DB_DATA = [
         ],
         "commands": [
             {
-                "syntax": "/event raffle create",
+                "syntax": "Step 1: /event raffle create",
                 "desc": "Create a raffle. A two-step flow collects core params, then opens a Modal for multiline requirements. Pings Giveaway Notification role.",
                 "access": "admin",
                 "params": [
@@ -998,66 +1076,7 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/event raffle draw",
-                "desc": "Manually draw winners for an active raffle.",
-                "access": "admin",
-                "params": [
-                    {
-                        "name": "raffle_id",
-                        "type": "number",
-                        "required": true
-                    }
-                ]
-            },
-            {
-                "syntax": "/event raffle reroll",
-                "desc": "Reroll an ended raffle. Disqualify someone or reroll all.",
-                "access": "admin",
-                "params": [
-                    {
-                        "name": "raffle_id",
-                        "type": "number",
-                        "required": true
-                    },
-                    {
-                        "name": "disqualified_winner",
-                        "type": "@mention",
-                        "required": false
-                    }
-                ]
-            },
-            {
-                "syntax": "/event raffle cancel",
-                "desc": "Cancel an active raffle and update its embed.",
-                "access": "admin",
-                "params": [
-                    {
-                        "name": "raffle_id",
-                        "type": "number",
-                        "required": true
-                    }
-                ]
-            },
-            {
-                "syntax": "/raffles",
-                "desc": "List all active raffles with participant count and end time.",
-                "access": "general",
-                "params": []
-            },
-            {
-                "syntax": "/event raffle export_winners",
-                "desc": "Export a drawn raffle's winners as a CSV file.",
-                "access": "admin",
-                "params": [
-                    {
-                        "name": "raffle_id",
-                        "type": "number",
-                        "required": true
-                    }
-                ]
-            },
-            {
-                "syntax": "/event raffle set_timer",
+                "syntax": "Step 2: /event raffle set_timer",
                 "desc": "Set or update the auto-draw end time on an active raffle.",
                 "access": "admin",
                 "params": [
@@ -1074,8 +1093,8 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/event raffle sync_legacy",
-                "desc": "Retroactively locate and cache message IDs for previously drawn raffle announcements.",
+                "syntax": "Step 3: /event raffle draw",
+                "desc": "Manually draw winners for an active raffle.",
                 "access": "admin",
                 "params": [
                     {
@@ -1086,8 +1105,25 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/event raffle force_sync",
-                "desc": "Overwrite legacy announcement messages to match current DB winners.",
+                "syntax": "Step 4a: /event raffle reroll",
+                "desc": "Reroll an ended raffle. Disqualify someone or reroll all.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    },
+                    {
+                        "name": "disqualified_winner",
+                        "type": "@mention",
+                        "required": false
+                    }
+                ]
+            },
+            {
+                "syntax": "Step 4b: /event raffle export_winners",
+                "desc": "Export a drawn raffle's winners as a CSV file.",
                 "access": "admin",
                 "params": [
                     {
@@ -1098,7 +1134,13 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/force-booster-raffle",
+                "syntax": "Step 1: /booster-raffle-status",
+                "desc": "Diagnostic dashboard for the auto booster raffle: channel/role config, booster count, this-week execution status, and next scheduled time with Unix timestamps.",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "Step 2: /force-booster-raffle",
                 "desc": "Forcefully execute the weekly booster Diamond Raffle. Pings Server Booster role. Counts as this week's raffle (auto raffle won't re-run).",
                 "access": "admin",
                 "params": [
@@ -1110,25 +1152,61 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/booster-raffle-status",
-                "desc": "Diagnostic dashboard for the auto booster raffle: channel/role config, booster count, this-week execution status, and next scheduled time with Unix timestamps.",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/booster-raffle-export",
-                "desc": "Export the latest booster raffle winners to separated MSL and Non-MSL CSVs.",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/booster-raffle-reroll-msl",
+                "syntax": "Step 3: /booster-raffle-reroll-msl",
                 "desc": "Retroactively exclude MSL members from the latest draw and reallocate slots to valid non-MSL boosters. Edits original announcement.",
                 "access": "admin",
                 "params": []
             },
             {
-                "syntax": "/booster-raffle-surgeon",
+                "syntax": "Step 4: /booster-raffle-export",
+                "desc": "Export the latest booster raffle winners to separated MSL and Non-MSL CSVs.",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "/raffles",
+                "desc": "List all active raffles with participant count and end time.",
+                "access": "general",
+                "params": []
+            },
+            {
+                "syntax": "/event raffle cancel (Maintenance)",
+                "desc": "Cancel an active raffle and update its embed.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/event raffle sync_legacy (Maintenance)",
+                "desc": "Retroactively locate and cache message IDs for previously drawn raffle announcements.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/event raffle force_sync (Maintenance)",
+                "desc": "Overwrite legacy announcement messages to match current DB winners.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "raffle_id",
+                        "type": "number",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "/booster-raffle-surgeon (Maintenance)",
                 "desc": "Emergency fix to purge test rounds and securely map valid winners to a specific target announcement message.",
                 "access": "admin",
                 "params": [
@@ -1140,7 +1218,7 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/booster-raffle-diagnose",
+                "syntax": "/booster-raffle-diagnose (Maintenance)",
                 "desc": "Dry-run diagnostic: traces every step the surgeon would take without modifying database records.",
                 "access": "admin",
                 "params": [
@@ -1152,7 +1230,7 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/booster-raffle-delete",
+                "syntax": "/booster-raffle-delete (Maintenance)",
                 "desc": "Safely purge a specifically linked test draw and explicitly re-enable the auto-raffle.",
                 "access": "admin",
                 "params": [
@@ -1164,7 +1242,7 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/booster-raffle-purge-week",
+                "syntax": "/booster-raffle-purge-week (Maintenance)",
                 "desc": "Emergency clear: Wipes ALL raffle records for the current calendar week.",
                 "access": "admin",
                 "params": []
@@ -1194,6 +1272,42 @@ const DB_DATA = [
         ],
         "commands": [
             {
+                "syntax": "Step 1: /anon deploy",
+                "desc": "Deploy the sticky anonymous messaging panel.",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "Step 1: /confessions deploy",
+                "desc": "Deploy the anonymous confessions board panel.",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "Step 1: /notification deploy",
+                "desc": "Deploy the notification role self-assignment panel (6 toggle buttons).",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "channel",
+                        "type": "#channel",
+                        "required": false
+                    }
+                ]
+            },
+            {
+                "syntax": "Step 2: /anon sync",
+                "desc": "Force re-number all anonymous messages sequentially (fixes gaps from deletions).",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "Step 2: /confessions sync",
+                "desc": "Force re-number all confessions sequentially (fixes gaps from deletions).",
+                "access": "admin",
+                "params": []
+            },
+            {
                 "syntax": "/thank",
                 "desc": "Thank someone for their help. Awards them +10 XP. 12h cooldown per sender, 5 unique thanks/day cap.",
                 "access": "general",
@@ -1210,42 +1324,6 @@ const DB_DATA = [
                 "desc": "Bind dynamic badge names to Discord roles (one-time admin setup).",
                 "access": "admin",
                 "params": []
-            },
-            {
-                "syntax": "/anon deploy",
-                "desc": "Deploy the sticky anonymous messaging panel.",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/anon sync",
-                "desc": "Force re-number all anonymous messages sequentially (fixes gaps from deletions).",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/confessions deploy",
-                "desc": "Deploy the anonymous confessions board panel.",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/confessions sync",
-                "desc": "Force re-number all confessions sequentially (fixes gaps from deletions).",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/notification deploy",
-                "desc": "Deploy the notification role self-assignment panel (6 toggle buttons).",
-                "access": "admin",
-                "params": [
-                    {
-                        "name": "channel",
-                        "type": "#channel",
-                        "required": false
-                    }
-                ]
             }
         ]
     },
@@ -1272,26 +1350,26 @@ const DB_DATA = [
         ],
         "commands": [
             {
-                "syntax": "/quiz start",
-                "desc": "Manually start a quiz session now.",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/quiz stop",
-                "desc": "Force-stop a running quiz session and re-lock the channel.",
-                "access": "admin",
-                "params": []
-            },
-            {
-                "syntax": "/quiz reload",
+                "syntax": "Step 1: /quiz reload",
                 "desc": "Reload quiz questions from CSV into memory.",
                 "access": "admin",
                 "params": []
             },
             {
-                "syntax": "/quiz status",
+                "syntax": "Step 2: /quiz status",
                 "desc": "Check quiz system status (questions loaded, session state, schedule).",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "Step 3: /quiz start",
+                "desc": "Manually start a quiz session now.",
+                "access": "admin",
+                "params": []
+            },
+            {
+                "syntax": "Step 4: /quiz stop",
+                "desc": "Force-stop a running quiz session and re-lock the channel.",
                 "access": "admin",
                 "params": []
             },
@@ -1333,7 +1411,24 @@ const DB_DATA = [
         ],
         "commands": [
             {
-                "syntax": "/verify deploy",
+                "syntax": "Step 1: /msl setup",
+                "desc": "Configure the MSL spreadsheet URL and verified role.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "spreadsheet_url",
+                        "type": "url",
+                        "required": true
+                    },
+                    {
+                        "name": "role",
+                        "type": "@role",
+                        "required": true
+                    }
+                ]
+            },
+            {
+                "syntax": "Step 2: /verify deploy",
                 "desc": "Post the verification panel in a channel.",
                 "access": "admin",
                 "params": [
@@ -1345,19 +1440,7 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/verify whois",
-                "desc": "Look up a Discord user by their MLBB UID.",
-                "access": "admin",
-                "params": [
-                    {
-                        "name": "mlbb_uid",
-                        "type": "number",
-                        "required": true
-                    }
-                ]
-            },
-            {
-                "syntax": "/verify update",
+                "syntax": "Step 3: /verify update",
                 "desc": "Edit a user\u2019s MLBB verification info.",
                 "access": "admin",
                 "params": [
@@ -1379,7 +1462,7 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/verify remove",
+                "syntax": "Step 4: /verify remove",
                 "desc": "Remove a user\u2019s verification status.",
                 "access": "admin",
                 "params": [
@@ -1391,18 +1474,13 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/msl setup",
-                "desc": "Configure the MSL spreadsheet URL and verified role.",
+                "syntax": "/verify whois",
+                "desc": "Look up a Discord user by their MLBB UID.",
                 "access": "admin",
                 "params": [
                     {
-                        "name": "spreadsheet_url",
-                        "type": "url",
-                        "required": true
-                    },
-                    {
-                        "name": "role",
-                        "type": "@role",
+                        "name": "mlbb_uid",
+                        "type": "number",
                         "required": true
                     }
                 ]

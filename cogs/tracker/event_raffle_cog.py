@@ -140,7 +140,6 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
 
     async def cog_load(self):
         self.bot.add_view(PersistentRaffleView())
-        self.auto_draw_loop.start()
 
     def cog_unload(self):
         self.auto_draw_loop.cancel()
@@ -149,6 +148,9 @@ class EventRaffleCog(commands.Cog, name="Event Raffle"):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        if not self.auto_draw_loop.is_running():
+            self.auto_draw_loop.start()
+            
         """Draw any raffles that expired while the bot was offline."""
         try:
             overdue = await db.fetch_all(
