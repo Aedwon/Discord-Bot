@@ -209,6 +209,8 @@ class Database:
         ''')
         
         # Message Cache for moderation logs
+        # DEPRECATED: message_cache is now JSON-backed in log_cog.py (message_cache.json).
+        # This table is kept for backward compatibility but is no longer written to.
         await self.execute('''
             CREATE TABLE IF NOT EXISTS message_cache (
                 message_id BIGINT PRIMARY KEY,

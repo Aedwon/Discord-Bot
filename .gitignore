@@ -21,5 +21,9 @@ venv/
 scheduled_embeds.json
 scheduled_embeds.json.tmp
 
+# Message cache persistence (JSON-backed, must survive deploys)
+message_cache.json
+message_cache.json.tmp
+
 # OS Generated
 .DS_Store
