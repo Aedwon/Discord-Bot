@@ -352,6 +352,111 @@ class LeaderboardService:
             logger.error(f"Weekly leaderboard reset failed: {e}")
             return 0
 
+    # ═══════════════════════════════════════════════════════════════════
+    #  WEEKLY ARCHIVE (history logging)
+    # ═══════════════════════════════════════════════════════════════════
+
+    # Category definitions: (key, query_method_name, value_field_key)
+    WEEKLY_CATEGORIES = [
+        ("xp", "get_weekly_xp", "weekly_xp"),
+        ("ep", "get_weekly_ep", "weekly_ep"),
+        ("quiz", "get_weekly_quiz", "total_score"),
+        ("referral", "get_weekly_referrals", "curr_week_referrals"),
+        ("voice", "get_weekly_voice", "total_minutes"),
+        ("messages", "get_weekly_messages", "total_messages"),
+    ]
+
+    async def archive_weekly_standings(self, exclude_ids: set[int]) -> tuple[str, int]:
+        """
+        Capture the final weekly standings (top 10 per category) into
+        weekly_leaderboard_history. Called BEFORE run_weekly_reset().
+
+        Returns (week_id, total_rows_archived). Idempotent — skips if already exists.
+        """
+        now_pht = datetime.now(TZ_PHT)
+        week_id = now_pht.strftime("%Y-W%W")
+
+        # Idempotency check
+        existing = await db.fetch_one(
+            "SELECT COUNT(*) as cnt FROM weekly_leaderboard_history WHERE week_id = %s",
+            (week_id,)
+        )
+        if existing and existing["cnt"] > 0:
+            logger.info(f"Weekly archive for {week_id} already exists ({existing['cnt']} rows). Skipping.")
+            return week_id, 0
+
+        total_archived = 0
+        snapshot_time = now_pht.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Archive standard categories (XP, EP, Quiz, Referral, Voice, Messages)
+        for cat_key, method_name, value_key in self.WEEKLY_CATEGORIES:
+            try:
+                method = getattr(self, method_name)
+                rows = await method(10, exclude_ids)
+                if not rows:
+                    continue
+
+                for rank, row in enumerate(rows, 1):
+                    value = row.get(value_key, 0) or 0
+                    await db.execute(
+                        """INSERT INTO weekly_leaderboard_history
+                           (week_id, category, rank_position, user_id, value, extra_info, snapshot_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                        (week_id, cat_key, rank, row["user_id"], int(value), None, snapshot_time)
+                    )
+                    total_archived += 1
+            except Exception as e:
+                logger.error(f"Failed to archive category '{cat_key}': {e}")
+                continue
+
+        # Archive counting (special structure — uses weekly_contributors list)
+        try:
+            counting_data = await self.get_weekly_counting()
+            weekly_contrib = counting_data.get("weekly_contributors", [])
+            for rank, row in enumerate(weekly_contrib[:10], 1):
+                await db.execute(
+                    """INSERT INTO weekly_leaderboard_history
+                       (week_id, category, rank_position, user_id, value, extra_info, snapshot_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (week_id, "counting", rank, row["user_id"], row["count"], None, snapshot_time)
+                )
+                total_archived += 1
+        except Exception as e:
+            logger.error(f"Failed to archive counting: {e}")
+
+        logger.info(f"Weekly archive complete for {week_id}: {total_archived} rows archived.")
+        return week_id, total_archived
+
+    async def get_archived_weeks(self, limit: int = 12) -> list[dict]:
+        """Return list of distinct archived week_ids, most recent first."""
+        return await db.fetch_all(
+            """SELECT DISTINCT week_id, MIN(snapshot_at) as archived_at, COUNT(*) as total_entries
+               FROM weekly_leaderboard_history
+               GROUP BY week_id
+               ORDER BY week_id DESC LIMIT %s""",
+            (limit,)
+        )
+
+    async def get_archived_week_data(
+        self, week_id: str, category: str | None = None
+    ) -> list[dict]:
+        """Return archived rows for a specific week, optionally filtered by category."""
+        if category:
+            return await db.fetch_all(
+                """SELECT category, rank_position, user_id, value, extra_info
+                   FROM weekly_leaderboard_history
+                   WHERE week_id = %s AND category = %s
+                   ORDER BY category, rank_position""",
+                (week_id, category)
+            )
+        return await db.fetch_all(
+            """SELECT category, rank_position, user_id, value, extra_info
+               FROM weekly_leaderboard_history
+               WHERE week_id = %s
+               ORDER BY category, rank_position""",
+            (week_id,)
+        )
 
 # Singleton
 leaderboard_service = LeaderboardService()
+

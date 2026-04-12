@@ -249,6 +249,23 @@ class Database:
             )
         ''')
         
+        # Archive of weekly leaderboard standings for reward processing.
+        # Populated at Monday 00:00 UTC+8 before the weekly reset.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS weekly_leaderboard_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                week_id VARCHAR(10) NOT NULL,
+                category VARCHAR(20) NOT NULL,
+                rank_position INT NOT NULL,
+                user_id BIGINT NOT NULL,
+                value BIGINT NOT NULL,
+                extra_info VARCHAR(100) DEFAULT NULL,
+                snapshot_at DATETIME NOT NULL,
+                INDEX idx_wlh_week_cat (week_id, category),
+                INDEX idx_wlh_user (user_id)
+            )
+        ''')
+        
         # Event Kiosks (Linked to Native Discord Events)
         await self.execute('''
             CREATE TABLE IF NOT EXISTS guild_event_kiosks (

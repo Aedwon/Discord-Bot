@@ -2,15 +2,21 @@
 Dual Leaderboard Cog — Weekly & All-Time.
 
 Manages two independent leaderboard channels with premium embed UX.
-Updates every 5 minutes with MSL exclusion. Weekly board resets
-every Monday 00:00 UTC+8 (Sunday 16:00 UTC).
+Weekly board updates exclude MSLs; All-Time includes everyone.
+Both update every 5 minutes. Weekly resets Monday 00:00 UTC+8.
+
+On reset, the weekly standings are archived into a history table
+for reward processing. A summary is auto-posted to a log channel.
 
 Leaderboard categories:
   All-Time: XP, EP, Quiz, Counting, Referral, Boosting, Voice, Messages
   Weekly:   XP, EP, Quiz, Counting, Referral, Voice, Messages
 """
 
+import csv
+import io
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 import logging
 import time as time_module
@@ -19,6 +25,7 @@ from datetime import datetime, timedelta, timezone, time
 from services.database import db
 from services.settings_service import settings_service
 from services.leaderboard_service import leaderboard_service, TZ_PHT
+from services.verification_service import verification_service
 from services.xp_service import xp_service
 from services.ep_service import ep_service
 
@@ -70,6 +77,20 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                     PRIMARY KEY (guild_id, user_id)
                 )
             ''')
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS weekly_leaderboard_history (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    week_id VARCHAR(10) NOT NULL,
+                    category VARCHAR(20) NOT NULL,
+                    rank_position INT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    value BIGINT NOT NULL,
+                    extra_info VARCHAR(100) DEFAULT NULL,
+                    snapshot_at DATETIME NOT NULL,
+                    INDEX idx_wlh_week_cat (week_id, category),
+                    INDEX idx_wlh_user (user_id)
+                )
+            ''')
             logger.info("Leaderboard tables verified/created.")
         except Exception as e:
             logger.error(f"Failed to ensure leaderboard tables: {e}")
@@ -96,18 +117,18 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         """Master loop: refresh both leaderboard channels every 5 minutes."""
         try:
             for guild in self.bot.guilds:
-                # Fetch MSL exclusion set once per cycle
-                exclude_ids = await leaderboard_service.get_msl_user_ids()
+                # MSL exclusion only applies to weekly leaderboard
+                msl_ids = await leaderboard_service.get_msl_user_ids()
 
-                # Update each channel independently — one failing shouldn't
-                # prevent the other from updating
+                # All-Time: MSLs ARE included (no exclusion)
                 try:
-                    await self._update_alltime_channel(guild, exclude_ids)
+                    await self._update_alltime_channel(guild, set())
                 except Exception as e:
                     logger.error(f"All-time leaderboard update failed: {e}", exc_info=True)
 
+                # Weekly: MSLs excluded (they can't receive rewards)
                 try:
-                    await self._update_weekly_channel(guild, exclude_ids)
+                    await self._update_weekly_channel(guild, msl_ids)
                 except Exception as e:
                     logger.error(f"Weekly leaderboard update failed: {e}", exc_info=True)
 
@@ -128,6 +149,12 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         Fires daily at Sunday 16:00 UTC (Monday 00:00 PHT).
         Only executes if today is actually Monday in PHT and
         hasn't already run this week.
+
+        Execution order:
+        1. Archive final weekly standings → history table
+        2. Auto-post summary to log channel
+        3. Snapshot XP/EP and reset counting
+        4. Set guard flag
         """
         now_pht = datetime.now(TZ_PHT)
 
@@ -141,6 +168,19 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if last_reset == iso_week:
             return
 
+        # Step 1: Archive the final weekly standings BEFORE resetting
+        msl_ids = await leaderboard_service.get_msl_user_ids()
+        week_id, archived = await leaderboard_service.archive_weekly_standings(msl_ids)
+        logger.info(f"Weekly archive: {archived} rows saved for {week_id}")
+
+        # Step 2: Auto-post summary to log channel
+        for guild in self.bot.guilds:
+            try:
+                await self._post_weekly_archive_log(guild, week_id)
+            except Exception as e:
+                logger.error(f"Failed to post weekly archive log: {e}")
+
+        # Step 3: Reset snapshots for next week
         count = await leaderboard_service.run_weekly_reset()
         await settings_service.set("leaderboard_last_reset_week", iso_week)
         logger.info(f"Weekly leaderboard reset: {count} users snapshotted (week {iso_week})")
@@ -148,6 +188,67 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
     @weekly_reset_task.before_loop
     async def before_weekly_reset(self):
         await self.bot.wait_until_ready()
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  WEEKLY ARCHIVE LOG (auto-post to channel)
+    # ═══════════════════════════════════════════════════════════════════
+
+    CATEGORY_LABELS = {
+        "xp": ("🌟", "XP", "XP"),
+        "ep": ("🏆", "EP", "EP"),
+        "quiz": ("🧠", "Quiz", "pts"),
+        "counting": ("🔢", "Counting", "counts"),
+        "referral": ("🔗", "Referrals", "referrals"),
+        "voice": ("🎤", "Voice", "min"),
+        "messages": ("💬", "Messages", "msgs"),
+    }
+
+    async def _post_weekly_archive_log(self, guild: discord.Guild, week_id: str):
+        """Post a summary embed of the archived weekly standings to the log channel."""
+        channel_id_str = await settings_service.get("leaderboard_log_channel_id")
+        if not channel_id_str or channel_id_str == "0":
+            return
+
+        channel = guild.get_channel(int(channel_id_str))
+        if not channel:
+            return
+
+        data = await leaderboard_service.get_archived_week_data(week_id)
+        if not data:
+            return
+
+        # Group by category
+        categories: dict[str, list] = {}
+        for row in data:
+            categories.setdefault(row["category"], []).append(row)
+
+        embed = discord.Embed(
+            title=f"📊 Weekly Leaderboard Archive — {week_id}",
+            description="Final standings have been archived for reward processing.",
+            color=CLR_ALLTIME_HEADER,
+            timestamp=discord.utils.utcnow(),
+        )
+
+        for cat_key, rows in categories.items():
+            emoji, label, unit = self.CATEGORY_LABELS.get(cat_key, ("📋", cat_key, ""))
+            lines = []
+            for row in rows[:5]:  # Show top 5 in the summary
+                rank = row["rank_position"]
+                medal = MEDALS[rank - 1] if rank <= 3 else f"`{rank}.`"
+                lines.append(f"{medal} <@{row['user_id']}> — **{row['value']:,}** {unit}")
+            embed.add_field(
+                name=f"{emoji} {label}",
+                value="\n".join(lines) if lines else "*No data*",
+                inline=True,
+            )
+
+        embed.set_footer(text=f"Use /leaderboard export {week_id} for full CSV")
+
+        try:
+            await channel.send(embed=embed)
+            logger.info(f"Weekly archive summary posted to #{channel.name}")
+        except discord.HTTPException as e:
+            logger.error(f"Failed to send archive summary: {e}")
 
     # ═══════════════════════════════════════════════════════════════════
     #  SAFE QUERY WRAPPER
@@ -757,6 +858,177 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         embed.set_footer(text="Updates every 5 min · Counts messages with 3+ words")
         return embed
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  ADMIN COMMANDS
+    # ═══════════════════════════════════════════════════════════════════
+
+    lb_group = app_commands.Group(
+        name="leaderboard",
+        description="Leaderboard management and history",
+        default_permissions=discord.Permissions(administrator=True),
+    )
+
+    @lb_group.command(name="history", description="View archived weekly leaderboard standings")
+    @app_commands.describe(week_id="Optional week ID (e.g. 2026-W15). Leave blank to list available weeks.")
+    async def lb_history(self, interaction: discord.Interaction, week_id: str | None = None):
+        await interaction.response.defer(ephemeral=True)
+
+        if not week_id:
+            # List available weeks
+            weeks = await leaderboard_service.get_archived_weeks(12)
+            if not weeks:
+                return await interaction.followup.send("📭 No archived weeks found yet. Archives are created each Monday at 12:00 AM PHT.", ephemeral=True)
+
+            lines = []
+            for w in weeks:
+                archived_at = w["archived_at"]
+                date_str = archived_at.strftime("%b %d, %Y") if archived_at else "N/A"
+                lines.append(f"📅 **{w['week_id']}** — {w['total_entries']} entries (archived {date_str})")
+
+            embed = discord.Embed(
+                title="📊 Weekly Leaderboard Archives",
+                description="\n".join(lines) + "\n\n*Use `/leaderboard history <week_id>` to view details.*",
+                color=CLR_ALLTIME_HEADER,
+            )
+            return await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # Show specific week
+        data = await leaderboard_service.get_archived_week_data(week_id)
+        if not data:
+            return await interaction.followup.send(f"❌ No data found for week `{week_id}`.", ephemeral=True)
+
+        # Group by category
+        categories: dict[str, list] = {}
+        for row in data:
+            categories.setdefault(row["category"], []).append(row)
+
+        embed = discord.Embed(
+            title=f"📊 Weekly Archive — {week_id}",
+            description=f"Showing all archived standings for **{week_id}**.",
+            color=CLR_ALLTIME_HEADER,
+            timestamp=discord.utils.utcnow(),
+        )
+
+        for cat_key, rows in categories.items():
+            emoji, label, unit = self.CATEGORY_LABELS.get(cat_key, ("📋", cat_key, ""))
+            lines = []
+            for row in rows:
+                rank = row["rank_position"]
+                medal = MEDALS[rank - 1] if rank <= 3 else f"`{rank}.`"
+                lines.append(f"{medal} <@{row['user_id']}> — **{row['value']:,}** {unit}")
+            embed.add_field(
+                name=f"{emoji} {label}",
+                value="\n".join(lines) if lines else "*No data*",
+                inline=False,
+            )
+
+        embed.set_footer(text=f"Use /leaderboard export {week_id} for CSV")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @lb_group.command(name="export", description="Export weekly leaderboard archive as CSV for reward processing")
+    @app_commands.describe(week_id="Week ID to export (e.g. 2026-W15)")
+    async def lb_export(self, interaction: discord.Interaction, week_id: str):
+        """Generate CSV files matching the raffle export format:
+        Non-MSL: Full Name, UID, Server, Amount, Remarks
+        """
+        await interaction.response.defer(ephemeral=True)
+
+        data = await leaderboard_service.get_archived_week_data(week_id)
+        if not data:
+            return await interaction.followup.send(f"❌ No data found for week `{week_id}`.", ephemeral=True)
+
+        # Collect all unique user_ids
+        user_ids = list({row["user_id"] for row in data})
+
+        # Fetch verification data for all users
+        if user_ids:
+            placeholders = ",".join(["%s"] * len(user_ids))
+            verified_rows = await db.fetch_all(
+                f"SELECT user_id, full_name, mlbb_uid, mlbb_server FROM verified_users WHERE user_id IN ({placeholders})",
+                tuple(user_ids)
+            )
+        else:
+            verified_rows = []
+        verified_map = {r["user_id"]: r for r in verified_rows}
+
+        # Resolve display names for unverified users
+        display_names: dict[int, str] = {}
+        for uid in user_ids:
+            if uid not in verified_map:
+                user_obj = self.bot.get_user(uid)
+                if not user_obj:
+                    try:
+                        user_obj = await self.bot.fetch_user(uid)
+                    except Exception:
+                        pass
+                display_names[uid] = user_obj.display_name if user_obj else f"User {uid}"
+
+        # Group data by category
+        categories: dict[str, list] = {}
+        for row in data:
+            categories.setdefault(row["category"], []).append(row)
+
+        remarks_str = f"MSL Network Discord - Weekly Leaderboard - ({week_id})"
+
+        # Build one CSV per category
+        files = []
+        for cat_key, rows in categories.items():
+            emoji, label, unit = self.CATEGORY_LABELS.get(cat_key, ("📋", cat_key, ""))
+
+            csv_out = io.StringIO()
+            csv_out.write('\ufeff')  # UTF-8 BOM for Excel
+            writer = csv.writer(csv_out)
+            writer.writerow(["Full Name", "UID", "Server", "Amount", "Remarks"])
+
+            for row in rows:
+                uid = row["user_id"]
+                v_info = verified_map.get(uid)
+
+                if v_info:
+                    writer.writerow([
+                        v_info["full_name"],
+                        v_info["mlbb_uid"],
+                        v_info["mlbb_server"],
+                        "",  # Amount blank for manual fill
+                        f"#{row['rank_position']} {label} ({row['value']:,} {unit}) — {remarks_str}"
+                    ])
+                else:
+                    name = display_names.get(uid, f"User {uid}")
+                    writer.writerow([
+                        f"UNVERIFIED — {name}",
+                        "N/A",
+                        "N/A",
+                        "",
+                        f"#{row['rank_position']} {label} ({row['value']:,} {unit}) — {remarks_str}"
+                    ])
+
+            csv_out.seek(0)
+            files.append(
+                discord.File(
+                    fp=io.BytesIO(csv_out.getvalue().encode('utf-8-sig')),
+                    filename=f"weekly_{cat_key}_{week_id}.csv"
+                )
+            )
+
+        # Summary message
+        cat_summary = ", ".join([f"{self.CATEGORY_LABELS.get(c, ('', c, ''))[1]} ({len(r)})" for c, r in categories.items()])
+        total_entries = sum(len(r) for r in categories.values())
+        unverified_count = sum(1 for uid in user_ids if uid not in verified_map)
+
+        msg = (
+            f"✅ Exported **{total_entries}** entries across **{len(categories)}** categories for week **{week_id}**.\n"
+            f"Categories: {cat_summary}"
+        )
+        if unverified_count > 0:
+            msg += f"\n⚠️ **{unverified_count}** user(s) are unverified and tagged as `UNVERIFIED` in the CSVs."
+
+        # Discord limits to 10 files per message
+        if len(files) <= 10:
+            await interaction.followup.send(msg, files=files, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, files=files[:10], ephemeral=True)
+            await interaction.followup.send("*(continued)*", files=files[10:], ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

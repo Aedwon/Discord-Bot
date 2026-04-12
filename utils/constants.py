@@ -25,6 +25,7 @@ SETUP_SCHEMA = {
         {"key": "giveaway_log_channel_id", "name": "Giveaway Logs", "type": "channel", "cmd": "`/setup channel giveaway_log <#channel>`"},
         {"key": "leaderboard_weekly_channel_id", "name": "Leaderboard (Weekly)", "type": "channel", "cmd": "`/setup channel leaderboard_weekly <#channel>`"},
         {"key": "leaderboard_alltime_channel_id", "name": "Leaderboard (All-Time)", "type": "channel", "cmd": "`/setup channel leaderboard_alltime <#channel>`"},
+        {"key": "leaderboard_log_channel_id", "name": "Leaderboard Log (Archives)", "type": "channel", "cmd": "`/setup channel leaderboard_log <#channel>`"},
         {"key": "confessions_channel_id", "name": "Confessions", "type": "channel", "cmd": "`/setup channel confessions <#channel>`"},
         {"key": "counting_channel_id", "name": "Counting", "type": "channel", "cmd": "`/setup channel counting <#channel>`"},
         {"key": "anon_messages_channel_id", "name": "Anonymous Messages", "type": "channel", "cmd": "`/setup channel anon_messages <#channel>`"},
