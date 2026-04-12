@@ -472,10 +472,21 @@ class SocialCog(commands.GroupCog, name="social"):
     # INTERACTION COMMANDS (hug, pat, poke, etc.)
     # =================================================================
 
+    async def _is_blocked(self, user_id: int, target_id: int) -> bool:
+        """Check if target has blocked user from social interactions."""
+        row = await db.fetch_one(
+            "SELECT 1 FROM social_blocks WHERE user_id = %s AND blocked_id = %s",
+            (target_id, user_id)
+        )
+        return row is not None
+
     async def _do_interaction(self, interaction: discord.Interaction, target: discord.Member, action_key: str):
         """Central handler for all RP interaction commands."""
         if target.id == interaction.user.id:
             return await interaction.response.send_message("❌ You can't do that to yourself!", ephemeral=True)
+
+        if await self._is_blocked(interaction.user.id, target.id):
+            return await interaction.response.send_message("❌ This user has blocked social interactions from you.", ephemeral=True)
 
         action = INTERACTIONS[action_key]
         text = random.choice(action["responses"]).format(
@@ -686,6 +697,10 @@ class SocialCog(commands.GroupCog, name="social"):
         if user.bot:
             return await interaction.response.send_message("❌ You can't marry a bot!", ephemeral=True)
 
+        # Check social block
+        if await self._is_blocked(interaction.user.id, user.id):
+            return await interaction.response.send_message("❌ This user has blocked social interactions from you.", ephemeral=True)
+
         # Check if proposer is already married
         existing = await db.fetch_one(
             "SELECT * FROM marriages WHERE user1_id = %s OR user2_id = %s",
@@ -806,6 +821,10 @@ class SocialCog(commands.GroupCog, name="social"):
         # Block bots
         if user.bot:
             return await interaction.response.send_message("❌ You can't adopt a bot!", ephemeral=True)
+
+        # Check social block
+        if await self._is_blocked(interaction.user.id, user.id):
+            return await interaction.response.send_message("❌ This user has blocked social interactions from you.", ephemeral=True)
 
         # Check if target already has a parent
         existing_parent = await db.fetch_one(
@@ -956,6 +975,71 @@ class SocialCog(commands.GroupCog, name="social"):
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.set_footer(text="MSL Network")
         await interaction.response.send_message(embed=embed)
+
+    # =================================================================
+    # /social block & unblock
+    # =================================================================
+
+    @app_commands.command(name="block", description="Block a user from using social commands on you.")
+    async def social_block(self, interaction: discord.Interaction, user: discord.Member):
+        if user.id == interaction.user.id:
+            return await interaction.response.send_message("❌ You can't block yourself!", ephemeral=True)
+        if user.bot:
+            return await interaction.response.send_message("❌ Bots are already blocked by default.", ephemeral=True)
+
+        existing = await db.fetch_one(
+            "SELECT 1 FROM social_blocks WHERE user_id = %s AND blocked_id = %s",
+            (interaction.user.id, user.id)
+        )
+        if existing:
+            return await interaction.response.send_message(f"❌ You've already blocked **{user.display_name}**.", ephemeral=True)
+
+        await db.execute(
+            "INSERT INTO social_blocks (user_id, blocked_id) VALUES (%s, %s)",
+            (interaction.user.id, user.id)
+        )
+
+        embed = discord.Embed(
+            description=(
+                f"## 🚫  User Blocked\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{user.display_name}** can no longer use social commands on you.\n"
+                f"*(hugs, pats, proposals, adoptions, etc.)*\n\n"
+                f"Use `/social unblock` to undo this.\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0xE74C3C,
+            timestamp=datetime.now(TZ_MANILA),
+        )
+        embed.set_footer(text="MSL Network")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="unblock", description="Unblock a user from social commands.")
+    async def social_unblock(self, interaction: discord.Interaction, user: discord.Member):
+        result = await db.fetch_one(
+            "SELECT 1 FROM social_blocks WHERE user_id = %s AND blocked_id = %s",
+            (interaction.user.id, user.id)
+        )
+        if not result:
+            return await interaction.response.send_message(f"❌ **{user.display_name}** isn't blocked.", ephemeral=True)
+
+        await db.execute(
+            "DELETE FROM social_blocks WHERE user_id = %s AND blocked_id = %s",
+            (interaction.user.id, user.id)
+        )
+
+        embed = discord.Embed(
+            description=(
+                f"## ✅  User Unblocked\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{user.display_name}** can now use social commands on you again.\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0x2ECC71,
+            timestamp=datetime.now(TZ_MANILA),
+        )
+        embed.set_footer(text="MSL Network")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # =================================================================
     # COOLDOWN ERROR HANDLER

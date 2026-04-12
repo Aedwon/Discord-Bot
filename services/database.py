@@ -709,7 +709,15 @@ class Database:
             )
         ''')
 
-    
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS social_blocks (
+                user_id BIGINT NOT NULL,
+                blocked_id BIGINT NOT NULL,
+                blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, blocked_id),
+                INDEX idx_sb_blocked (blocked_id)
+            )
+        ''')    
     async def close(self):
         """Close the database connection."""
         if self._pool:
