@@ -189,7 +189,7 @@ class AnalyticsService:
 
     # ─── DAILY ROLLUP ───────────────────────────────────────────────
 
-    async def run_daily_rollup(self):
+    async def run_daily_rollup(self, bot=None):
         """Aggregate yesterday's raw data into permanent daily summaries."""
         yesterday = (self.now_pht() - timedelta(days=1)).strftime('%Y-%m-%d')
         
@@ -221,7 +221,7 @@ class AnalyticsService:
             return str(obj)
 
         try:
-            granular_stats = await self.get_exhaustive_daily_stats(yesterday)
+            granular_stats = await self.get_exhaustive_daily_stats(yesterday, bot=bot)
             granular_json_str = json.dumps(granular_stats, default=json_serial)
         except Exception as e:
             logger.error(f"Failed to generate granular json for rollup: {e}")
@@ -406,10 +406,25 @@ class AnalyticsService:
         return totals
 
 
-    async def get_exhaustive_daily_stats(self, date_str: str) -> dict:
+    async def get_exhaustive_daily_stats(self, date_str: str, bot=None) -> dict:
         """Fetch multiple exhaustive data points for a specific date (YYYY-MM-DD)."""
         stats = {}
         
+        # Helper to gently resolve names
+        def resolve_member_name(user_id):
+            if not bot: return str(user_id)
+            for g in bot.guilds:
+                m = g.get_member(user_id)
+                if m: return m.display_name
+            return str(user_id)
+
+        def resolve_channel_name(channel_id):
+            if not bot: return str(channel_id)
+            for g in bot.guilds:
+                c = g.get_channel(channel_id)
+                if c: return c.name
+            return str(channel_id)
+
         # 1. Moderation Actions
         mods = await db.fetch_all('''
             SELECT action_type, COUNT(*) as c 
@@ -447,7 +462,7 @@ class AnalyticsService:
             GROUP BY user_id 
             ORDER BY sum_score DESC LIMIT 3
         ''', (date_str,))
-        stats['quiz_top_3'] = [{"user_id": r['user_id'], "score": r['sum_score']} for r in q_top]
+        stats['quiz_top_3'] = [{"user_id": r['user_id'], "name": resolve_member_name(r['user_id']), "score": r['sum_score']} for r in q_top]
         
         # 5. Thanks System & Top 3 Receivers
         th = await db.fetch_one("SELECT COUNT(*) as c FROM thanks_history WHERE DATE(created_at) = %s", (date_str,))
@@ -460,7 +475,7 @@ class AnalyticsService:
             GROUP BY receiver_id 
             ORDER BY received DESC LIMIT 3
         ''', (date_str,))
-        stats['thanks_top_3'] = [{"user_id": r['receiver_id'], "count": r['received']} for r in th_top]
+        stats['thanks_top_3'] = [{"user_id": r['receiver_id'], "name": resolve_member_name(r['receiver_id']), "count": r['received']} for r in th_top]
         
         # 6. Quest Progress
         qp = await db.fetch_one("SELECT COUNT(*) as c FROM quest_progress WHERE completed = TRUE AND DATE(completed_at) = %s", (date_str,))
@@ -477,7 +492,7 @@ class AnalyticsService:
             GROUP BY invite_code, inviter_id 
             ORDER BY c DESC LIMIT 3
         ''', (date_str,))
-        stats['top_invites'] = [{"code": r['invite_code'], "inviter": r['inviter_id'], "count": r['c']} for r in invites]
+        stats['top_invites'] = [{"code": r['invite_code'], "inviter": r['inviter_id'], "name": resolve_member_name(r['inviter_id']), "count": r['c']} for r in invites]
         
         # 8. Event Redemptions (EP Economy)
         ep = await db.fetch_one("SELECT COUNT(*) as redemptions FROM event_redemptions WHERE DATE(redeemed_at) = %s", (date_str,))
@@ -495,7 +510,7 @@ class AnalyticsService:
             GROUP BY channel_id 
             ORDER BY c DESC LIMIT 5
         ''', (date_str,))
-        stats['top_text_channels'] = [{"channel_id": r['channel_id'], "count": r['c']} for r in tx]
+        stats['top_text_channels'] = [{"channel_id": r['channel_id'], "name": resolve_channel_name(r['channel_id']), "count": r['c']} for r in tx]
         
         # 11. Top 3 Voice Channels
         vx = await db.fetch_all('''
@@ -505,7 +520,27 @@ class AnalyticsService:
             GROUP BY channel_id 
             ORDER BY mins DESC LIMIT 3
         ''', (date_str,))
-        stats['top_voice_channels'] = [{"channel_id": r['channel_id'], "mins": r['mins'] or 0} for r in vx]
+        stats['top_voice_channels'] = [{"channel_id": r['channel_id'], "name": resolve_channel_name(r['channel_id']), "mins": r['mins'] or 0} for r in vx]
+
+        # 12. Booster Raffle Performance
+        br_wins = await db.fetch_one("SELECT COUNT(*) as c FROM booster_raffle_history WHERE DATE(won_at) = %s", (date_str,))
+        stats['booster_raffle_wins'] = br_wins['c'] if br_wins else 0
+
+        # 13. Event Raffle Performance
+        er_created = await db.fetch_one("SELECT COUNT(*) as c FROM event_raffles WHERE DATE(created_at) = %s", (date_str,))
+        stats['event_raffles_created'] = er_created['c'] if er_created else 0
+        
+        er_entries = await db.fetch_one("SELECT COUNT(*) as c FROM event_raffle_entries WHERE DATE(entered_at) = %s", (date_str,))
+        stats['event_raffle_entries'] = er_entries['c'] if er_entries else 0
+
+        # 14. Event EP Claims
+        ep_claims = await db.fetch_one("SELECT COUNT(*) as c, SUM(ep_awarded) as total_ep FROM guild_event_rewards WHERE DATE(awarded_at) = %s", (date_str,))
+        stats['event_participation_claims'] = ep_claims['c'] if ep_claims else 0
+        stats['event_ep_distributed'] = ep_claims['total_ep'] if ep_claims and ep_claims['total_ep'] else 0
+
+        # 15. New Event Registrations
+        reg = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE DATE(registered_at) = %s", (date_str,))
+        stats['event_registrations'] = reg['c'] if reg else 0
 
         return stats
 

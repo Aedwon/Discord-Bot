@@ -14,6 +14,9 @@ import csv
 import io
 import json
 from datetime import datetime, timedelta, timezone
+import base64
+from urllib.parse import urlparse, parse_qs
+import asyncio
 
 from services.database import db
 from services.settings_service import settings_service
@@ -64,6 +67,97 @@ class PersistentEventView(discord.ui.View):
             logger.error(f"Critical error during EP claim for user {user_id}: {e}")
             await interaction.followup.send("❌ A critical database error occurred while processing your claim.")
 
+class PersistentRegistrationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+    @discord.ui.button(label="Register", style=discord.ButtonStyle.primary, custom_id="persistent_event_register_btn", emoji="📋")
+    async def register_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        user_id = interaction.user.id
+        msg_id = interaction.message.id
+        
+        try:
+            reg = await db.fetch_one("SELECT * FROM event_registrations WHERE announcement_msg_id = %s", (msg_id,))
+            if not reg: return await interaction.followup.send("❌ Registration not found or expired.")
+            if reg['status'] != 'open': return await interaction.followup.send("❌ Registration is closed.")
+            
+            # Block MSL
+            v_info = await verification_service.get_user_info(user_id)
+            if v_info and verification_service.is_msl(v_info['mlbb_uid'], v_info['mlbb_server']):
+                return await interaction.followup.send("❌ **Blocked:** MSL team members cannot register for events.")
+            
+            # Check duplicate
+            dup = await db.fetch_one("SELECT * FROM event_registration_entries WHERE event_id = %s AND user_id = %s", (reg['event_id'], user_id))
+            if dup: return await interaction.followup.send("❌ You're already registered!")
+            
+            # Check cap (transaction safety needed in extreme concurrency, but COUNT is okay for discord events)
+            if reg['max_participants']:
+                count = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE event_id = %s", (reg['event_id'],))
+                if count and count['c'] >= reg['max_participants']:
+                    return await interaction.followup.send("❌ This event is fully capped! Try again later if a slot opens up.")
+            
+            await db.execute("INSERT IGNORE INTO event_registration_entries (event_id, user_id) VALUES (%s, %s)", (reg['event_id'], user_id))
+            
+            # Thread management if needed
+            if reg['thread_id']:
+                channel = interaction.guild.get_channel(reg['channel_id']) or await interaction.guild.fetch_channel(reg['channel_id'])
+                thread = channel.get_thread(reg['thread_id'])
+                if thread:
+                    await thread.add_user(interaction.user)
+            
+            # Update Embed
+            new_c = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE event_id = %s", (reg['event_id'],))
+            cnt = new_c['c'] if new_c else 0
+            embed = interaction.message.embeds[0]
+            if reg['max_participants']: embed.set_footer(text=f"📋 {cnt}/{reg['max_participants']} registered")
+            else: embed.set_footer(text=f"📋 {cnt} registered")
+            
+            try: await interaction.message.edit(embed=embed)
+            except discord.HTTPException: pass # Catch rate limits if spam-clicked
+            
+            await interaction.followup.send("✅ You are registered! Your spot is secured.")
+            
+        except Exception as e:
+            logger.error(f"Registration err: {e}")
+            await interaction.followup.send("❌ Database error during registration.")
+
+    @discord.ui.button(label="Unregister", style=discord.ButtonStyle.secondary, custom_id="persistent_event_unregister_btn", emoji="❌")
+    async def unregister_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        user_id = interaction.user.id
+        msg_id = interaction.message.id
+        
+        try:
+            reg = await db.fetch_one("SELECT * FROM event_registrations WHERE announcement_msg_id = %s", (msg_id,))
+            if not reg: return await interaction.followup.send("❌ Registration not found or expired.")
+            if reg['status'] != 'open': return await interaction.followup.send("❌ Registration is closed.")
+            
+            deleted = await db.execute("DELETE FROM event_registration_entries WHERE event_id = %s AND user_id = %s", (reg['event_id'], user_id))
+            if deleted == 0: return await interaction.followup.send("❌ You are not registered for this event.")
+            
+            if reg['thread_id']:
+                channel = interaction.guild.get_channel(reg['channel_id']) or await interaction.guild.fetch_channel(reg['channel_id'])
+                thread = channel.get_thread(reg['thread_id'])
+                if thread:
+                    try: await thread.remove_user(interaction.user)
+                    except: pass
+            
+            new_c = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE event_id = %s", (reg['event_id'],))
+            cnt = new_c['c'] if new_c else 0
+            embed = interaction.message.embeds[0]
+            if reg['max_participants']: embed.set_footer(text=f"📋 {cnt}/{reg['max_participants']} registered")
+            else: embed.set_footer(text=f"📋 {cnt} registered")
+            
+            try: await interaction.message.edit(embed=embed)
+            except discord.HTTPException: pass
+            
+            await interaction.followup.send("✅ You have been unregistered.")
+            
+        except Exception as e:
+            logger.error(f"Unregister err: {e}")
+            await interaction.followup.send("❌ Database error during unregistration.")
+
 class EventCog(commands.Cog, name="Event"):
     """Native Discord Event Points ecosystem."""
     
@@ -79,6 +173,7 @@ class EventCog(commands.Cog, name="Event"):
         
     async def cog_load(self):
         self.bot.add_view(PersistentEventView())
+        self.bot.add_view(PersistentRegistrationView())
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -228,6 +323,140 @@ class EventCog(commands.Cog, name="Event"):
 
     # --- CLI COMMANDS ---
 
+    @event_group.command(name="setup-rewards", description="Define the exact prize pool structure before an event starts.")
+    @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.default_permissions(administrator=True)
+    async def event_setup_rewards(self, interaction: discord.Interaction, event_id: str):
+        try: event_id_int = int(event_id)
+        except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
+        
+        discord_event = interaction.guild.get_scheduled_event(event_id_int)
+        if not discord_event: return await interaction.response.send_message("❌ Event not found.", ephemeral=True)
+        
+        class EventPrizeSetupModal(discord.ui.Modal, title=f"🏆 Setup: {discord_event.name[:25]}"):
+            prizes = discord.ui.TextInput(
+                label="Prize Structure",
+                style=discord.TextStyle.long,
+                placeholder="Format: Placement Name | EP | Max Winners\n1st Place | 5000 | 1\nRunner Up | 1000 | 2\nParticipation | 50 | 100",
+                required=True,
+                max_length=1500,
+            )
+
+            def __init__(self, ev_id: int):
+                super().__init__()
+                self.ev_id = ev_id
+
+            async def on_submit(self, interaction: discord.Interaction):
+                await interaction.response.defer(ephemeral=True, thinking=True)
+                lines = self.prizes.value.strip().split("\n")
+                
+                pools = []
+                for line in lines:
+                    if not line.strip(): continue
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) != 3:
+                        return await interaction.followup.send(f"❌ Invalid format on line: `{line}`\nExpected exactly 3 parts separated by `|`.", ephemeral=True)
+                    
+                    name = parts[0]
+                    try:
+                        ep = int(parts[1])
+                        max_w = int(parts[2])
+                    except ValueError:
+                        return await interaction.followup.send(f"❌ Invalid numbers on line: `{line}`\nEP and Max Winners must be valid numbers.", ephemeral=True)
+                    
+                    pools.append((self.ev_id, name, ep, max_w))
+                    
+                try:
+                    await db.execute("DELETE FROM event_prize_pools WHERE event_id = %s", (self.ev_id,))
+                    for p in pools:
+                        await db.execute(
+                            "INSERT INTO event_prize_pools (event_id, placement_name, ep_reward, max_winners) VALUES (%s, %s, %s, %s)",
+                            p
+                        )
+                    await interaction.followup.send(f"✅ Successfully set up **{len(pools)}** prize tiers for this event!")
+                except Exception as e:
+                    logger.error(f"Failed to setup prize pool: {e}")
+                    await interaction.followup.send("❌ Database error while saving prize pools.", ephemeral=True)
+
+        existing = await db.fetch_all("SELECT * FROM event_prize_pools WHERE event_id = %s", (event_id_int,))
+        modal = EventPrizeSetupModal(event_id_int)
+        if existing:
+            prefill = "\n".join([f"{r['placement_name']} | {r['ep_reward']} | {r['max_winners']}" for r in existing])
+            modal.prizes.default = prefill
+            
+        await interaction.response.send_modal(modal)
+
+    @event_group.command(name="register", description="Deploy a Registration Embed for a Native Discord Event.")
+    @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.choices(thread_mode=[
+        app_commands.Choice(name="None (Best for Forums)", value="none"),
+        app_commands.Choice(name="Private Thread", value="private")
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def event_register(self, interaction: discord.Interaction, event_id: str, channel: discord.TextChannel, discohook_link: str, max_participants: int = None, thread_mode: str = "none"):
+        try: event_id_int = int(event_id)
+        except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
+        
+        discord_event = interaction.guild.get_scheduled_event(event_id_int)
+        if not discord_event: return await interaction.response.send_message("❌ Event not found natively.", ephemeral=True)
+        
+        pools = await db.fetch_all("SELECT * FROM event_prize_pools WHERE event_id = %s", (event_id_int,))
+        if not pools:
+            return await interaction.response.send_message("❌ You must setup Prize Pools via `/event setup-rewards` before deploying registration.", ephemeral=True)
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        # Link logic copied from embed_cog
+        try:
+            parsed = urlparse(discohook_link)
+            qs = parse_qs(parsed.query)
+            encoded = qs.get("data", [None])[0]
+            if not encoded: return await interaction.followup.send("❌ No valid data in Discohook link.")
+            missing = len(encoded) % 4
+            if missing: encoded += "=" * (4 - missing)
+            decoded = base64.urlsafe_b64decode(encoded).decode("utf-8")
+            data = json.loads(decoded)
+            msg_data = data["messages"][0]["data"]
+        except Exception as e:
+            return await interaction.followup.send(f"❌ Failed parsing discohook: {e}")
+            
+        content = msg_data.get("content", None)
+        embeds_data = msg_data.get("embeds", [])
+        embeds = [discord.Embed.from_dict(ed) for ed in embeds_data]
+        
+        if embeds:
+            if max_participants: embeds[0].set_footer(text=f"📋 0/{max_participants} registered")
+            else: embeds[0].set_footer(text=f"📋 0 registered")
+            embeds[0].color = discord.Color.brand_green()
+            
+        view = PersistentRegistrationView()
+        
+        try:
+            msg = await channel.send(content=content, embeds=embeds, view=view)
+        except Exception as e:
+            return await interaction.followup.send(f"❌ Failed to send announcement: {e}")
+            
+        thread_id = None
+        if thread_mode == "private" and not isinstance(channel, discord.ForumChannel):
+            try:
+                thread = await msg.create_thread(name=f"🔒 {discord_event.name.strip()[:90]}", auto_archive_duration=10080)
+                thread_id = thread.id
+            except: pass
+            
+        try:
+            await db.execute("""
+                INSERT INTO event_registrations (event_id, announcement_msg_id, channel_id, title, thread_id, max_participants, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE announcement_msg_id=VALUES(announcement_msg_id), thread_id=VALUES(thread_id)
+            """, (event_id_int, msg.id, channel.id, discord_event.name, thread_id, max_participants, interaction.user.id))
+            
+            await interaction.followup.send(f"✅ Event Registration Deployed to {channel.mention}!")
+            await self.send_audit_log(interaction, "Registration Deployed", f"**Event:** `{discord_event.name}`\n**Channel:** {channel.mention}", discord.Color.blue())
+        except Exception as e:
+            logger.error(f"Event deploy DB err: {e}")
+            await msg.delete()
+            await interaction.followup.send("❌ DB Error saving registration.")
+
     @event_group.command(name="kiosk", description="Spawn a Participation Button for a Native Discord Event.")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)
@@ -278,7 +507,135 @@ class EventCog(commands.Cog, name="Event"):
         
         await self.send_audit_log(interaction, "Placement Budget Locked", f"**Event ID:** `{event_id}`\n**Total Budget Set:** `{total_budget} EP`", discord.Color.teal())
         await interaction.response.send_message(f"🔒 **Event Budget Locked:** Budget capped at **{total_budget} EP**.", ephemeral=True)
+class EventAwardView(discord.ui.View):
+    def __init__(self, ev_id: int):
+        super().__init__(timeout=180)
+        self.ev_id = ev_id
+        
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select User to Award")
+    async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        self.user = select.values[0]
+        await interaction.response.defer()
+        
+    @discord.ui.button(label="Next: Select Prize", style=discord.ButtonStyle.primary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not hasattr(self, 'user'):
+            return await interaction.response.send_message("❌ Select a user first.", ephemeral=True)
+            
+        pools = await db.fetch_all("SELECT * FROM event_prize_pools WHERE event_id = %s AND LOWER(placement_name) != 'participation'", (self.ev_id,))
+        if not pools:
+            return await interaction.response.send_message("❌ No prize pools defined for this event.", ephemeral=True)
+            
+        options = []
+        for p in pools:
+            c = await db.fetch_one("SELECT COUNT(*) as c FROM guild_event_rewards WHERE event_id=%s AND reward_type=%s", (self.ev_id, p['placement_name']))
+            cnt = c['c'] if c else 0
+            avail = p['max_winners'] - cnt
+            if avail > 0:
+                options.append(discord.SelectOption(label=p['placement_name'][:25], description=f"{p['ep_reward']} EP ({avail} remaining)", value=str(p['id'])))
+                
+        if not options:
+            return await interaction.response.send_message("❌ All prizes have been exhausted for this event.", ephemeral=True)
+            
+        view = discord.ui.View(timeout=180)
+        select = discord.ui.Select(placeholder="Select Prize Tier", options=options[:25])
+        
+        async def prize_callback(i: discord.Interaction):
+            await i.response.defer(ephemeral=True)
+            pid = int(select.values[0])
+            prize = await db.fetch_one("SELECT * FROM event_prize_pools WHERE id=%s", (pid,))
+            
+            c = await db.fetch_one("SELECT COUNT(*) as c FROM guild_event_rewards WHERE event_id=%s AND reward_type=%s", (self.ev_id, prize['placement_name']))
+            if c and c['c'] >= prize['max_winners']:
+                return await i.followup.send("❌ This prize tier is now fully exhausted.", ephemeral=True)
+                
+            from services.verification_service import verification_service
+            v_info = await verification_service.get_user_info(self.user.id)
+            if v_info and verification_service.is_msl(v_info['mlbb_uid'], v_info['mlbb_server']):
+                return await i.followup.send("❌ **Blocked:** MSL team members cannot receive event placements.")
+                
+            claimed = await db.fetch_one("SELECT * FROM guild_event_rewards WHERE event_id = %s AND user_id = %s AND reward_type = %s", (self.ev_id, self.user.id, prize['placement_name']))
+            if claimed: return await i.followup.send("❌ User already received this tier!")
+            
+            try:
+                await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", 
+                    (self.ev_id, self.user.id, prize['placement_name'], prize['ep_reward']))
+                from services.ep_service import ep_service
+                await ep_service.process_ep_update(i.guild, self.user.id, prize['ep_reward'], bypass_verification=True, is_placement=True)
+                await i.followup.send(f"✅ Securely awarded **{self.user.mention}** with **{prize['placement_name']}** ({prize['ep_reward']} EP).")
+            except Exception as e:
+                logger.error(f"Prize DB err: {e}")
+                await i.followup.send("❌ Database error awarding prize.")
+                
+        select.callback = prize_callback
+        view.add_item(select)
+        await interaction.response.edit_message(content=f"Selected **{self.user.mention}**. Now choose prize:", view=view)
 
+    @event_group.command(name="award", description="Award a predefined prize to an event winner.")
+    @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.default_permissions(administrator=True)
+    async def event_award(self, interaction: discord.Interaction, event_id: str):
+        try: ev_id = int(event_id)
+        except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
+        await interaction.response.send_message("Select the user to award:", view=EventAwardView(ev_id), ephemeral=True)
+
+    @event_group.command(name="close-registration", description="Close an event, post results, and optionally payout participation.")
+    @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.default_permissions(administrator=True)
+    async def event_close(self, interaction: discord.Interaction, event_id: str, payout_participation: bool = True):
+        try: ev_id = int(event_id)
+        except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
+        
+        await interaction.response.defer(ephemeral=True)
+        reg = await db.fetch_one("SELECT * FROM event_registrations WHERE event_id = %s", (ev_id,))
+        if not reg: return await interaction.followup.send("❌ Registration not found.")
+        if reg['status'] == 'closed': return await interaction.followup.send("❌ Already closed.")
+        
+        await db.execute("UPDATE event_registrations SET status = 'closed' WHERE event_id = %s", (ev_id,))
+        
+        # Payout Participation if requested
+        if payout_participation:
+            part_prize = await db.fetch_one("SELECT ep_reward FROM event_prize_pools WHERE event_id=%s AND LOWER(placement_name)='participation'", (ev_id,))
+            if part_prize:
+                entries = await db.fetch_all("SELECT user_id FROM event_registration_entries WHERE event_id=%s", (ev_id,))
+                ep = part_prize['ep_reward']
+                if entries:
+                    batch = [(ev_id, r['user_id'], 'Participation', ep) for r in entries]
+                    try:
+                        await db.executemany("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE event_id=VALUES(event_id)", batch)
+                    except Exception as e:
+                        logger.error(f"Batch payout fail: {e}")
+                        
+        # Evolve the embed natively
+        try:
+            channel = interaction.guild.get_channel(reg['channel_id']) or await interaction.guild.fetch_channel(reg['channel_id'])
+            if channel:
+                msg = await channel.fetch_message(reg['announcement_msg_id'])
+                embed = msg.embeds[0]
+                view = discord.ui.View() # removes buttons
+                
+                # Fetch winners
+                placements = await db.fetch_all("SELECT user_id, reward_type, ep_awarded FROM guild_event_rewards WHERE event_id=%s AND LOWER(reward_type)!='participation' ORDER BY ep_awarded DESC", (ev_id,))
+                
+                if placements:
+                    res = []
+                    for i, p in enumerate(placements):
+                        emoji = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else "🌟"
+                        res.append(f"{emoji} **{p['reward_type']}** — <@{p['user_id']}> ({p['ep_awarded']} EP)")
+                    embed.add_field(name="🏆 Official Results", value="\n".join(res), inline=False)
+                else:
+                    embed.add_field(name="🏆 Official Results", value="Event Concluded natively.", inline=False)
+                    
+                count = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE event_id = %s", (ev_id,))
+                embed.set_footer(text=f"🔒 Automatically Closed · {count['c'] if count else 0} Participants")
+                embed.color = discord.Color.gold()
+                
+                try: await msg.edit(embed=embed, view=view)
+                except discord.HTTPException: pass
+        except Exception as e:
+            logger.error(f"Embed evolution err: {e}")
+            
+        await interaction.followup.send("✅ Event closed organically. Results posted to embed, and participation payouts deployed.")
     @event_group.command(name="placement", description="Award a Winner's Placement (Strict Check against Event Budgets).")
     @app_commands.autocomplete(event_id=event_autocomplete)
     @app_commands.default_permissions(administrator=True)

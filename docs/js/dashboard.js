@@ -116,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let sumVerif=0, sumQuests=0, sumQuiz=0, sumQuizPts=0, sumThanks=0, sumEP=0, sumRefs=0;
         let sumMod=0, sumTickets=0, sumTixRatings=0, tixRatingSum=0;
         let maxUniqueMsg=0, maxUniqueVc=0;
+        let sumEventRegs=0, sumEventClaims=0, sumEpDist=0, sumRaffleEntries=0, sumRafflesCreated=0, sumBoosterWins=0;
 
         let labels=[], joinsArr=[], leavesArr=[], netArr=[], msgArr=[], vcArr=[];
         let questArr=[], quizArr=[], thanksArr=[], modArr=[];
@@ -150,6 +151,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 sumTickets += g.new_tickets || 0;
                 sumTixRatings += g.ticket_ratings_count || 0;
                 tixRatingSum += (g.ticket_avg_rating || 0) * (g.ticket_ratings_count || 0);
+
+                sumEventRegs += g.event_registrations || 0;
+                sumEventClaims += g.event_participation_claims || 0;
+                sumEpDist += g.event_ep_distributed || 0;
+                sumRaffleEntries += g.event_raffle_entries || 0;
+                sumRafflesCreated += g.event_raffles_created || 0;
+                sumBoosterWins += g.booster_raffle_wins || 0;
 
                 questArr.push(g.quests_completed || 0);
                 quizArr.push(g.quiz_sessions || 0);
@@ -196,6 +204,13 @@ document.addEventListener('DOMContentLoaded', () => {
         setText('stat-tix-ratings', sumTixRatings.toLocaleString());
         const avgRating = sumTixRatings > 0 ? (tixRatingSum / sumTixRatings).toFixed(1) : '0.0';
         setText('stat-tix-avg', `⭐ ${avgRating}`);
+
+        setText('stat-event-regs', sumEventRegs.toLocaleString());
+        setText('stat-event-claims', sumEventClaims.toLocaleString());
+        setText('stat-ep-dist', sumEpDist.toLocaleString());
+        setText('stat-raffle-entries', sumRaffleEntries.toLocaleString());
+        setText('stat-raffles-created', sumRafflesCreated.toLocaleString());
+        setText('stat-booster-wins', sumBoosterWins.toLocaleString());
 
         // ── Draw Charts ──
         drawGrowth(labels, joinsArr, leavesArr, netArr);
@@ -330,19 +345,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function drawQuizTable(row) {
         const g = row?.granular_json;
-        const items = (g?.quiz_top_3 || []).map(q => ({ label: `User ${q.user_id}`, value: `${(q.score || 0).toLocaleString()} pts` }));
+        const items = (g?.quiz_top_3 || []).map(q => ({ label: q.name || `User ${q.user_id}`, value: `${(q.score || 0).toLocaleString()} pts` }));
         renderRows('table-quiz', items, 'No quiz activity for this day');
     }
 
     function drawThanksTable(row) {
         const g = row?.granular_json;
-        const items = (g?.thanks_top_3 || []).map(t => ({ label: `User ${t.user_id}`, value: `${t.count}× thanked` }));
+        const items = (g?.thanks_top_3 || []).map(t => ({ label: t.name || `User ${t.user_id}`, value: `${t.count}× thanked` }));
         renderRows('table-thanks', items, 'No thanks activity for this day');
     }
 
     function drawInvitesTable(row) {
         const g = row?.granular_json;
-        const items = (g?.top_invites || []).map(i => ({ label: `${i.code} (by ${i.inviter})`, value: `${i.count} joins` }));
+        const items = (g?.top_invites || []).map(i => ({ label: `${i.code} (by ${i.name || i.inviter})`, value: `${i.count} joins` }));
         renderRows('table-invites', items, 'No invite data for this day');
     }
 

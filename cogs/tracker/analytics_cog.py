@@ -327,7 +327,7 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         # 1. Daily rollup
         rollup_data = None
         try:
-            rollup_data = await analytics_service.run_daily_rollup()
+            rollup_data = await analytics_service.run_daily_rollup(bot=self.bot)
         except Exception as e:
             logger.error(f"Daily rollup failed: {e}")
 

@@ -595,6 +595,45 @@ class Database:
                 INDEX idx_ref_total (total_referrals)
             )
         ''')
+        
+        # New Unified Event Registration System
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_registrations (
+                event_id BIGINT PRIMARY KEY,
+                announcement_msg_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                thread_id BIGINT NULL,
+                summary_msg_id BIGINT NULL,
+                max_participants INT NULL,
+                status VARCHAR(20) DEFAULT 'open',
+                created_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY (announcement_msg_id)
+            )
+        ''')
+
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_registration_entries (
+                event_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (event_id, user_id),
+                INDEX idx_event_reg_date (registered_at)
+            )
+        ''')
+
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_prize_pools (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                event_id BIGINT NOT NULL,
+                placement_name VARCHAR(100) NOT NULL,
+                ep_reward INT NOT NULL,
+                max_winners INT NOT NULL DEFAULT 1,
+                INDEX idx_epp_event (event_id)
+            )
+        ''')
+
     
     async def close(self):
         """Close the database connection."""
