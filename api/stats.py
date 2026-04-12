@@ -14,8 +14,15 @@ class handler(BaseHTTPRequestHandler):
         
         try:
             # Secure connection via Vercel Environment Variables
+            db_port = os.environ.get('DB_PORT', '3306')
+            try:
+                db_port_int = int(db_port)
+            except ValueError:
+                db_port_int = 3306
+
             connection = pymysql.connect(
                 host=os.environ.get('DB_HOST', ''),
+                port=db_port_int,
                 user=os.environ.get('DB_USER', ''),
                 password=os.environ.get('DB_PASSWORD', ''),
                 database=os.environ.get('DB_NAME', ''),
