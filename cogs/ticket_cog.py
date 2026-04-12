@@ -345,7 +345,13 @@ class TicketModal(discord.ui.Modal):
         )
         embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
 
-        mention_text = cat_role.mention if cat_role else ""
+        mentions = []
+        if cat_role:
+            mentions.append(cat_role.mention)
+        if support_role and support_role != cat_role:
+            mentions.append(support_role.mention)
+        mention_text = " ".join(mentions)
+        
         try:
             await ticket_channel.send(
                 content=f"{user.mention} {mention_text}",
