@@ -88,7 +88,7 @@ class SetupCog(commands.Cog, name="Setup"):
             "message_log", "ticket_log", "voice_log", "giveaway_log",
             "boost_public", "boost_admin",
             "modlog", "cmdlog", "event_log",
-            "leaderboard", "bot", "booster_chat", "level_alerts",
+            "leaderboard_weekly", "leaderboard_alltime", "bot", "booster_chat", "level_alerts",
             "confessions", "counting", "anon_messages", "anon_log"
         ],
         channel: discord.TextChannel
@@ -107,7 +107,8 @@ class SetupCog(commands.Cog, name="Setup"):
             "cmdlog": "command_log_channel_id",
             "event_log": "event_log_channel_id",
             # System channels
-            "leaderboard": "leaderboard_channel_id",
+            "leaderboard_weekly": "leaderboard_weekly_channel_id",
+            "leaderboard_alltime": "leaderboard_alltime_channel_id",
             "bot": "bot_channel_id",
             "booster_chat": "booster_chat_channel_id",
             # Leveling

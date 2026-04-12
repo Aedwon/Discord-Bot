@@ -245,7 +245,7 @@ class CountingCog(commands.Cog, name="Counting"):
         state["count"] = number
         state["last_user_id"] = user_id
 
-        # Update contributors
+        # Update contributors (current streak + weekly)
         try:
             await db.execute(
                 """INSERT INTO counting_current_contributors (guild_id, user_id, count)
@@ -253,8 +253,15 @@ class CountingCog(commands.Cog, name="Counting"):
                    ON DUPLICATE KEY UPDATE count = count + 1""",
                 (guild_id, user_id)
             )
+            # Also track weekly contributions (persists across chain resets)
+            await db.execute(
+                """INSERT INTO counting_weekly_contributors (guild_id, user_id, count)
+                   VALUES (%s, %s, 1)
+                   ON DUPLICATE KEY UPDATE count = count + 1""",
+                (guild_id, user_id)
+            )
         except Exception as e:
-            logger.error(f"Counting: Failed to update current contributors: {e}")
+            logger.error(f"Counting: Failed to update contributors: {e}")
 
         # Clear this user's warning if they had one (they counted correctly)
         if user_id in warned_set:

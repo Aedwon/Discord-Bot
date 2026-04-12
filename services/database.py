@@ -225,6 +225,30 @@ class Database:
         await self.execute('CREATE INDEX IF NOT EXISTS idx_users_xp ON users (xp)')
         await self.execute('CREATE INDEX IF NOT EXISTS idx_users_ep ON users (event_points)')
         
+        # ─── DUAL LEADERBOARD ENGINE TABLES ─────────────────────────────
+        
+        # Weekly snapshot: stores each user's XP/EP at the moment of the last
+        # Monday 00:00 UTC+8 reset. Weekly delta = current_total - snapshot.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS weekly_leaderboard_snapshots (
+                user_id BIGINT PRIMARY KEY,
+                xp_snapshot INT DEFAULT 0,
+                ep_snapshot INT DEFAULT 0,
+                snapshot_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Per-user counting contributions within the current ISO week.
+        # Reset every Monday 00:00 UTC+8 alongside the leaderboard reset.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS counting_weekly_contributors (
+                guild_id BIGINT,
+                user_id BIGINT,
+                count INT DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        
         # Event Kiosks (Linked to Native Discord Events)
         await self.execute('''
             CREATE TABLE IF NOT EXISTS guild_event_kiosks (
