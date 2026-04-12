@@ -266,11 +266,17 @@ class ProposalView(discord.ui.View):
         )
 
         embed = discord.Embed(
-            title="💒 A New Union!",
-            description=f"**{self.proposer.display_name}** and **{self.target.display_name}** are now married! 💍✨\n\nMay your bond be eternal~",
+            description=(
+                f"## 💒  A New Union!\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{self.proposer.display_name}**  💍  **{self.target.display_name}**\n\n"
+                f"*Are now united in marriage!* ✨\n"
+                f"*May your bond be eternal~*\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
             color=0xFF69B4,
         )
-        embed.set_footer(text="Use /social marriage status to view your marriage info.")
+        embed.set_footer(text="Use /social marriage status to view your info • MSL Network")
         await interaction.response.edit_message(content=None, embed=embed, view=None)
 
     @discord.ui.button(label="💔 Decline", style=discord.ButtonStyle.danger)
@@ -283,9 +289,14 @@ class ProposalView(discord.ui.View):
         self.stop()
 
         embed = discord.Embed(
-            title="💔 Proposal Declined",
-            description=f"**{self.target.display_name}** declined **{self.proposer.display_name}**'s proposal.\n\nMaybe next time...",
-            color=discord.Color.dark_grey(),
+            description=(
+                f"## 💔  Proposal Declined\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{self.target.display_name}** declined **{self.proposer.display_name}**'s proposal.\n\n"
+                f"*Maybe next time... the stars will align.*\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0x708090,
         )
         await interaction.response.edit_message(content=None, embed=embed, view=None)
 
@@ -330,11 +341,16 @@ class AdoptionView(discord.ui.View):
         )
 
         embed = discord.Embed(
-            title="🏠 A New Family Bond!",
-            description=f"**{self.parent.display_name}** has adopted **{self.child.display_name}**! 🎉\n\nWelcome to the family~",
+            description=(
+                f"## 🏠  A New Family Bond!\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{self.parent.display_name}** has adopted **{self.child.display_name}**! 🎉\n\n"
+                f"*Welcome to the family~* 🥰\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
             color=0x87CEEB,
         )
-        embed.set_footer(text="Use /social family tree to see your family.")
+        embed.set_footer(text="Use /social family tree to see your family • MSL Network")
         await interaction.response.edit_message(content=None, embed=embed, view=None)
 
     @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
@@ -347,9 +363,14 @@ class AdoptionView(discord.ui.View):
         self.stop()
 
         embed = discord.Embed(
-            title="❌ Adoption Declined",
-            description=f"**{self.child.display_name}** declined **{self.parent.display_name}**'s adoption request.",
-            color=discord.Color.dark_grey(),
+            description=(
+                f"## ❌  Adoption Declined\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{self.child.display_name}** declined **{self.parent.display_name}**'s adoption request.\n\n"
+                f"*Perhaps another time.*\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0x708090,
         )
         await interaction.response.edit_message(content=None, embed=embed, view=None)
 
@@ -463,10 +484,18 @@ class SocialCog(commands.GroupCog, name="social"):
         )
 
         embed = discord.Embed(
-            description=f"{action['emoji']} {text}",
+            description=(
+                f"## {action['emoji']}  {action_key.upper()}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{text}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
             color=action["color"],
+            timestamp=datetime.now(TZ_MANILA),
         )
-        embed.set_footer(text=f"/social {action_key}")
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text=f"/social {action_key} • MSL Network")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="hug", description="Give someone a warm hug!")
@@ -579,17 +608,32 @@ class SocialCog(commands.GroupCog, name="social"):
         name2 = user2.display_name
         ship_name = name1[:len(name1)//2] + name2[len(name2)//2:]
 
+        # Dynamic color based on score
+        if score < 30:
+            color = 0x708090  # slate grey
+        elif score < 60:
+            color = 0xFFD700  # gold
+        elif score < 85:
+            color = 0xFF69B4  # hot pink
+        else:
+            color = 0xFF1493  # deep pink
+
         embed = discord.Embed(
-            title=f"💘 Love Calculator",
-            color=0xFF69B4,
-        )
-        embed.add_field(
-            name=f"{name1}  💕  {name2}",
-            value=f"**Ship Name:** *{ship_name}*\n\n`[{bar}]` **{score}%**\n\n{title}",
-            inline=False,
+            description=(
+                f"## 💘  Love Calculator\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{name1}**  ❤️‍🔥  **{name2}**\n"
+                f"*✦ Ship Name: **{ship_name}** ✦*\n\n"
+                f"`  [{bar}]  `  **{score}%**\n\n"
+                f"**{title}**\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=color,
+            timestamp=datetime.now(TZ_MANILA),
         )
         embed.set_thumbnail(url=user1.display_avatar.url)
-        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        embed.set_author(name=f"{name2}", icon_url=user2.display_avatar.url)
+        embed.set_footer(text=f"Requested by {interaction.user.display_name} • MSL Network")
 
         await interaction.response.send_message(embed=embed)
 
@@ -602,13 +646,28 @@ class SocialCog(commands.GroupCog, name="social"):
     async def eight_ball(self, interaction: discord.Interaction, question: str):
         answer = random.choice(EIGHT_BALL_RESPONSES)
 
+        # Color based on answer type
+        if answer.startswith("🟢"):
+            color = 0x2ECC71
+        elif answer.startswith("🟡"):
+            color = 0xF1C40F
+        else:
+            color = 0xE74C3C
+
         embed = discord.Embed(
-            title="🎱 Magic 8-Ball",
-            color=0x2F3136,
+            description=(
+                f"## 🎱  Magic 8-Ball\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**❓ Question:**\n> *{question}*\n\n"
+                f"**🔮 The Oracle speaks:**\n"
+                f"## {answer}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=color,
+            timestamp=datetime.now(TZ_MANILA),
         )
-        embed.add_field(name="❓ Question", value=question, inline=False)
-        embed.add_field(name="🔮 Answer", value=f"**{answer}**", inline=False)
-        embed.set_footer(text=f"Asked by {interaction.user.display_name}")
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text="The 8-Ball has spoken • MSL Network")
 
         await interaction.response.send_message(embed=embed)
 
@@ -644,16 +703,20 @@ class SocialCog(commands.GroupCog, name="social"):
             return await interaction.response.send_message(f"❌ **{user.display_name}** is already married to someone else!", ephemeral=True)
 
         embed = discord.Embed(
-            title="💍 Marriage Proposal!",
             description=(
-                f"**{interaction.user.display_name}** is proposing to **{user.display_name}**!\n\n"
-                f"*Do you accept this union?*\n\n"
-                f"{user.mention}, please respond using the buttons below."
+                f"## 💍  Marriage Proposal\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{interaction.user.display_name}** has gotten down on one knee and is proposing to **{user.display_name}**!\n\n"
+                f"*Will you accept this sacred union?* 💒\n\n"
+                f"{user.mention}, please respond below.\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=0xFF69B4,
+            timestamp=datetime.now(TZ_MANILA),
         )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.set_footer(text="This proposal expires in 2 minutes.")
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text="⏳ This proposal expires in 2 minutes • MSL Network")
 
         view = ProposalView(interaction.user, user)
         await interaction.response.send_message(embed=embed, view=view)
@@ -672,10 +735,18 @@ class SocialCog(commands.GroupCog, name="social"):
         await db.execute("DELETE FROM marriages WHERE id = %s", (existing['id'],))
 
         embed = discord.Embed(
-            title="💔 Divorce Finalized",
-            description=f"**{interaction.user.display_name}** and <@{partner_id}> are no longer married.\n\n*Sometimes, paths diverge...*",
-            color=discord.Color.dark_grey(),
+            description=(
+                f"## 💔  Divorce Finalized\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{interaction.user.display_name}** and <@{partner_id}> have parted ways.\n\n"
+                f"*Sometimes, paths diverge... but the memories remain.*\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0x708090,
+            timestamp=datetime.now(TZ_MANILA),
         )
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text="MSL Network")
         await interaction.response.send_message(embed=embed)
 
     @marriage_group.command(name="status", description="View your or someone's marriage status.")
@@ -694,14 +765,30 @@ class SocialCog(commands.GroupCog, name="social"):
         married_at = existing['married_at']
         days = (datetime.now() - married_at).days if married_at else 0
 
+        # Anniversary milestones
+        milestone = ""
+        if days >= 365:
+            milestone = f"\n🎊 **{days // 365} Year{'s' if days // 365 > 1 else ''} Anniversary!**"
+        elif days >= 30:
+            milestone = f"\n🌙 **{days // 30} Month{'s' if days // 30 > 1 else ''} Together!**"
+        elif days >= 7:
+            milestone = f"\n✨ **{days // 7} Week{'s' if days // 7 > 1 else ''} Strong!**"
+
         embed = discord.Embed(
-            title="💒 Marriage Status",
+            description=(
+                f"## 💒  Marriage Certificate\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"<@{target.id}>  💍  <@{partner_id}>\n\n"
+                f"📅 **Married Since:** {married_at.strftime('%B %d, %Y') if married_at else 'Unknown'}\n"
+                f"⏰ **Duration:** {days:,} day{'s' if days != 1 else ''}\n"
+                f"{milestone}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            ),
             color=0xFF69B4,
+            timestamp=datetime.now(TZ_MANILA),
         )
-        embed.add_field(name="💍 Partners", value=f"<@{target.id}>  ❤️  <@{partner_id}>", inline=False)
-        embed.add_field(name="📅 Married Since", value=married_at.strftime("%B %d, %Y") if married_at else "Unknown", inline=True)
-        embed.add_field(name="⏰ Duration", value=f"{days} day{'s' if days != 1 else ''}", inline=True)
         embed.set_thumbnail(url=target.display_avatar.url)
+        embed.set_footer(text="MSL Network")
 
         await interaction.response.send_message(embed=embed)
 
@@ -754,16 +841,20 @@ class SocialCog(commands.GroupCog, name="social"):
             current_id = ancestor['parent_id']
 
         embed = discord.Embed(
-            title="🏠 Adoption Request!",
             description=(
-                f"**{interaction.user.display_name}** wants to adopt **{user.display_name}**!\n\n"
-                f"*Do you accept this family bond?*\n\n"
-                f"{user.mention}, please respond using the buttons below."
+                f"## 🏠  Adoption Request\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**{interaction.user.display_name}** wants to adopt **{user.display_name}** into their family!\n\n"
+                f"*Will you accept this family bond?* 🤝\n\n"
+                f"{user.mention}, please respond below.\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=0x87CEEB,
+            timestamp=datetime.now(TZ_MANILA),
         )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.set_footer(text="This request expires in 2 minutes.")
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text="⏳ This request expires in 2 minutes • MSL Network")
 
         view = AdoptionView(interaction.user, user)
         await interaction.response.send_message(embed=embed, view=view)
@@ -784,20 +875,34 @@ class SocialCog(commands.GroupCog, name="social"):
         if as_parent:
             await db.execute("DELETE FROM family WHERE id = %s", (as_parent['id'],))
             embed = discord.Embed(
-                title="👋 Family Bond Severed",
-                description=f"**{interaction.user.display_name}** has disowned **{user.display_name}**.",
-                color=discord.Color.dark_grey(),
+                description=(
+                    f"## 👋  Family Bond Severed\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"**{interaction.user.display_name}** has disowned **{user.display_name}**.\n\n"
+                    f"*The bond has been released.*\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━"
+                ),
+                color=0x708090,
+                timestamp=datetime.now(TZ_MANILA),
             )
         elif as_child:
             await db.execute("DELETE FROM family WHERE id = %s", (as_child['id'],))
             embed = discord.Embed(
-                title="👋 Left the Nest",
-                description=f"**{interaction.user.display_name}** has left **{user.display_name}**'s family.",
-                color=discord.Color.dark_grey(),
+                description=(
+                    f"## 🕊️  Left the Nest\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"**{interaction.user.display_name}** has left **{user.display_name}**'s family.\n\n"
+                    f"*Time to spread those wings.*\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━"
+                ),
+                color=0x708090,
+                timestamp=datetime.now(TZ_MANILA),
             )
         else:
             return await interaction.response.send_message("❌ You have no family relationship with this person.", ephemeral=True)
 
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text="MSL Network")
         await interaction.response.send_message(embed=embed)
 
     @family_group.command(name="tree", description="View your or someone's family tree!")
@@ -832,14 +937,24 @@ class SocialCog(commands.GroupCog, name="social"):
                 lines.append(f"  {connector}── 🧒 <@{child['child_id']}>")
 
         if not parent_row and not children and not marriage:
-            lines = [f"🧑 **{target.display_name}**\n\n*No family connections yet.\nUse `/social marriage propose` or `/social family adopt` to start!*"]
+            lines = [
+                f"🧑 **{target.display_name}**\n",
+                f"*No family connections yet.*",
+                f"*Use `/social marriage propose` or `/social family adopt` to start!*"
+            ]
 
         embed = discord.Embed(
-            title=f"🌳 {target.display_name}'s Family Tree",
-            description="\n".join(lines),
+            description=(
+                f"## 🌳  {target.display_name}'s Family Tree\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                + "\n".join(lines) +
+                f"\n\n━━━━━━━━━━━━━━━━━━━━━"
+            ),
             color=0x2ECC71,
+            timestamp=datetime.now(TZ_MANILA),
         )
         embed.set_thumbnail(url=target.display_avatar.url)
+        embed.set_footer(text="MSL Network")
         await interaction.response.send_message(embed=embed)
 
     # =================================================================
