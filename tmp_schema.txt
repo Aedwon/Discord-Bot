@@ -1,0 +1,445 @@
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                xp INT DEFAULT 0,
+                tokens INT DEFAULT 0,
+                event_points INT DEFAULT 0,
+                last_ep_update DATETIME DEFAULT CURRENT_TIMESTAMP,
+                xp_multiplier FLOAT DEFAULT 1.0,
+                shop_discount FLOAT DEFAULT 0.0,
+                boost_start_date DATETIME DEFAULT NULL,
+                xp_locked BOOLEAN DEFAULT FALSE,
+                xp_lock_until DATETIME DEFAULT NULL,
+--
+            CREATE TABLE IF NOT EXISTS mod_logs (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                action_type VARCHAR(50) NOT NULL,
+                moderator_id BIGINT NOT NULL,
+                target_id BIGINT NOT NULL,
+                reason TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Thanks history for global and targeted cooldown tracking
+--
+            CREATE TABLE IF NOT EXISTS thanks_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                sender_id BIGINT NOT NULL,
+                receiver_id BIGINT NOT NULL,
+                reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ths_sender (sender_id),
+                INDEX idx_ths_created (created_at)
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS server_settings (
+                `key` VARCHAR(255) PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        ''')
+        
+        # Verification table — links Discord users to MLBB accounts
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS verified_users (
+                user_id BIGINT PRIMARY KEY,
+                full_name VARCHAR(255) NOT NULL,
+                mlbb_uid BIGINT NOT NULL UNIQUE,
+                mlbb_server INT NOT NULL,
+                verified_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event system tables
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_codes (
+                code VARCHAR(50) PRIMARY KEY,
+                reward_tokens INT DEFAULT 0,
+                reward_ep INT DEFAULT 0,
+                expires_at DATETIME,
+                max_uses INT DEFAULT 0,
+                uses_count INT DEFAULT 0,
+                required_vc_id BIGINT,
+                creator_id BIGINT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+--
+            CREATE TABLE IF NOT EXISTS event_redemptions (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                code VARCHAR(50),
+                user_id BIGINT,
+                redeemed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (code) REFERENCES event_codes(code) ON DELETE CASCADE
+            )
+        ''')
+        
+        # Scheduled embeds table (for Discohook embed scheduling)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS scheduled_embeds (
+                identifier VARCHAR(10) PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                content TEXT,
+                embed_json MEDIUMTEXT NOT NULL,
+                schedule_for DATETIME NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending'
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id BIGINT PRIMARY KEY,
+                embed_log_channel_id BIGINT DEFAULT NULL
+            )
+        ''')
+        
+        # Booster Raffle History
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS booster_raffle_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                is_excess BOOLEAN DEFAULT FALSE,
+                won_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_brh_won_at (won_at),
+                INDEX idx_brh_excess (user_id, is_excess, won_at)
+            )
+        ''')
+        
+        # Safe migration: add is_excess column if missing
+--
+            CREATE TABLE IF NOT EXISTS autocreate_configs (
+                voice_channel_id BIGINT PRIMARY KEY,
+                category_id BIGINT
+            )
+        ''')
+        
+        # Quiz History table (for weekly leaderboards)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                score INT NOT NULL,
+                earned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_qh_user_earned (user_id, earned_at)
+            )
+        ''')
+        
+        # Message Cache for moderation logs
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS message_cache (
+                message_id BIGINT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                author_id BIGINT NOT NULL,
+                author_name VARCHAR(255),
+                author_avatar TEXT,
+                content TEXT,
+                media_urls TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+--
+            CREATE TABLE IF NOT EXISTS weekly_leaderboard_snapshots (
+                user_id BIGINT PRIMARY KEY,
+                xp_snapshot INT DEFAULT 0,
+                ep_snapshot INT DEFAULT 0,
+                snapshot_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Per-user counting contributions within the current ISO week.
+        # Reset every Monday 00:00 UTC+8 alongside the leaderboard reset.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS counting_weekly_contributors (
+                guild_id BIGINT,
+                user_id BIGINT,
+                count INT DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        
+        # Archive of weekly leaderboard standings for reward processing.
+        # Populated at Monday 00:00 UTC+8 before the weekly reset.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS weekly_leaderboard_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                week_id VARCHAR(10) NOT NULL,
+                category VARCHAR(20) NOT NULL,
+                rank_position INT NOT NULL,
+                user_id BIGINT NOT NULL,
+                value BIGINT NOT NULL,
+                extra_info VARCHAR(100) DEFAULT NULL,
+                snapshot_at DATETIME NOT NULL,
+                INDEX idx_wlh_week_cat (week_id, category),
+                INDEX idx_wlh_user (user_id)
+--
+            CREATE TABLE IF NOT EXISTS guild_event_kiosks (
+                message_id BIGINT PRIMARY KEY,
+                event_id BIGINT NOT NULL,
+                ep_amount INT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event Rewards Tracker (Anti-cheat & No-Stacking)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS guild_event_rewards (
+                event_id BIGINT,
+                user_id BIGINT,
+                reward_type VARCHAR(50),
+                ep_awarded INT,
+                awarded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (event_id, user_id, reward_type)
+            )
+        ''')
+        
+        # Event Placement Manager Caps
+--
+            CREATE TABLE IF NOT EXISTS guild_event_caps (
+                event_id BIGINT PRIMARY KEY,
+                total_budget INT NOT NULL,
+                set_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event Analytics Tracking (Peak VC)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS guild_event_stats (
+                event_id BIGINT PRIMARY KEY,
+                peak_concurrent INT DEFAULT 0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event Overflow Channel Links
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS guild_event_overflows (
+                event_id BIGINT,
+                channel_id BIGINT,
+                PRIMARY KEY (event_id, channel_id)
+            )
+        ''')
+        
+        # ─── ANALYTICS ENGINE TABLES ────────────────────────────────────
+        
+        # Message metadata + content (30-day rolling window, purged nightly)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                author_id BIGINT NOT NULL,
+                content TEXT,
+                has_link BOOLEAN DEFAULT FALSE,
+                word_count SMALLINT DEFAULT 0,
+                is_deleted BOOLEAN DEFAULT FALSE,
+                hour_of_day TINYINT NOT NULL,
+                day_of_week TINYINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+--
+            CREATE TABLE IF NOT EXISTS analytics_voice_sessions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                joined_at DATETIME NOT NULL,
+                left_at DATETIME DEFAULT NULL,
+                INDEX idx_avs_user (user_id),
+                INDEX idx_avs_channel (channel_id, joined_at)
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS analytics_member_joins (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                invite_code VARCHAR(20) DEFAULT NULL,
+                inviter_id BIGINT DEFAULT NULL,
+                joined_at DATETIME NOT NULL,
+                left_at DATETIME DEFAULT NULL,
+                INDEX idx_amj_joined (joined_at)
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS analytics_reactions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                message_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                emoji VARCHAR(100) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ar_created (created_at)
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS analytics_event_rsvps (
+                event_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                rsvped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (event_id, user_id)
+            )
+        ''')
+        
+        # Tracked link buttons (interceptor pattern for CTR)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_tracked_links (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                label VARCHAR(200) NOT NULL,
+                url TEXT NOT NULL,
+                message_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                created_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS analytics_link_clicks (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                link_id INT NOT NULL,
+                user_id BIGINT NOT NULL,
+                clicked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_click (link_id, user_id)
+            )
+        ''')
+        
+        # Permanent daily aggregated summaries (never purged)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS analytics_daily_rollups (
+                date DATE PRIMARY KEY,
+                total_messages INT DEFAULT 0,
+                unique_messagers INT DEFAULT 0,
+                total_voice_minutes INT DEFAULT 0,
+                unique_voice_users INT DEFAULT 0,
+                new_joins INT DEFAULT 0,
+                new_leaves INT DEFAULT 0,
+                total_reactions INT DEFAULT 0,
+                total_threads INT DEFAULT 0
+            )
+--
+            CREATE TABLE IF NOT EXISTS analytics_keywords (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                keyword VARCHAR(100) NOT NULL,
+                channel_id BIGINT NOT NULL,
+                author_id BIGINT NOT NULL,
+                message_content TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ak_keyword (keyword, created_at)
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS quiz_payouts (
+                user_id BIGINT NOT NULL,
+                payout_date DATE NOT NULL,
+                ep_awarded INT DEFAULT 0,
+                PRIMARY KEY (user_id, payout_date)
+            )
+        ''')
+        
+        # Ticket system tables
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS active_tickets (
+                channel_id BIGINT PRIMARY KEY,
+                creator_id BIGINT NOT NULL,
+                category_key VARCHAR(10) NOT NULL,
+                subject VARCHAR(255),
+                claimed BOOLEAN DEFAULT FALSE,
+                claimed_by BIGINT DEFAULT NULL,
+                added_users TEXT DEFAULT '[]',
+                is_test BOOLEAN DEFAULT FALSE,
+                reminded_24h BOOLEAN DEFAULT FALSE,
+                escalated_48h BOOLEAN DEFAULT FALSE,
+--
+            CREATE TABLE IF NOT EXISTS ticket_ratings (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                ticket_name VARCHAR(255),
+                user_id BIGINT NOT NULL,
+                handler_id BIGINT,
+                stars INT NOT NULL,
+                remarks TEXT,
+                rated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+--
+            CREATE TABLE IF NOT EXISTS pending_ratings (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                ticket_name VARCHAR(255),
+                handler_id BIGINT,
+                handler_mention VARCHAR(255),
+                is_test BOOLEAN DEFAULT FALSE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Event Raffles
+--
+            CREATE TABLE IF NOT EXISTS event_raffles (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                host_id BIGINT NOT NULL,
+                hosted_by BIGINT NULL,
+                title VARCHAR(200) NOT NULL,
+                prize TEXT NOT NULL,
+                requirements TEXT NULL,
+                winner_count INT NOT NULL DEFAULT 1,
+                message_id BIGINT NULL,
+                channel_id BIGINT NOT NULL,
+                winners_thread_id BIGINT NULL,
+--
+            CREATE TABLE IF NOT EXISTS event_raffle_entries (
+                raffle_id INT NOT NULL,
+                user_id BIGINT NOT NULL,
+                entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (raffle_id, user_id)
+            )
+        ''')
+        
+        # Counting game persistent state
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS counting_state (
+                guild_id BIGINT PRIMARY KEY,
+                current_count INT NOT NULL DEFAULT 0,
+                last_user_id BIGINT DEFAULT NULL,
+                last_message_id BIGINT DEFAULT NULL
+            )
+        ''')
+        
+        # Quest definition catalog (admin-managed, future progress/reward system builds on this)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quests (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                description TEXT,
+                tier ENUM('common', 'uncommon', 'rare') NOT NULL DEFAULT 'common',
+                task_type ENUM('message_count', 'vc_minutes', 'reaction_count') NOT NULL,
+                target_goal INT NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_by BIGINT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+--
+            CREATE TABLE IF NOT EXISTS quest_progress (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                quest_id INT NOT NULL,
+                slot TINYINT NOT NULL,
+                progress INT DEFAULT 0,
+                completed BOOLEAN DEFAULT FALSE,
+                completed_at DATETIME DEFAULT NULL,
+                assigned_date DATE NOT NULL,
+                INDEX idx_qp_user_date (user_id, assigned_date),
+                FOREIGN KEY (quest_id) REFERENCES quests(id) ON DELETE CASCADE
+--
+            CREATE TABLE IF NOT EXISTS referrals (
+                user_id BIGINT PRIMARY KEY,
+                own_code VARCHAR(20) NOT NULL UNIQUE,
+                used_code VARCHAR(20) DEFAULT NULL,
+                referred_by BIGINT DEFAULT NULL,
+                total_referrals INT DEFAULT 0,
+                prev_week_referrals INT DEFAULT 0,
+                curr_week_referrals INT DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ref_code (own_code),
+                INDEX idx_ref_total (total_referrals)

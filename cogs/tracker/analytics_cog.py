@@ -325,8 +325,9 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         logger.info("Midnight PHT jobs triggered")
 
         # 1. Daily rollup
+        rollup_data = None
         try:
-            await analytics_service.run_daily_rollup()
+            rollup_data = await analytics_service.run_daily_rollup()
         except Exception as e:
             logger.error(f"Daily rollup failed: {e}")
 
@@ -370,9 +371,82 @@ class AnalyticsCog(commands.Cog, name="analytics"):
         except Exception as e:
             logger.error(f"Sentiment export failed: {e}")
 
+        # 4. Auto-post exhaustive Analytics Mega-Log
+        try:
+            log_channel_id = await settings_service.get_int("analytics_log_channel_id")
+            if log_channel_id and rollup_data:
+                guild = self.bot.guilds[0] if self.bot.guilds else None
+                if guild:
+                    yesterday_str = rollup_data['date']
+                    await self._post_daily_analytics_log(guild, log_channel_id, rollup_data, yesterday_str)
+        except Exception as e:
+            logger.error(f"Mega-Log export failed: {e}")
+
     @midnight_jobs.before_loop
     async def before_midnight(self):
         await self.bot.wait_until_ready()
+
+    async def _post_daily_analytics_log(self, guild: discord.Guild, channel_id: int, rollup_data: dict, yesterday: str):
+        """Builds and sends the exhaustive Mega-Embed of daily stats to the specified channel."""
+        try:
+            channel = guild.get_channel(channel_id)
+            if not channel:
+                logger.warning(f"Analytics log channel {channel_id} not found in guild {guild.name}.")
+                return
+
+            # Fetch extra exhaustive stats
+            extra = await analytics_service.get_exhaustive_daily_stats(yesterday)
+            
+            # Live state snapshots
+            boosts = guild.premium_subscription_count
+            threads = len(guild.threads)
+            events = len(guild.scheduled_events)
+            total_members = guild.member_count
+            
+            # ──📱 Embed 1: Traffic & Engagement ──
+            
+            # Format text channels
+            top_tx = "\n".join([f"<#{c['channel_id']}>: {c['count']} msgs" for c in extra['top_text_channels']]) or "No messages"
+            top_vc = "\n".join([f"<#{c['channel_id']}>: {c['mins']} mins" for c in extra['top_voice_channels']]) or "No voice activity"
+            
+            e1 = discord.Embed(title=f"📱 Traffic & Engagement ({yesterday})", color=discord.Color.from_str("#F2C21A"))
+            e1.add_field(name="Total Traffic", value=f"**Messages:** {rollup_data['total_messages']:,} (by {rollup_data['unique_messagers']:,} unique)\n**Voice Mins:** {rollup_data['total_voice_minutes']:,} (by {rollup_data['unique_voice_users']:,} unique)", inline=False)
+            e1.add_field(name="Top 5 Text Channels", value=top_tx, inline=True)
+            e1.add_field(name="Top 3 Voice Channels", value=top_vc, inline=True)
+            
+            # ── 📈 Embed 2: Growth & Retention ──
+            ret = extra['retention_day_1']
+            ret_str = f"{ret['rate']}% ({ret['retained']}/{ret['joined']} returned)" if ret else "No data"
+            
+            invs = "\n".join([f"`{i['code']}` (by <@{i['inviter']}>): {i['count']} joins" for i in extra['top_invites']]) or "No invites tracked"
+            
+            e2 = discord.Embed(title=f"📈 Growth & Retention", color=discord.Color.from_str("#2ECC71"))
+            e2.add_field(name="Daily Growth", value=f"**New Joins:** {rollup_data['new_joins']} | **Leaves:** {rollup_data['new_leaves']}\n**Day-1 Retention:** {ret_str}\n**New Verifications:** {extra['new_verifications']}", inline=False)
+            e2.add_field(name="Top 3 Invite Codes", value=invs, inline=False)
+            
+            # ── ⚔️ Embed 3: Economy & Gameplay ──
+            qt = "\n".join([f"<@{q['user_id']}>: {q['score']} pts" for q in extra['quiz_top_3']]) or "None"
+            tht = "\n".join([f"<@{t['user_id']}>: {t['count']} times" for t in extra['thanks_top_3']]) or "None"
+            
+            e3 = discord.Embed(title=f"⚔️ Economy & Gameplay", color=discord.Color.from_str("#E74C3C"))
+            e3.add_field(name="System Totals", value=f"**Quests Done:** {extra['quests_completed']:,}\n**EP Redemptions:** {extra['ep_redemptions']:,}\n**Total Thanks:** {extra['thanks_given']}\n**Referrals Linked:** {extra['new_referrals']}", inline=False)
+            e3.add_field(name="Top 3 Quiz Players", value=f"Total matches: {extra['quiz_sessions']}\n{qt}", inline=True)
+            e3.add_field(name="Most Thanked Members", value=tht, inline=True)
+            
+            # ── 🛡️ Embed 4: Operations & Moderation ──
+            tc_map = extra['tickets_by_category']
+            tc_str = "\n".join([f"{k}: {v}" for k, v in tc_map.items()]) if tc_map else "No new tickets"
+            ma_str = ", ".join(f"{k}: {v}" for k,v in extra['mod_actions'].items()) if extra['mod_actions'] else "None"
+            
+            e4 = discord.Embed(title=f"🛡️ Operations & Moderation", color=discord.Color.from_str("#3498DB"))
+            e4.add_field(name="Tickets Opened By Category", value=tc_str, inline=True)
+            e4.add_field(name="Support metrics", value=f"**Total Ratings:** {extra['ticket_ratings_count']}\n**Average Rating:** ⭐ {extra['ticket_avg_rating']}/5", inline=True)
+            e4.add_field(name="Moderation Log", value=f"**Total Actions:** {extra['total_mod_actions']} ({ma_str})", inline=False)
+            e4.add_field(name="📌 Live Midnight Snapshot", value=f"**Total Members:** {total_members:,} | **Server Boosts:** {boosts} | **Active Threads:** {threads} | **Scheduled Events:** {events}", inline=False)
+            
+            await channel.send(embeds=[e1, e2, e3, e4])
+        except Exception as e:
+            logger.error(f"Failed to post daily analytics embed: {e}")
 
     # ─── SLASH COMMANDS ─────────────────────────────────────────────
 

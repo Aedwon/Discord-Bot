@@ -87,7 +87,7 @@ class SetupCog(commands.Cog, name="Setup"):
         setting: Literal[
             "message_log", "ticket_log", "voice_log", "giveaway_log",
             "boost_public", "boost_admin",
-            "modlog", "cmdlog", "event_log",
+            "modlog", "cmdlog", "event_log", "analytics_log",
             "leaderboard_weekly", "leaderboard_alltime", "leaderboard_log", "bot", "booster_chat", "level_alerts",
             "confessions", "counting", "anon_messages", "anon_log"
         ],
@@ -106,6 +106,7 @@ class SetupCog(commands.Cog, name="Setup"):
             "modlog": "mod_log_channel_id",
             "cmdlog": "command_log_channel_id",
             "event_log": "event_log_channel_id",
+            "analytics_log": "analytics_log_channel_id",
             # System channels
             "leaderboard_weekly": "leaderboard_weekly_channel_id",
             "leaderboard_alltime": "leaderboard_alltime_channel_id",

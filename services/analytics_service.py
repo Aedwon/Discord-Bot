@@ -234,6 +234,17 @@ class AnalyticsService:
             reactions['c'] if reactions else 0,
         ))
         logger.info(f"Daily rollup completed for {yesterday}")
+        
+        return {
+            "date": yesterday,
+            "total_messages": msgs['total'] if msgs else 0,
+            "unique_messagers": msgs['uniq'] if msgs else 0,
+            "total_voice_minutes": voice['mins'] if voice else 0,
+            "unique_voice_users": voice['uniq'] if voice else 0,
+            "new_joins": joins['c'] if joins else 0,
+            "new_leaves": leaves['c'] if leaves else 0,
+            "total_reactions": reactions['c'] if reactions else 0,
+        }
 
     async def purge_old_messages(self, retention_days: int = 30):
         """Auto-purge raw message data older than retention window."""
@@ -376,6 +387,109 @@ class AnalyticsService:
         }
         return totals
 
+
+    async def get_exhaustive_daily_stats(self, date_str: str) -> dict:
+        """Fetch multiple exhaustive data points for a specific date (YYYY-MM-DD)."""
+        stats = {}
+        
+        # 1. Moderation Actions
+        mods = await db.fetch_all('''
+            SELECT action_type, COUNT(*) as c 
+            FROM mod_logs 
+            WHERE DATE(timestamp) = %s 
+            GROUP BY action_type
+        ''', (date_str,))
+        stats['mod_actions'] = {row['action_type']: row['c'] for row in mods}
+        stats['total_mod_actions'] = sum(row['c'] for row in mods)
+        
+        # 2. Verifications
+        v = await db.fetch_one("SELECT COUNT(*) as c FROM verified_users WHERE DATE(verified_at) = %s", (date_str,))
+        stats['new_verifications'] = v['c'] if v else 0
+        
+        # 3. Tickets & Category Breakdown
+        t = await db.fetch_one("SELECT COUNT(*) as c FROM active_tickets WHERE DATE(created_at) = %s AND is_test = FALSE", (date_str,))
+        stats['new_tickets'] = t['c'] if t else 0
+        
+        tc = await db.fetch_all("SELECT category_key, COUNT(*) as c FROM active_tickets WHERE DATE(created_at) = %s AND is_test = FALSE GROUP BY category_key", (date_str,))
+        stats['tickets_by_category'] = {row['category_key']: row['c'] for row in tc}
+        
+        tr = await db.fetch_one("SELECT COUNT(*) as c, AVG(stars) as avg_rating FROM ticket_ratings WHERE DATE(rated_at) = %s", (date_str,))
+        stats['ticket_ratings_count'] = tr['c'] if tr else 0
+        stats['ticket_avg_rating'] = round(tr['avg_rating'], 1) if tr and tr['avg_rating'] else 0.0
+        
+        # 4. Quiz History & Top 3
+        q = await db.fetch_one("SELECT COUNT(*) as sessions, SUM(score) as total_score FROM quiz_history WHERE DATE(earned_at) = %s", (date_str,))
+        stats['quiz_sessions'] = q['sessions'] if q and q['sessions'] else 0
+        stats['quiz_score'] = q['total_score'] if q and q['total_score'] else 0
+        
+        q_top = await db.fetch_all('''
+            SELECT user_id, SUM(score) as sum_score 
+            FROM quiz_history 
+            WHERE DATE(earned_at) = %s 
+            GROUP BY user_id 
+            ORDER BY sum_score DESC LIMIT 3
+        ''', (date_str,))
+        stats['quiz_top_3'] = [{"user_id": r['user_id'], "score": r['sum_score']} for r in q_top]
+        
+        # 5. Thanks System & Top 3 Receivers
+        th = await db.fetch_one("SELECT COUNT(*) as c FROM thanks_history WHERE DATE(created_at) = %s", (date_str,))
+        stats['thanks_given'] = th['c'] if th else 0
+        
+        th_top = await db.fetch_all('''
+            SELECT receiver_id, COUNT(*) as received 
+            FROM thanks_history 
+            WHERE DATE(created_at) = %s 
+            GROUP BY receiver_id 
+            ORDER BY received DESC LIMIT 3
+        ''', (date_str,))
+        stats['thanks_top_3'] = [{"user_id": r['receiver_id'], "count": r['received']} for r in th_top]
+        
+        # 6. Quest Progress
+        qp = await db.fetch_one("SELECT COUNT(*) as c FROM quest_progress WHERE completed = TRUE AND DATE(completed_at) = %s", (date_str,))
+        stats['quests_completed'] = qp['c'] if qp else 0
+        
+        # 7. Referrals & Invites
+        ref = await db.fetch_one("SELECT COUNT(*) as c FROM referrals WHERE DATE(created_at) = %s", (date_str,))
+        stats['new_referrals'] = ref['c'] if ref else 0
+        
+        invites = await db.fetch_all('''
+            SELECT invite_code, inviter_id, COUNT(*) as c 
+            FROM analytics_member_joins 
+            WHERE DATE(joined_at) = %s AND invite_code IS NOT NULL 
+            GROUP BY invite_code, inviter_id 
+            ORDER BY c DESC LIMIT 3
+        ''', (date_str,))
+        stats['top_invites'] = [{"code": r['invite_code'], "inviter": r['inviter_id'], "count": r['c']} for r in invites]
+        
+        # 8. Event Redemptions (EP Economy)
+        ep = await db.fetch_one("SELECT COUNT(*) as redemptions FROM event_redemptions WHERE DATE(redeemed_at) = %s", (date_str,))
+        stats['ep_redemptions'] = ep['redemptions'] if ep and ep['redemptions'] else 0
+        
+        # 9. Day-1 Retention
+        ret_1 = await self.get_retention(1)
+        stats['retention_day_1'] = ret_1
+        
+        # 10. Top 5 Text Channels
+        tx = await db.fetch_all('''
+            SELECT channel_id, COUNT(*) as c 
+            FROM analytics_messages 
+            WHERE DATE(created_at) = %s 
+            GROUP BY channel_id 
+            ORDER BY c DESC LIMIT 5
+        ''', (date_str,))
+        stats['top_text_channels'] = [{"channel_id": r['channel_id'], "count": r['c']} for r in tx]
+        
+        # 11. Top 3 Voice Channels
+        vx = await db.fetch_all('''
+            SELECT channel_id, ROUND(SUM(TIMESTAMPDIFF(MINUTE, joined_at, COALESCE(left_at, NOW())))) as mins 
+            FROM analytics_voice_sessions 
+            WHERE DATE(joined_at) = %s 
+            GROUP BY channel_id 
+            ORDER BY mins DESC LIMIT 3
+        ''', (date_str,))
+        stats['top_voice_channels'] = [{"channel_id": r['channel_id'], "mins": r['mins'] or 0} for r in vx]
+
+        return stats
 
 # Singleton export
 analytics_service = AnalyticsService()

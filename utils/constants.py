@@ -23,6 +23,7 @@ SETUP_SCHEMA = {
         {"key": "voice_log_channel_id", "name": "Voice Logs", "type": "channel", "cmd": "`/setup channel voice_log <#channel>`"},
         {"key": "event_log_channel_id", "name": "Event Logs", "type": "channel", "cmd": "`/setup channel event_log <#channel>`"},
         {"key": "giveaway_log_channel_id", "name": "Giveaway Logs", "type": "channel", "cmd": "`/setup channel giveaway_log <#channel>`"},
+        {"key": "analytics_log_channel_id", "name": "Analytics Daily Log", "type": "channel", "cmd": "`/setup channel analytics_log <#channel>`"},
         {"key": "leaderboard_weekly_channel_id", "name": "Leaderboard (Weekly)", "type": "channel", "cmd": "`/setup channel leaderboard_weekly <#channel>`"},
         {"key": "leaderboard_alltime_channel_id", "name": "Leaderboard (All-Time)", "type": "channel", "cmd": "`/setup channel leaderboard_alltime <#channel>`"},
         {"key": "leaderboard_log_channel_id", "name": "Leaderboard Log (Archives)", "type": "channel", "cmd": "`/setup channel leaderboard_log <#channel>`"},
