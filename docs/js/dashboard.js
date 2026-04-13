@@ -458,8 +458,44 @@ document.addEventListener('DOMContentLoaded', () => {
             data: { labels, datasets: [
                 { label: 'Stickiness (DAU/WAU %)', data: data, borderColor: '#F2C21A', tension: 0.3, fill: false, pointRadius: 0 }
             ]},
-            options: makeOpts({ scales: { y: { ticks: { callback: v => v + '%' } } } })
+            options: makeOpts({ 
+                scales: { y: { ticks: { callback: v => Number(v).toFixed(1) + '%' } } },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return `Stickiness: ${Number(context.raw).toFixed(1)}%`;
+                            }
+                        }
+                    }
+                }
+            })
         });
+
+        const interpDiv = document.getElementById('stickiness-interpretation');
+        if (interpDiv) {
+            if (data.length > 0) {
+                const latest = Number(data[data.length - 1]);
+                let interp = '';
+                let color = '';
+                if (latest >= 30) {
+                    interp = 'Excellent (High Engagement)';
+                    color = '#4CAF50';
+                } else if (latest >= 15) {
+                    interp = 'Good (Healthy Engagement)';
+                    color = '#F2C21A';
+                } else if (latest >= 5) {
+                    interp = 'Fair (Average Engagement)';
+                    color = '#FF9800';
+                } else {
+                    interp = 'Low (Needs Improvement)';
+                    color = '#F44336';
+                }
+                interpDiv.innerHTML = `Current: <span style="color: ${color};">${latest.toFixed(1)}% — ${interp}</span>`;
+            } else {
+                interpDiv.textContent = 'No data available';
+            }
+        }
     }
 
     function drawHeatmap(row) {
@@ -483,34 +519,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
         container.innerHTML = '';
 
-        // Add header row (blank corner + 24 hour labels)
-        const corner = document.createElement('div');
-        corner.className = 'hm-label';
-        container.appendChild(corner);
-        for (let h = 0; h < 24; h++) {
-            const hLabel = document.createElement('div');
-            hLabel.className = 'hm-label';
-            hLabel.textContent = h;
-            container.appendChild(hLabel);
-        }
+        const days = [];
+        const gridData = [];
 
         dataLines.forEach(line => {
             const parts = line.split('|');
             if (parts.length < 2) return;
 
-            const dayLabel = parts[0].trim();
+            days.push(parts[0].trim());
             const cellStr = parts[1].trim();
-            // Split by whitespace to handle variable spacing
             const cells = cellStr.split(/\s+/).filter(c => c.length > 0);
+            gridData.push(cells);
+        });
 
+        // Add header row (blank corner + 7 day labels)
+        const corner = document.createElement('div');
+        corner.className = 'hm-label';
+        container.appendChild(corner);
+
+        days.forEach(day => {
             const labelEl = document.createElement('div');
             labelEl.className = 'hm-label';
-            labelEl.textContent = dayLabel;
+            labelEl.textContent = day;
             container.appendChild(labelEl);
+        });
 
-            // Ensure we always render exactly 24 cells per row
-            for (let i = 0; i < 24; i++) {
-                const cell = cells[i] || '·';
+        // Render 24 rows, each containing 7 cells
+        for (let h = 0; h < 24; h++) {
+            const hLabel = document.createElement('div');
+            hLabel.className = 'hm-label';
+            // Show hour format e.g. 00:00, 01:00
+            hLabel.textContent = `${String(h).padStart(2, '0')}:00`;
+            container.appendChild(hLabel);
+
+            for (let d = 0; d < gridData.length; d++) {
+                const cell = (gridData[d] && gridData[d][h]) ? gridData[d][h] : '·';
                 const cellEl = document.createElement('div');
                 cellEl.className = 'hm-cell';
                 if (cell === '█') cellEl.classList.add('lvl-3');
@@ -519,7 +562,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 else cellEl.classList.add('lvl-0');
                 container.appendChild(cellEl);
             }
-        });
+        }
     }
 
     // ── Init ──

@@ -312,7 +312,7 @@
 
 .heatmap-grid-container {
     display: grid;
-    grid-template-columns: 28px repeat(24, 1fr);
+    grid-template-columns: 45px repeat(7, 1fr);
     gap: 2px;
     padding: 0.5rem 0;
     overflow-x: auto;
@@ -330,19 +330,15 @@
 }
 
 .hm-cell {
-    aspect-ratio: 1;
+    height: 16px;
     border-radius: 3px;
-    min-width: 12px;
-    min-height: 12px;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    min-width: 16px;
+    transition: opacity 0.15s ease;
     cursor: default;
 }
 
 .hm-cell:hover {
-    transform: scale(1.4);
-    box-shadow: 0 0 8px rgba(242, 194, 26, 0.4);
-    z-index: 2;
-    position: relative;
+    opacity: 0.8;
 }
 
 .hm-cell.lvl-0 { background: rgba(255, 255, 255, 0.04); }
@@ -403,7 +399,7 @@
     .filter-bar { gap: 0.35rem; }
     .preset-group { flex-wrap: wrap; }
     .heatmap-grid-container {
-        grid-template-columns: 28px repeat(24, minmax(10px, 1fr));
+        grid-template-columns: 40px repeat(7, minmax(20px, 1fr));
     }
 }
 
