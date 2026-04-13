@@ -321,6 +321,16 @@ class QuizCog(commands.Cog, name="quiz"):
         """
         correct_answer = question['answer'].strip().lower()
 
+        # Update global question stats (times asked)
+        try:
+            await db.execute('''
+                INSERT INTO quiz_question_stats (question_id, question_text, times_asked)
+                VALUES (%s, %s, 1)
+                ON DUPLICATE KEY UPDATE times_asked = times_asked + 1, question_text = VALUES(question_text)
+            ''', (question['id'], question['question']))
+        except Exception as e:
+            logger.error(f"Failed to update quiz_question_stats (asked): {e}")
+
         # Post the question
         q_embed = discord.Embed(
             title=f"📋 Round {round_num}/{ROUNDS_PER_SESSION}",
@@ -366,13 +376,9 @@ class QuizCog(commands.Cog, name="quiz"):
                     )
 
                     # Calculate time-decay score using Discord's server timestamp
-                    # (more accurate than local clock — avoids drift)
                     answer_ts = msg.created_at.timestamp()
                     time_taken = answer_ts - question_timestamp
-                    # Clamp: floor at 0 (handles clock skew), cap at SECONDS_PER_ROUND
                     time_taken = max(0.0, min(time_taken, float(SECONDS_PER_ROUND)))
-
-                    # Score formula: Score = round(1000 × (1 - time_taken / 20))
                     score = max(0, round(1000 * (1 - time_taken / SECONDS_PER_ROUND)))
 
                     scored_users.add(msg.author.id)
@@ -383,16 +389,13 @@ class QuizCog(commands.Cog, name="quiz"):
                         "score": score,
                         "time_taken": time_taken,
                     })
-
-                    # Update session leaderboard
                     leaderboard[msg.author.id] = leaderboard.get(msg.author.id, 0) + score
 
                 except asyncio.TimeoutError:
-                    break  # Window expired
+                    break
                 except asyncio.CancelledError:
-                    break  # Bot shutting down
+                    break
                 except Exception as e:
-                    # Catch unexpected errors to prevent the entire round from dying
                     logger.error(f"Error in collect_answers loop: {e}")
                     break
 
@@ -405,7 +408,45 @@ class QuizCog(commands.Cog, name="quiz"):
             # Sort by time taken (fastest first)
             round_scorers.sort(key=lambda x: x['time_taken'])
 
-            # Show only top 10 fastest in the embed (everyone still earns points)
+            # Log to DB & update streaks
+            try:
+                for i, s in enumerate(round_scorers):
+                    is_first = (i == 0)
+                    # 1. Log Individual Answer
+                    await db.execute('''
+                        INSERT INTO quiz_answer_logs (user_id, question_id, question_text, time_taken, is_first)
+                        VALUES (%s, %s, %s, %s, %s)
+                    ''', (s['user_id'], question['id'], question['question'], s['time_taken'], is_first))
+
+                    # 2. Update Question Stats (Correct/Time)
+                    await db.execute('''
+                        UPDATE quiz_question_stats 
+                        SET times_correct = times_correct + 1, total_time_taken = total_time_taken + %s
+                        WHERE question_id = %s
+                    ''', (s['time_taken'], question['id']))
+
+                    # 3. Update User Streak (Increment)
+                    await db.execute('''
+                        INSERT INTO quiz_user_streaks (user_id, current_streak, max_streak, last_correct_at)
+                        VALUES (%s, 1, 1, CURRENT_TIMESTAMP)
+                        ON DUPLICATE KEY UPDATE 
+                            current_streak = current_streak + 1,
+                            max_streak = GREATEST(max_streak, current_streak + 1),
+                            last_correct_at = CURRENT_TIMESTAMP
+                    ''', (s['user_id'],))
+                
+                # 4. Reset Streaks for anyone who missed
+                placeholders = ', '.join(['%s'] * len(scored_users))
+                await db.execute(f'''
+                    UPDATE quiz_user_streaks 
+                    SET current_streak = 0 
+                    WHERE user_id NOT IN ({placeholders}) AND current_streak > 0
+                ''', tuple(scored_users))
+                
+            except Exception as e:
+                logger.error(f"Failed to update quiz DB stats/streaks: {e}")
+
+            # Show only top 10 fastest
             display_limit = 10
             shown = round_scorers[:display_limit]
             extra = len(round_scorers) - display_limit
@@ -418,15 +459,19 @@ class QuizCog(commands.Cog, name="quiz"):
             if extra > 0:
                 lines.append(f"*...and {extra} more also scored!*")
 
-            description = "\n".join(lines)
-
             win_embed = discord.Embed(
                 title=f"✅ Round {round_num} — {len(round_scorers)} correct!",
-                description=description,
+                description="\n".join(lines),
                 color=discord.Color.green()
             )
             win_msg = await self._safe_send(channel, embed=win_embed)
         else:
+            # Everyone missed — reset ALL active streaks
+            try:
+                await db.execute('UPDATE quiz_user_streaks SET current_streak = 0 WHERE current_streak > 0')
+            except Exception as e:
+                logger.error(f"Failed to reset streaks on timeout: {e}")
+
             timeout_embed = discord.Embed(
                 title=f"⏰ Round {round_num} — Time's Up!",
                 description="Nobody got it!",

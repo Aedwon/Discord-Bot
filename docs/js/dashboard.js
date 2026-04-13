@@ -112,6 +112,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (body.success) {
                 drawRafflesTable(body.top_raffles || []);
                 drawEventsTable(body.top_events || []);
+                drawQuizStreaks(body.top_streaks || []);
+                drawQuizSpeed(body.top_speedsters || []);
+                drawQuizDifficulty(body.hardest_questions || []);
+
+                if (body.quiz_global) {
+                    const g = body.quiz_global;
+                    setText('stat-quiz-global-avg', g.avg_time ? `${g.avg_time.toFixed(2)}s` : '--');
+                }
             }
         } catch(err) {
             console.error('Rankings fetch failed:', err);

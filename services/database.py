@@ -215,6 +215,42 @@ class Database:
                 INDEX idx_qh_user_earned (user_id, earned_at)
             )
         ''')
+
+        # Detailed answer logs (timestamped responses)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_answer_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                question_id VARCHAR(50),
+                question_text TEXT,
+                time_taken FLOAT NOT NULL,
+                is_first BOOLEAN DEFAULT FALSE,
+                earned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_qal_time (time_taken),
+                INDEX idx_qal_earned (earned_at)
+            )
+        ''')
+
+        # Aggregated question performance
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_question_stats (
+                question_id VARCHAR(50) PRIMARY KEY,
+                question_text TEXT,
+                times_asked INT DEFAULT 0,
+                times_correct INT DEFAULT 0,
+                total_time_taken FLOAT DEFAULT 0
+            )
+        ''')
+
+        # Cross-session streak tracking
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_user_streaks (
+                user_id BIGINT PRIMARY KEY,
+                current_streak INT DEFAULT 0,
+                max_streak INT DEFAULT 0,
+                last_correct_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
         # Message Cache for moderation logs
         # DEPRECATED: message_cache is now JSON-backed in log_cog.py (message_cache.json).
