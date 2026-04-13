@@ -13,6 +13,7 @@ Leaderboard categories:
   Weekly:   XP, EP, Quiz, Counting, Referral, Voice, Messages
 """
 
+import asyncio
 import csv
 import io
 import discord
@@ -155,6 +156,8 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         2. Auto-post summary to log channel
         3. Snapshot XP/EP and reset counting
         4. Set guard flag
+        5. Distribute EP prizes (after snapshot, so prizes count toward new week)
+        6. Post rewards summary to log channel
         """
         now_pht = datetime.now(TZ_PHT)
 
@@ -180,14 +183,118 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             except Exception as e:
                 logger.error(f"Failed to post weekly archive log: {e}")
 
-        # Step 3: Reset snapshots for next week
+        # Step 3: Reset snapshots for next week (locks EP baseline)
         count = await leaderboard_service.run_weekly_reset()
         await settings_service.set("leaderboard_last_reset_week", iso_week)
         logger.info(f"Weekly leaderboard reset: {count} users snapshotted (week {iso_week})")
 
+        # Step 5: Distribute EP prizes (AFTER snapshot — prizes count toward new week)
+        try:
+            prizes = await leaderboard_service.calculate_weekly_prizes(week_id)
+            if prizes:
+                for guild in self.bot.guilds:
+                    awarded = await self._distribute_weekly_prizes(guild, prizes)
+                    logger.info(f"Weekly prizes distributed: {awarded} users received EP")
+
+                    # Step 6: Post rewards summary to log channel
+                    try:
+                        await self._post_weekly_prizes_log(guild, week_id, prizes)
+                    except Exception as e:
+                        logger.error(f"Failed to post weekly prizes log: {e}")
+            else:
+                logger.info("No weekly prizes to distribute (no qualifying placements)")
+        except Exception as e:
+            logger.error(f"Weekly prize distribution failed: {e}", exc_info=True)
+
+    async def _distribute_weekly_prizes(
+        self, guild: discord.Guild, prizes: list[dict]
+    ) -> int:
+        """
+        Distribute EP prizes to users. Returns number of users successfully awarded.
+        Uses is_placement=False so the 25% booster EP multiplier applies.
+        """
+        awarded = 0
+        for entry in prizes:
+            try:
+                new_ep = await ep_service.process_ep_update(
+                    guild,
+                    entry["user_id"],
+                    entry["total_ep"],
+                    bypass_verification=True,
+                    is_placement=False,  # Booster EP multiplier applies
+                )
+                if new_ep > 0:
+                    awarded += 1
+                    logger.debug(
+                        f"Prize EP awarded: {entry['user_id']} → "
+                        f"{entry['total_ep']} EP (breakdown: {entry['breakdown']})"
+                    )
+                # Rate limit safety — EP updates trigger role changes
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Failed to award prize EP to {entry['user_id']}: {e}")
+                continue
+        return awarded
+
     @weekly_reset_task.before_loop
     async def before_weekly_reset(self):
         await self.bot.wait_until_ready()
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  WEEKLY PRIZES LOG (auto-post to channel)
+    # ═══════════════════════════════════════════════════════════════════
+
+    PRIZE_CAT_LABELS = {
+        "xp": "🌟 XP",
+        "quiz": "🧠 Quiz",
+        "counting": "🔢 Counting",
+        "referral": "🔗 Referrals",
+    }
+
+    async def _post_weekly_prizes_log(
+        self, guild: discord.Guild, week_id: str, prizes: list[dict]
+    ):
+        """Post a rewards summary embed to the log channel."""
+        channel_id_str = await settings_service.get("leaderboard_log_channel_id")
+        if not channel_id_str or channel_id_str == "0":
+            return
+
+        channel = guild.get_channel(int(channel_id_str))
+        if not channel:
+            return
+
+        embed = discord.Embed(
+            title=f"🎁 Weekly Leaderboard Prizes — {week_id}",
+            description="EP has been automatically distributed to the following users:",
+            color=0xFFD700,
+            timestamp=discord.utils.utcnow(),
+        )
+
+        lines = []
+        total_ep_distributed = 0
+        for entry in prizes[:25]:  # Cap at 25 for embed limits
+            user_id = entry["user_id"]
+            total_ep = entry["total_ep"]
+            total_ep_distributed += total_ep
+
+            # Build breakdown string
+            breakdown_parts = [
+                f"{self.PRIZE_CAT_LABELS.get(cat, cat)} ({ep})"
+                for cat, ep in entry["breakdown"].items()
+            ]
+            breakdown_str = " + ".join(breakdown_parts)
+            lines.append(f"<@{user_id}> — **{total_ep} EP** ({breakdown_str})")
+
+        embed.description += "\n\n" + "\n".join(lines)
+        embed.set_footer(
+            text=f"Total EP distributed: {total_ep_distributed} • Booster 25% multiplier applied where eligible"
+        )
+
+        try:
+            await channel.send(embed=embed)
+            logger.info(f"Weekly prizes log posted to #{channel.name}")
+        except discord.HTTPException as e:
+            logger.error(f"Failed to send prizes log: {e}")
 
     # ═══════════════════════════════════════════════════════════════════
     #  WEEKLY ARCHIVE LOG (auto-post to channel)

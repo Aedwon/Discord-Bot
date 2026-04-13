@@ -457,6 +457,66 @@ class LeaderboardService:
             (week_id,)
         )
 
+    # ═══════════════════════════════════════════════════════════════════
+    #  WEEKLY PRIZE CALCULATION
+    # ═══════════════════════════════════════════════════════════════════
+
+    # EP prizes by rank position (EP category excluded — Diamonds only)
+    PRIZE_EP = {1: 150, 2: 100, 3: 75}
+    PRIZE_EP_DEFAULT = 50   # Ranks 4–10
+    PRIZE_CATEGORIES = {"xp", "quiz", "counting", "referral"}
+
+    async def calculate_weekly_prizes(self, week_id: str) -> list[dict]:
+        """
+        Calculate EP prizes from the archived weekly standings.
+
+        Reads `weekly_leaderboard_history`, filters to prize-eligible categories,
+        maps rank → EP amount, and aggregates across categories per user.
+
+        Returns a list sorted by total_ep descending:
+        [
+            {
+                "user_id": int,
+                "total_ep": int,
+                "breakdown": {"xp": 150, "quiz": 50, ...}
+            },
+            ...
+        ]
+        """
+        rows = await db.fetch_all(
+            """SELECT category, rank_position, user_id, value
+               FROM weekly_leaderboard_history
+               WHERE week_id = %s AND rank_position <= 10
+               ORDER BY category, rank_position""",
+            (week_id,),
+        )
+
+        if not rows:
+            return []
+
+        # Aggregate prizes per user across categories
+        user_prizes: dict[int, dict] = {}  # user_id → {"total_ep": int, "breakdown": {}}
+
+        for row in rows:
+            cat = row["category"]
+            if cat not in self.PRIZE_CATEGORIES:
+                continue
+
+            rank = row["rank_position"]
+            user_id = row["user_id"]
+            ep_award = self.PRIZE_EP.get(rank, self.PRIZE_EP_DEFAULT)
+
+            if user_id not in user_prizes:
+                user_prizes[user_id] = {"user_id": user_id, "total_ep": 0, "breakdown": {}}
+
+            user_prizes[user_id]["total_ep"] += ep_award
+            user_prizes[user_id]["breakdown"][cat] = ep_award
+
+        # Sort by total EP descending for display
+        result = sorted(user_prizes.values(), key=lambda x: x["total_ep"], reverse=True)
+        return result
+
+
 # Singleton
 leaderboard_service = LeaderboardService()
 
