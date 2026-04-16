@@ -27,3 +27,8 @@ message_cache.json.tmp
 
 # OS Generated
 .DS_Store
+
+# Documentation & AI Instructions
+.agents/
+COMMAND_STANDARDS.md
+DEPLOYMENT.md
