@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quest Manager - MSL Console</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/dashboard.css">
+    <link rel="stylesheet" href="css/quests.css">
+</head>
+<body style="opacity: 0; transition: opacity 0.5s ease-in-out;"> <!-- JS will fade this in after auth -->
+    <div id="toast-container"></div>
+
+    <header class="header">
+        <div class="header-content">
+            <h1 class="header-title">
+                ⚙️ MSL Console <span class="header-badge">Quest Manager</span>
+            </h1>
+            <nav class="header-nav">
+                <a href="/dashboard.html" class="nav-link">← Dashboard</a>
+                <a href="#" class="nav-link danger" id="logout-btn">Log Out</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="dash-container">
+        
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="status-dot connected"></div>
+                <span id="connection-status">Live Database Connection</span>
+            </div>
+            
+            <div class="filter-bar">
+                <button id="btn-create-quest" class="btn-preset active">➕ Create Quest</button>
+            </div>
+        </div>
+
+        <!-- KPI Row -->
+        <div class="kpi-row compact">
+            <div class="stat-card mini">
+                <div class="stat-label">Total Quests</div>
+                <div class="stat-value" id="kpi-total">0</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Active Quests</div>
+                <div class="stat-value" id="kpi-active">0</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Common (⭐)</div>
+                <div class="stat-value" id="kpi-common">0</div>
+            </div>
+            <div class="stat-card mini">
+                <div class="stat-label">Uncommon (💎)</div>
+                <div class="stat-value" id="kpi-uncommon">0</div>
+            </div>
+            <div class="stat-card mini accent">
+                <div class="stat-label">Rare (🌟)</div>
+                <div class="stat-value" id="kpi-rare">0</div>
+            </div>
+        </div>
+
+        <!-- Quests Table -->
+        <div class="chart-panel wide table-panel">
+            <h3>Quest Catalog</h3>
+            <div class="table-container">
+                <table class="quests-table" id="quests-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Tier</th>
+                            <th>Task Type</th>
+                            <th>Target</th>
+                            <th>Reward XP</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="quests-tbody">
+                        <!-- Populated by JS -->
+                        <tr><td colspan="9" class="empty-state">Loading quests...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- Create/Edit Modal -->
+    <div id="quest-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modal-title">Create Quest</h3>
+                <button class="modal-close" id="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="quest-form">
+                    <input type="hidden" id="quest-id">
+                    
+                    <div class="form-group">
+                        <label for="quest-name">Quest Name <span class="required">*</span></label>
+                        <input type="text" id="quest-name" required maxlength="100" placeholder="e.g. Chatterbox Challenge">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="quest-desc">Description</label>
+                        <textarea id="quest-desc" rows="3" maxlength="500" placeholder="Describe what the user needs to do..."></textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label for="quest-tier">Tier <span class="required">*</span></label>
+                            <select id="quest-tier" required>
+                                <option value="common">⭐ Common</option>
+                                <option value="uncommon">💎 Uncommon</option>
+                                <option value="rare">🌟 Rare</option>
+                            </select>
+                        </div>
+                        <div class="form-group half">
+                            <label for="quest-task">Task Type <span class="required">*</span></label>
+                            <select id="quest-task" required>
+                                <option value="message_count">Messages</option>
+                                <option value="vc_minutes">VC Minutes</option>
+                                <option value="reaction_count">Reactions</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label for="quest-target">Target Goal <span class="required">*</span></label>
+                            <input type="number" id="quest-target" required min="1" placeholder="e.g. 50">
+                        </div>
+                        <div class="form-group half" id="form-group-active">
+                            <label>Status</label>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="quest-active" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="modal-cancel-btn">Cancel</button>
+                <button class="btn-submit" id="modal-submit-btn">Save Quest</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Delete Modal -->
+    <div id="delete-modal" class="modal-overlay hidden">
+        <div class="modal-card modal-small">
+            <div class="modal-header danger">
+                <h3>⚠️ Confirm Delete</h3>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to permanently delete <strong id="delete-quest-name"></strong>?</p>
+                <div id="delete-warning-box" class="warning-box hidden">
+                    <span class="warning-icon">!</span>
+                    <p>This quest is currently assigned to <strong id="delete-progress-count">0</strong> users. Deleting it will instantly remove their progress.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="delete-cancel-btn">Cancel</button>
+                <button class="btn-danger" id="delete-confirm-btn">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/quests.js"></script>
+</body>
+</html>

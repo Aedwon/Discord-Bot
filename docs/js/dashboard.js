@@ -573,6 +573,66 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // ── Easter Egg Login ──
+    const headerTitle = document.querySelector('.header-title');
+    let clickCount = 0;
+    let clickTimer;
+
+    headerTitle.addEventListener('click', () => {
+        clickCount++;
+        clearTimeout(clickTimer);
+        
+        if (clickCount >= 5) {
+            clickCount = 0;
+            document.getElementById('password-modal').classList.remove('hidden');
+        } else {
+            clickTimer = setTimeout(() => { clickCount = 0; }, 1500);
+        }
+    });
+
+    const passModal = document.getElementById('password-modal');
+    const passInput = document.getElementById('passcode-input');
+    const passSubmit = document.getElementById('passcode-submit');
+    const passError = document.getElementById('passcode-error');
+
+    document.getElementById('passcode-cancel').addEventListener('click', () => {
+        passModal.classList.add('hidden');
+        passInput.value = '';
+        passError.textContent = '';
+    });
+
+    passSubmit.addEventListener('click', async () => {
+        const code = passInput.value.trim();
+        if (!code) return;
+
+        passSubmit.disabled = true;
+        passSubmit.textContent = 'Verifying...';
+        passError.textContent = '';
+
+        try {
+            const res = await fetch('/api/quests?action=verify', {
+                headers: { 'Authorization': `Bearer ${code}` }
+            });
+            
+            if (res.status === 200) {
+                sessionStorage.setItem('questSession', JSON.stringify({
+                    passcode: code,
+                    authenticatedAt: Date.now()
+                }));
+                window.location.href = '/quests.html';
+            } else {
+                throw new Error('Invalid passcode');
+            }
+        } catch (e) {
+            passError.textContent = '❌ Incorrect passcode';
+            passInput.classList.add('shake');
+            setTimeout(() => passInput.classList.remove('shake'), 500);
+        } finally {
+            passSubmit.disabled = false;
+            passSubmit.textContent = 'Enter';
+        }
+    });
+
     // ── Init ──
     fetchStats();
 });

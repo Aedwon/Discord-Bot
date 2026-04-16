@@ -321,6 +321,30 @@
         </div>
     </div>
 
+    <!-- Easter Egg Password Modal -->
+    <div id="password-modal" class="modal-overlay hidden" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 9999; backdrop-filter: blur(5px);">
+        <div style="background: #1e1e1e; padding: 2rem; border-radius: 12px; border: 1px solid #333; width: 300px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.5);">
+            <h3 style="color: #f2c21a; margin-top: 0; margin-bottom: 1rem; font-size: 1.1rem;">Gated Access</h3>
+            <p style="color: #aaa; font-size: 0.8rem; margin-bottom: 1.5rem;">Enter the admin passcode to access the Quest Configuration manager.</p>
+            <input type="password" id="passcode-input" placeholder="Passcode" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid #444; background: #111; color: #fff; margin-bottom: 0.5rem; outline: none;">
+            <div id="passcode-error" style="color: #e74c3c; font-size: 0.75rem; height: 1rem; margin-bottom: 1rem;"></div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button id="passcode-cancel" style="flex: 1; padding: 0.5rem; border-radius: 6px; background: transparent; color: #aaa; border: 1px solid #444; cursor: pointer;">Cancel</button>
+                <button id="passcode-submit" style="flex: 1; padding: 0.5rem; border-radius: 6px; background: #f2c21a; color: #000; border: none; font-weight: 600; cursor: pointer;">Enter</button>
+            </div>
+        </div>
+    </div>
+    <style>
+        .hidden { display: none !important; }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        .shake { animation: shake 0.2s ease-in-out; border-color: #e74c3c !important; }
+        .header-title { cursor: pointer; user-select: none; }
+    </style>
+
     <script src="js/dashboard.js"></script>
 </body>
 </html>
