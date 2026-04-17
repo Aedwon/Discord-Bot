@@ -467,11 +467,34 @@ class XpCog(commands.Cog, name="Leveling"):
         await inter.response.defer()
         target = member or inter.user
         
+        # ── Fetch Profile Data in Parallel ──
+        import asyncio
+        from services.database import db
+        from services.verification_service import verification_service
+        from services.badge_service import badge_service
+        from services.ep_service import ep_service
+        
+        # Phase 1: Fetch independent Base User Data, Verification, and Event records concurrently.
+        user_data, user_info, event_data = await asyncio.gather(
+            db.fetch_one("SELECT xp, event_points, badges FROM users WHERE user_id = %s", (target.id,)),
+            verification_service.get_user_info(target.id),
+            db.fetch_one("SELECT COUNT(*) as total FROM event_redemptions WHERE user_id = %s", (target.id,))
+        )
+        
+        xp = user_data['xp'] if user_data and user_data['xp'] else 0
+        ep = user_data['event_points'] if user_data and user_data['event_points'] else 0
+        
+        # Phase 2: Fetch dependent queries (Ranks) concurrently.
+        xp_rank_data, ep_rank_data = await asyncio.gather(
+            db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE xp > %s", (xp,)) if xp > 0 else asyncio.sleep(0),
+            db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > %s", (ep,)) if ep > 0 else asyncio.sleep(0)
+        )
+        
         # ── XP Data ──
-        rank, xp = await xp_service.get_rank(target.id)
         level = xp_service.get_level(xp)
         xp_tier = xp_service.get_tier_name(level)
-        rank_display = f"#{rank}" if rank is not None and rank > 0 else "Unranked"
+        xp_rank = (xp_rank_data['pos'] + 1) if xp_rank_data and xp > 0 else "Unranked"
+        rank_display = f"#{xp_rank}" if isinstance(xp_rank, int) else xp_rank
         
         # XP progress bar
         current_level_xp = xp_service.get_xp_for_level(level)
@@ -493,18 +516,11 @@ class XpCog(commands.Cog, name="Leveling"):
         xp_pct = int(xp_progress * 100)
         
         # ── EP Data ──
-        from services.database import db
-        user_data = await db.fetch_one("SELECT event_points FROM users WHERE user_id = %s", (target.id,))
-        ep = (user_data['event_points'] or 0) if user_data else 0
-        
-        ep_rank_data = await db.fetch_one("SELECT COUNT(*) as pos FROM users WHERE event_points > %s", (ep,))
         ep_rank = (ep_rank_data['pos'] + 1) if ep_rank_data and ep > 0 else "Unranked"
         ep_rank_display = f"#{ep_rank}" if isinstance(ep_rank, int) else ep_rank
         
-        event_data = await db.fetch_one("SELECT COUNT(*) as total FROM event_redemptions WHERE user_id = %s", (target.id,))
         events_attended = event_data['total'] if event_data else 0
         
-        from services.ep_service import ep_service
         current_ep_tier, next_ep_tier, ep_progress = ep_service.get_tier_progress(ep)
         
         # EP progress bar
@@ -527,8 +543,15 @@ class XpCog(commands.Cog, name="Leveling"):
         msl_tag = "  ⸱  🎓 MSL" if is_msl else ""
         
         # ── Badges ──
-        from services.badge_service import badge_service
-        badges = await badge_service.get_badges(target.id)
+        import json
+        badges = []
+        if user_data and user_data.get('badges'):
+            try:
+                parsed = json.loads(user_data['badges'])
+                if isinstance(parsed, list):
+                    badges = parsed
+            except Exception:
+                pass
         
         BADGE_ICONS = {
             "Twilight Pilgrim": "🌅",

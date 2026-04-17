@@ -155,12 +155,6 @@ class EPService:
         """
         Process an EP change for a user: update DB, assign correct sub-tier role,
         and send rank-up notifications.
-        
-        Args:
-            is_placement: If True, this is a placement/bonus award — skip EP multiplier.
-                          Only participation EP (is_placement=False, ep_change > 0) gets multiplied.
-        
-        Returns the user's new EP total.
         """
         if not guild:
             return 0
@@ -175,7 +169,7 @@ class EPService:
             multiplier = await promo_service.get_ep_multiplier(user_id)
             if multiplier != 1.0:
                 final_ep_change = int(ep_change * multiplier)
-                logger.info(
+                logger.debug(
                     f"EP multiplier applied for {user_id}: {ep_change} × {multiplier} = {final_ep_change}"
                 )
 
@@ -203,59 +197,52 @@ class EPService:
         # 2. Resolve the correct sub-tier
         new_sub_tier = self.get_sub_tier(new_ep)
 
-        # 3. Get the member and identify their current EP role
         member = guild.get_member(user_id)
         if not member:
             return new_ep
 
-        # Build lookup of all 34 EP roles
-        all_ep_roles = []
-        current_held_role = None
-
-        for role_name in ALL_EP_ROLE_NAMES:
-            settings_key = f"ep_role_{role_name.replace(' ', '_')}"
-            role_id = await settings_service.get_int(settings_key)
-            if role_id:
-                role_obj = guild.get_role(role_id)
-                if role_obj:
-                    all_ep_roles.append(role_obj)
-                    if role_obj in member.roles:
-                        current_held_role = (role_name, role_obj)
-
-        # 4. Sub-10k: assign the correct sub-tier role
-        if new_ep < MYTHIC_FLOOR:
-            current_name = current_held_role[0] if current_held_role else None
-            if current_name != new_sub_tier:
-                new_role_id = await settings_service.get_int(
-                    f"ep_role_{new_sub_tier.replace(' ', '_')}"
-                )
-                if new_role_id:
-                    new_role_obj = guild.get_role(new_role_id)
-                    if new_role_obj:
-                        try:
-                            # Strip ALL EP roles first, then add the correct one
-                            roles_to_remove = [r for r in all_ep_roles if r in member.roles]
-                            if roles_to_remove:
-                                await member.remove_roles(
-                                    *roles_to_remove, reason="EP Sub-Tier Shift"
-                                )
-                            await member.add_roles(
-                                new_role_obj, reason=f"EP Sub-Tier: {new_sub_tier}"
-                            )
-                        except discord.Forbidden:
-                            logger.error(
-                                f"Missing permissions to update EP roles for {user_id}"
-                            )
-
-        # 5. If they crossed the Mythic threshold (up or down), recalculate the ladder
-        was_mythic = current_held_role and current_held_role[0] in MYTHIC_LADDER
+        # Short-circuit: if the local tier hasn't changed, and we aren't crossing Mythic thresholds, we don't need role logic.
+        was_mythic = old_ep >= MYTHIC_FLOOR
         is_mythic = new_ep >= MYTHIC_FLOOR
+        
+        tier_changed = new_sub_tier != old_sub_tier
+        mythic_ladder_shift = is_mythic or (not is_mythic and was_mythic)
+        
+        if not tier_changed and not mythic_ladder_shift:
+            return new_ep # No role changes necessary, exit early.
 
-        if is_mythic or (not is_mythic and was_mythic):
+        # 3. If tier changed, resolve roles and assign
+        if tier_changed and not is_mythic:
+            all_ep_roles = []
+            
+            # Sub-10k: assign the correct sub-tier role
+            for role_name in ALL_EP_ROLE_NAMES:
+                settings_key = f"ep_role_{role_name.replace(' ', '_')}"
+                role_id = await settings_service.get_int(settings_key)
+                if role_id:
+                    role_obj = guild.get_role(role_id)
+                    if role_obj:
+                        all_ep_roles.append(role_obj)
+            
+            new_role_id = await settings_service.get_int(f"ep_role_{new_sub_tier.replace(' ', '_')}")
+            if new_role_id:
+                new_role_obj = guild.get_role(new_role_id)
+                if new_role_obj and new_role_obj not in member.roles:
+                    try:
+                        # Strip ALL EP roles first, then add the correct one
+                        roles_to_remove = [r for r in all_ep_roles if r in member.roles]
+                        if roles_to_remove:
+                            await member.remove_roles(*roles_to_remove, reason="EP Sub-Tier Shift")
+                        await member.add_roles(new_role_obj, reason=f"EP Sub-Tier: {new_sub_tier}")
+                    except discord.Forbidden:
+                        logger.error(f"Missing permissions to update EP roles for {user_id}")
+
+        # 4. If they crossed the Mythic threshold (up or down) or are climbing ladder
+        if mythic_ladder_shift:
             await self.recalculate_mythic_roles(guild)
 
-        # 6. EP rank-up notification → alert channel
-        if new_ep > old_ep and new_sub_tier != old_sub_tier:
+        # 5. EP rank-up notification → alert channel
+        if new_ep > old_ep and tier_changed:
             await self._send_ep_rank_notification(guild, member, old_sub_tier, new_sub_tier, new_ep)
 
         return new_ep
