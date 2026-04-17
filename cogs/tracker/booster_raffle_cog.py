@@ -68,17 +68,12 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             await self.bot.wait_until_ready()
             now = datetime.datetime.now(TZ_MANILA)
 
-            # Only trigger recovery if we're past Sunday 8:00 AM of this week
-            # (i.e., the draw window has passed)
+            # The current week's draw is scheduled for Sunday (ISO day 7) at 8:00 AM.
+            # We only need crash recovery if the time for this week's draw has passed.
             iso_weekday = now.isoweekday()  # Mon=1 ... Sun=7
-            past_draw_window = (
-                iso_weekday == 7 and now.hour >= 8  # Sunday after 8 AM
-            ) or (
-                iso_weekday < 7  # Mon–Sat (Sunday draw was missed entirely)
-            )
-
-            if not past_draw_window:
-                return  # It's Sunday before 8 AM, the loop will handle it
+            
+            if not (iso_weekday == 7 and now.hour >= 8):
+                return  # It is either Mon-Sat, or Sunday before 8 AM. No recovery needed.
 
             existing = await db.fetch_one('''
                 SELECT COUNT(*) as cnt FROM booster_raffle_history

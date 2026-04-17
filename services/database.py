@@ -784,6 +784,21 @@ class Database:
                     return cur
                 return cur
     
+    async def executemany(self, query: str, params_list: list[tuple]):
+        """Execute the same query with multiple parameter sets in a single connection.
+        
+        Uses a single connection from the pool for all iterations,
+        reducing connection acquisition overhead for batch operations.
+        Autocommit is enabled in DB_CONFIG, so each execute commits individually.
+        """
+        if not params_list:
+            return
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                for params in params_list:
+                    await cur.execute(query, params)
+    
     async def insert_get_id(self, query: str, params: tuple = ()) -> int:
         """Execute an INSERT and return the AUTO_INCREMENT id."""
         pool = await self.get_pool()

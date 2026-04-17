@@ -238,6 +238,9 @@ class QuizCog(commands.Cog, name="quiz"):
 
     async def _execute_session(self, channel: discord.TextChannel, guild: discord.Guild):
         """Core session loop: unlock → 10 rounds → payout → lock."""
+        loop = asyncio.get_running_loop()
+        session_start = loop.time()
+
         if len(self.questions) < ROUNDS_PER_SESSION:
             await self._safe_send(channel, content="❌ Not enough questions loaded. Quiz cancelled.")
             return
@@ -288,6 +291,7 @@ class QuizCog(commands.Cog, name="quiz"):
         await asyncio.sleep(5)
 
         # ─── ROUNDS ─────────────────────────────────────────────────
+        rounds_start = loop.time()
         for round_num, q in enumerate(session_questions, 1):
             try:
                 await self._run_round(channel, round_num, q, leaderboard)
@@ -300,11 +304,21 @@ class QuizCog(commands.Cog, name="quiz"):
 
             # Delay and cleanup for each round is now handled internally by _run_round.
 
+        rounds_elapsed = loop.time() - rounds_start
+
         # ─── LOCK CHANNEL ────────────────────────────────────────────
         await self._lock_channel(channel, locked=True)
 
+        finalize_start = loop.time()
         # ─── FINAL LEADERBOARD & PAYOUTS ─────────────────────────────
         await self._finalize_session(channel, guild, leaderboard)
+        finalize_elapsed = loop.time() - finalize_start
+
+        session_elapsed = loop.time() - session_start
+        logger.info(
+            f"Quiz session completed: total={session_elapsed:.1f}s, "
+            f"rounds={rounds_elapsed:.1f}s, finalize_embed={finalize_elapsed:.1f}s"
+        )
 
     async def _run_round(self, channel: discord.TextChannel, round_num: int, question: dict, leaderboard: dict):
         """
@@ -410,30 +424,38 @@ class QuizCog(commands.Cog, name="quiz"):
 
             # Log to DB & update streaks
             try:
+                answer_log_params = []
+                question_stat_params = []
+                streak_params = []
+
                 for i, s in enumerate(round_scorers):
                     is_first = (i == 0)
-                    # 1. Log Individual Answer
-                    await db.execute('''
-                        INSERT INTO quiz_answer_logs (user_id, question_id, question_text, time_taken, is_first)
-                        VALUES (%s, %s, %s, %s, %s)
-                    ''', (s['user_id'], question['id'], question['question'], s['time_taken'], is_first))
+                    answer_log_params.append((s['user_id'], question['id'], question['question'], s['time_taken'], is_first))
+                    question_stat_params.append((s['time_taken'], question['id']))
+                    streak_params.append((s['user_id'],))
 
-                    # 2. Update Question Stats (Correct/Time)
-                    await db.execute('''
-                        UPDATE quiz_question_stats 
-                        SET times_correct = times_correct + 1, total_time_taken = total_time_taken + %s
-                        WHERE question_id = %s
-                    ''', (s['time_taken'], question['id']))
+                # 1. Log Individual Answer
+                await db.executemany('''
+                    INSERT INTO quiz_answer_logs (user_id, question_id, question_text, time_taken, is_first)
+                    VALUES (%s, %s, %s, %s, %s)
+                ''', answer_log_params)
 
-                    # 3. Update User Streak (Increment)
-                    await db.execute('''
-                        INSERT INTO quiz_user_streaks (user_id, current_streak, max_streak, last_correct_at)
-                        VALUES (%s, 1, 1, CURRENT_TIMESTAMP)
-                        ON DUPLICATE KEY UPDATE 
-                            current_streak = current_streak + 1,
-                            max_streak = GREATEST(max_streak, current_streak + 1),
-                            last_correct_at = CURRENT_TIMESTAMP
-                    ''', (s['user_id'],))
+                # 2. Update Question Stats (Correct/Time)
+                await db.executemany('''
+                    UPDATE quiz_question_stats 
+                    SET times_correct = times_correct + 1, total_time_taken = total_time_taken + %s
+                    WHERE question_id = %s
+                ''', question_stat_params)
+
+                # 3. Update User Streak (Increment)
+                await db.executemany('''
+                    INSERT INTO quiz_user_streaks (user_id, current_streak, max_streak, last_correct_at)
+                    VALUES (%s, 1, 1, CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE 
+                        current_streak = current_streak + 1,
+                        max_streak = GREATEST(max_streak, current_streak + 1),
+                        last_correct_at = CURRENT_TIMESTAMP
+                ''', streak_params)
                 
                 # 4. Reset Streaks for anyone who missed
                 placeholders = ', '.join(['%s'] * len(scored_users))
@@ -496,7 +518,7 @@ class QuizCog(commands.Cog, name="quiz"):
                     return False
                 return True
 
-            await channel.purge(limit=300, after=after_time, check=check_purge)
+            await channel.purge(limit=50, after=after_time, check=check_purge)
         except Exception as e:
             logger.error(f"Error purging round {round_num} messages: {e}")
 
@@ -523,15 +545,14 @@ class QuizCog(commands.Cog, name="quiz"):
 
         today_str = datetime.now(PHT).strftime('%Y-%m-%d')
 
-        # ─── PHASE 1: Determine who is eligible (not yet paid today) ─────
-        already_paid_set: set[int] = set()
-        for user_id, _ in sorted_board:
-            already_paid = await db.fetch_one(
-                "SELECT 1 FROM quiz_payouts WHERE user_id = %s AND payout_date = %s",
-                (user_id, today_str)
-            )
-            if already_paid:
-                already_paid_set.add(user_id)
+        # ─── FAST PATH: Determine who is eligible (not yet paid today) ─────
+        user_ids = [uid for uid, _ in sorted_board]
+        placeholders = ', '.join(['%s'] * len(user_ids))
+        already_paid_rows = await db.fetch_all(
+            f"SELECT user_id FROM quiz_payouts WHERE user_id IN ({placeholders}) AND payout_date = %s",
+            (*user_ids, today_str)
+        )
+        already_paid_set = {row['user_id'] for row in already_paid_rows}
 
         # ─── PHASE 2: Assign EP tiers via cascading ─────────────────────
         # Walk the sorted leaderboard; skip already-paid users for tier assignment
@@ -570,17 +591,7 @@ class QuizCog(commands.Cog, name="quiz"):
                 line = f"{medal} {name} — **{score} pts** | *Already claimed today*"
             elif user_id in user_payouts:
                 ep = user_payouts[user_id]
-                try:
-                    from services.ep_service import ep_service
-                    await ep_service.process_ep_update(guild, user_id, ep)
-                    await db.execute(
-                        "INSERT INTO quiz_payouts (user_id, payout_date, ep_awarded) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)",
-                        (user_id, today_str, ep)
-                    )
-                    line = f"{medal} {name} — **{score} pts** | +**{ep} EP** ✅"
-                except Exception as e:
-                    logger.error(f"Failed to award quiz EP to {user_id}: {e}")
-                    line = f"{medal} {name} — **{score} pts** | +{ep} EP ❌ (error)"
+                line = f"{medal} {name} — **{score} pts** | +**{ep} EP** ✅"
             else:
                 line = f"{medal} {name} — **{score} pts**"
 
@@ -600,16 +611,56 @@ class QuizCog(commands.Cog, name="quiz"):
         final_embed.set_footer(text="Next session runs automatically. Daily EP cap: 1 payout per user per day.")
         await self._safe_send(channel, embed=final_embed)
         
-        # ─── PHASE 4: Record Raw Scores for Weekly Leaderboard ───────────
+        # ─── SLOW PATH: EP updates + history in background ──────────────
+        asyncio.create_task(
+            self._process_payouts_background(guild, user_payouts, sorted_board, today_str)
+        )
+
+    async def _process_payouts_background(self, guild: discord.Guild, user_payouts: dict, sorted_board: list, today_str: str):
+        """
+        Background task: process EP updates and record quiz history.
+        Fire-and-forget — errors are logged per-user, never crash the bot.
+        Uses 0.5s sleep between EP updates.
+        """
+        loop = asyncio.get_running_loop()
+        payout_start = loop.time()
+        success_count = 0
+        error_count = 0
+
         try:
-            for user_id, score in sorted_board:
-                if score > 0:
+            from services.ep_service import ep_service
+
+            for user_id, ep in user_payouts.items():
+                try:
+                    await ep_service.process_ep_update(guild, user_id, ep)
                     await db.execute(
-                        "INSERT INTO quiz_history (user_id, score) VALUES (%s, %s)",
-                        (user_id, score)
+                        "INSERT INTO quiz_payouts (user_id, payout_date, ep_awarded) "
+                        "VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)",
+                        (user_id, today_str, ep)
                     )
+                    success_count += 1
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"Background EP payout failed for {user_id}: {e}")
+                # Rate limit protection
+                await asyncio.sleep(0.5)
+
+            # Batch record quiz_history
+            history_params = [(uid, score) for uid, score in sorted_board if score > 0]
+            if history_params:
+                await db.executemany(
+                    "INSERT INTO quiz_history (user_id, score) VALUES (%s, %s)",
+                    history_params
+                )
+
         except Exception as e:
-            logger.error(f"Failed to record quiz_history: {e}")
+            logger.error(f"Background payout task crashed: {e}", exc_info=True)
+
+        elapsed = loop.time() - payout_start
+        logger.info(
+            f"Quiz background payouts completed: {success_count} ok, "
+            f"{error_count} errors, {elapsed:.1f}s elapsed"
+        )
 
     # ─── CHANNEL LOCK/UNLOCK ────────────────────────────────────────
 

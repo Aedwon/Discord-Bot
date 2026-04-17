@@ -6,7 +6,13 @@ from services.database import db
 
 
 class SettingsService:
-    """Handles server settings stored in database."""
+    """Handles server settings stored in database with write-through cache.
+    
+    All reads are served from an in-memory cache (O(1), zero DB queries).
+    Writes go to DB first (source of truth), then update the cache.
+    This follows the same caching pattern used by verification_service
+    and promo_service.
+    """
     
     # Default settings keys
     KEYS = {
@@ -48,15 +54,24 @@ class SettingsService:
         # Promo status tracking
         "promo_invite_url": "discord.gg/themslnetwork",
     }
+
+    def __init__(self):
+        self._cache: dict[str, str] = {}
+        self._loaded: bool = False
+
+    async def _ensure_loaded(self):
+        """Load all settings into memory on first access."""
+        if self._loaded:
+            return
+        rows = await db.fetch_all('SELECT `key`, value FROM server_settings')
+        self._cache = {row['key']: row['value'] for row in rows} if rows else {}
+        self._loaded = True
     
     async def get(self, key: str) -> str:
-        """Get a setting value."""
-        result = await db.fetch_one(
-            'SELECT value FROM server_settings WHERE `key` = %s',
-            (key,)
-        )
-        if result:
-            return result['value']
+        """Get a setting value. O(1) from cache after first load."""
+        await self._ensure_loaded()
+        if key in self._cache:
+            return self._cache[key]
         return self.KEYS.get(key, "0")
     
     async def get_int(self, key: str) -> int:
@@ -68,19 +83,26 @@ class SettingsService:
             return 0
     
     async def set(self, key: str, value: str) -> None:
-        """Set a setting value."""
+        """Set a setting value. Write-through: DB first, then cache."""
         await db.execute('''
             INSERT INTO server_settings (`key`, value) VALUES (%s, %s)
             ON DUPLICATE KEY UPDATE value = VALUES(value)
         ''', (key, value))
+        # Update cache after successful DB write
+        await self._ensure_loaded()
+        self._cache[key] = value
     
     async def get_all(self) -> dict:
-        """Get all settings."""
-        rows = await db.fetch_all('SELECT `key`, value FROM server_settings')
+        """Get all settings (defaults merged with stored values)."""
+        await self._ensure_loaded()
         settings = dict(self.KEYS)  # Start with defaults
-        for row in rows:
-            settings[row['key']] = row['value']
+        settings.update(self._cache)
         return settings
+
+    def invalidate(self):
+        """Clear cache. Next get() will reload from DB."""
+        self._cache.clear()
+        self._loaded = False
     
     async def get_color_roles(self) -> dict:
         """Get color roles as dict {name: role_id}."""
