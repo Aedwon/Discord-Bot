@@ -14,7 +14,7 @@ jobs:
           PTERODACTYL_SERVER_ID: ${{ secrets.PTERODACTYL_SERVER_ID }}
           PTERODACTYL_API_KEY: ${{ secrets.PTERODACTYL_API_KEY }}
         run: |
-          curl -f --fail-with-body -X POST \
+          curl --fail-with-body -X POST \
             "$PTERODACTYL_HOST/api/client/servers/$PTERODACTYL_SERVER_ID/power" \
             -H "Authorization: Bearer $PTERODACTYL_API_KEY" \
             -H "Content-Type: application/json" \
