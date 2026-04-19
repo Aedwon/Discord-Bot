@@ -519,15 +519,15 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
 
     @app_commands.command(
         name="booster-raffle-export",
-        description="Export the latest (or a specific) booster raffle winners to CSVs (Admin only)"
+        description="Export raffle winners to CSV (Admin only)"
     )
     @app_commands.describe(
-        target_raffle="Select a specific raffle draw to export, or paste a message link/ID. (Defaults to latest)"
+        target_raffle="Select a specific draw or paste a message link/ID. (Defaults to latest)"
     )
     @app_commands.autocomplete(target_raffle=target_raffle_autocomplete)
     @app_commands.default_permissions(administrator=True)
     async def raffle_export(self, interaction: discord.Interaction, target_raffle: str = None):
-        """Build MSL and Non-MSL CSVs for the most recent booster raffle draw."""
+        """Build MSL and Non-MSL CSVs for the target booster raffle draw."""
         await interaction.response.defer(ephemeral=True)
         
         target_date = None
@@ -572,7 +572,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         )
         verified_map = {rk['user_id']: rk for rk in verified_rows}
         
-        unverified_ids = [wid for wid in winner_ids if wid not in verified_map]
+        unverified_ids = [unv_wid for unv_wid in winner_ids if unv_wid not in verified_map]
             
         # 4. Filter into MSL and Non-MSL arrays
         msl_list = []
@@ -581,7 +581,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         date_str = target_date.strftime("%Y/%m/%d")
         remarks_str = f"MSL Network Discord - Server Booster Raffle - ({date_str})"
         
-        verified_winner_ids = [wid for wid in winner_ids if wid in verified_map]
+        verified_winner_ids = [v_wid for v_wid in winner_ids if v_wid in verified_map]
         for wid in verified_winner_ids:
             v_info = verified_map[wid]
             uid = v_info['mlbb_uid']
@@ -671,10 +671,10 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
 
     @app_commands.command(
         name="booster-raffle-reroll-msl",
-        description="Retroactively exclude MSL members from the latest (or specific) draw and reallocate slots (Admin only)"
+        description="Exclude MSL members from a draw and reallocate slots (Admin only)"
     )
     @app_commands.describe(
-        target_raffle="Select a specific raffle draw to reroll, or paste a message link/ID. (Defaults to latest)"
+        target_raffle="Select a specific draw or paste a message link/ID. (Defaults to latest)"
     )
     @app_commands.autocomplete(target_raffle=target_raffle_autocomplete)
     @app_commands.default_permissions(administrator=True)
