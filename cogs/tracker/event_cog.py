@@ -509,6 +509,14 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="setup-workflow", description="Configure automated tracking rules for a scheduled event.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The scheduled Discord event to track.",
+        archetype="The type of activity to track (Audio, Text, Forum, or Kiosk).",
+        threshold="Goal for the reward (e.g., minutes in VC, total messages, or threads created).",
+        reward_ep="The amount of EP to award automatically once the threshold is met.",
+        target_channel="The specific channel to monitor for activity.",
+        require_registration="If True, only users who registered via /event register will earn points."
+    )
     @app_commands.choices(archetype=[
         app_commands.Choice(name="Audio/Stage (Presence Duration)", value="audio"),
         app_commands.Choice(name="Text Activity (Message Count)", value="text"),
@@ -524,6 +532,9 @@ class EventCog(commands.Cog, name="Event"):
         if not discord_event: return await interaction.response.send_message("❌ Discord event not found.", ephemeral=True)
         
         # Validation
+        if threshold <= 0: return await interaction.response.send_message("❌ Threshold must be greater than 0.", ephemeral=True)
+        if reward_ep < 0 or reward_ep > 100000: return await interaction.response.send_message("❌ Reward EP must be between 0 and 100,000.", ephemeral=True)
+        
         if archetype in ['audio', 'text', 'forum'] and not target_channel:
             return await interaction.response.send_message(f"❌ Archetype `{archetype}` requires a `target_channel`.", ephemeral=True)
 
@@ -554,6 +565,7 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="status-monitor", description="Check real-time tracking progress for an active event workflow.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(event_id="The event to monitor progress for.")
     @app_commands.default_permissions(administrator=True)
     async def event_status_monitor(self, interaction: discord.Interaction, event_id: str):
         try: ev_id = int(event_id)
@@ -588,6 +600,7 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="setup-rewards", description="Define the exact prize pool structure before an event starts.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(event_id="The event to define prize pools for.")
     @app_commands.default_permissions(administrator=True)
     async def event_setup_rewards(self, interaction: discord.Interaction, event_id: str):
         try: event_id_int = int(event_id)
@@ -600,7 +613,7 @@ class EventCog(commands.Cog, name="Event"):
             prizes = discord.ui.TextInput(
                 label="Prize Structure",
                 style=discord.TextStyle.long,
-                placeholder="Format: Placement Name | EP | Max Winners\n1st Place | 5000 | 1\nRunner Up | 1000 | 2\nParticipation | 50 | 100",
+                placeholder="Name | EP | Max winners\n1st Place | 5000 | 1\nRunner Up | 1000 | 2\nParticipation | 50 | 100",
                 required=True,
                 max_length=1500,
             )
@@ -651,6 +664,13 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="register", description="Deploy a Registration Embed for a Native Discord Event.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The scheduled event to open registration for.",
+        channel="The channel where the registration embed will be sent.",
+        discohook_link="Paste the 'Share' URL from Discohook.org (JSON/Base64) to customize the embed.",
+        max_participants="Optional: The maximum number of users allowed to register.",
+        thread_mode="Choose if a private thread should be created for each registrant."
+    )
     @app_commands.choices(thread_mode=[
         app_commands.Choice(name="None (Best for Forums)", value="none"),
         app_commands.Choice(name="Private Thread", value="private")
@@ -659,6 +679,9 @@ class EventCog(commands.Cog, name="Event"):
     async def event_register(self, interaction: discord.Interaction, event_id: str, channel: discord.TextChannel, discohook_link: str, max_participants: int = None, thread_mode: str = "none"):
         try: event_id_int = int(event_id)
         except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
+        
+        if max_participants is not None and max_participants <= 0:
+            return await interaction.response.send_message("❌ max_participants must be positive.", ephemeral=True)
         
         discord_event = interaction.guild.get_scheduled_event(event_id_int)
         if not discord_event: return await interaction.response.send_message("❌ Event not found natively.", ephemeral=True)
@@ -722,11 +745,17 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="kiosk", description="Spawn a Participation Button for a Native Discord Event.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The event associated with this participation button.",
+        ep="The amount of EP to award when the button is clicked.",
+        description="The message to display in the kiosk embed."
+    )
     @app_commands.default_permissions(administrator=True)
     async def event_kiosk(self, interaction: discord.Interaction, event_id: str, ep: int, description: str = "Click the button below to claim your participation points!"):
         try: event_id_int = int(event_id)
         except ValueError: return await interaction.response.send_message("❌ Select an event from autocomplete.", ephemeral=True)
-        if not (1 <= ep <= 100000): return await interaction.response.send_message("❌ EP bounds violation.", ephemeral=True)
+        if not (1 <= ep <= 100000): return await interaction.response.send_message("❌ EP bounds violation (Must be 1 - 100,000).", ephemeral=True)
+        if len(description) > 2000: return await interaction.response.send_message("❌ Description too long (Max 2000 characters).", ephemeral=True)
             
         discord_event = interaction.guild.get_scheduled_event(event_id_int)
         event_name = discord_event.name if discord_event else f"Scheduled Event: {event_id}"
@@ -756,11 +785,15 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="cap-placement", description="Lock a strict Budget limit on an Event's Placements.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The event to apply the budget cap to.",
+        total_budget="The maximum total EP that can be awarded for placements in this event."
+    )
     @app_commands.default_permissions(administrator=True)
     async def cap_placement(self, interaction: discord.Interaction, event_id: str, total_budget: int):
         try: event_id_int = int(event_id)
         except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
-        if total_budget < 0 or total_budget > 10000000: return await interaction.response.send_message("❌ Budget absurd.", ephemeral=True)
+        if total_budget < 0 or total_budget > 10000000: return await interaction.response.send_message("❌ Budget absurd (Must be 0 - 10,000,000).", ephemeral=True)
             
         await db.execute("""
             INSERT INTO guild_event_caps (event_id, total_budget, set_by) 
@@ -836,6 +869,7 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="award", description="Award a predefined prize to an event winner.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(event_id="The event to award a prize for.")
     @app_commands.default_permissions(administrator=True)
     async def event_award(self, interaction: discord.Interaction, event_id: str):
         try: ev_id = int(event_id)
@@ -844,6 +878,10 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="close-registration", description="Close an event, post results, and optionally payout participation.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The event to close.",
+        payout_participation="If True, automatically awards participation EP to all registrants."
+    )
     @app_commands.default_permissions(administrator=True)
     async def event_close(self, interaction: discord.Interaction, event_id: str, payout_participation: bool = True):
         try: ev_id = int(event_id)
@@ -901,11 +939,18 @@ class EventCog(commands.Cog, name="Event"):
         await interaction.followup.send("✅ Event closed organically. Results posted to embed, and participation payouts deployed.")
     @event_group.command(name="placement", description="Award a Winner's Placement (Strict Check against Event Budgets).")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The event to award a placement for.",
+        user="The member who earned the placement.",
+        placement="The name of the placement (e.g., '1st Place', 'MVP').",
+        total_ep_value="The total EP amount this placement should receive (adjusts for previous rewards)."
+    )
     @app_commands.default_permissions(administrator=True)
     async def event_placement(self, interaction: discord.Interaction, event_id: str, user: discord.Member, placement: str, total_ep_value: int):
         try: event_id_int = int(event_id)
         except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
-        if not (1 <= total_ep_value <= 100000): return await interaction.response.send_message("❌ EP Bounds Violation.", ephemeral=True)
+        if not (1 <= total_ep_value <= 100000): return await interaction.response.send_message("❌ EP Bounds Violation (Must be 1 - 100,000).", ephemeral=True)
+        if len(placement) > 100: return await interaction.response.send_message("❌ Placement name too long (Max 100 characters).", ephemeral=True)
             
         await interaction.response.defer() 
         
@@ -957,6 +1002,10 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="revoke", description="Senior Admins: Erase a false payout entirely.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The event to revoke rewards from.",
+        user="The member whose rewards will be stripped."
+    )
     @app_commands.default_permissions(administrator=True)
     async def event_revoke(self, interaction: discord.Interaction, event_id: str, user: discord.Member):
         try: event_id_int = int(event_id)
@@ -976,6 +1025,7 @@ class EventCog(commands.Cog, name="Event"):
 
     @event_group.command(name="status", description="Generate a Live Dashboard measuring Event Health and Peak VC Trackers.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(event_id="The event to generate a status dashboard for.")
     @app_commands.default_permissions(administrator=True)
     async def event_status(self, interaction: discord.Interaction, event_id: str):
         try: event_id_int = int(event_id)
@@ -1013,6 +1063,10 @@ class EventCog(commands.Cog, name="Event"):
     
     @overflow_group.command(name="add", description="Link an additional overflow Voice Channel instantly to a scheduled event.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The event to link this overflow channel to.",
+        channel="The voice channel to add as an overflow for the peak tracker."
+    )
     @app_commands.default_permissions(administrator=True)
     async def overflow_add(self, interaction: discord.Interaction, event_id: str, channel: discord.VoiceChannel):
         try: event_id_int = int(event_id)
@@ -1026,6 +1080,10 @@ class EventCog(commands.Cog, name="Event"):
         
     @overflow_group.command(name="remove", description="Revoke an overflow Voice Channel mapping.")
     @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.describe(
+        event_id="The event to detach this overflow channel from.",
+        channel="The voice channel to remove from the peak tracker."
+    )
     @app_commands.default_permissions(administrator=True)
     async def overflow_remove(self, interaction: discord.Interaction, event_id: str, channel: discord.VoiceChannel):
         try: event_id_int = int(event_id)
