@@ -12,6 +12,8 @@ import logging
 import csv
 import random
 import asyncio
+import json
+import os
 from datetime import datetime, timedelta, timezone, time
 
 from services.database import db
@@ -47,6 +49,7 @@ PAYOUT_PARTICIPATION = 50
 EMBED_DESC_LIMIT = 4096
 
 CSV_PATH = "MLBB Quiz Questions.csv"
+JOURNAL_PATH = "quiz_session_journal.json"
 
 
 class QuizCog(commands.Cog, name="quiz"):
@@ -59,6 +62,10 @@ class QuizCog(commands.Cog, name="quiz"):
         # Track which question IDs were used today (noon + evening don't repeat)
         self._used_question_ids: set[str] = set()
         self._used_questions_date: str = ""  # YYYY-MM-DD in PHT
+
+        # In-memory buffering & crash recovery journal
+        self._session_data: dict = {}
+        self._session_streaks: dict = {}
 
     async def cog_load(self):
         """Load questions from CSV on extension load."""
@@ -114,8 +121,103 @@ class QuizCog(commands.Cog, name="quiz"):
                     if channel:
                         await self._lock_channel(channel, locked=True)
                         logger.info("Quiz channel re-locked on startup (crash recovery)")
+                        # Sync any unfinished sessions to DB
+                        await self._sync_journal_to_db(guild)
         except Exception as e:
             logger.error(f"Startup quiz cleanup error: {e}")
+
+    async def _fetch_active_streaks(self) -> dict[int, dict]:
+        """Fetch all users who currently have an active streak (>0)."""
+        rows = await db.fetch_all("SELECT user_id, current_streak, max_streak FROM quiz_user_streaks WHERE current_streak > 0")
+        return {int(r['user_id']): {"curr": r['current_streak'], "max": r['max_streak']} for r in rows}
+
+    def _write_journal(self):
+        """Write current session data to a local JSON file for crash recovery."""
+        try:
+            # We must convert int keys to strings for JSON
+            payload = {
+                "answer_logs": self._session_data.get("answer_logs", []),
+                "question_stats": self._session_data.get("question_stats", {}),
+                "user_streaks": {str(uid): s for uid, s in self._session_streaks.items()},
+                "leaderboard": {str(uid): sc for uid, sc in self._session_data.get("leaderboard", {}).items()},
+                "pht_date": datetime.now(PHT).strftime('%Y-%m-%d %H:%M:%S')
+            }
+            with open(JOURNAL_PATH, 'w') as f:
+                json.dump(payload, f)
+        except Exception as e:
+            logger.error(f"Failed to write quiz journal: {e}")
+
+    def _clear_journal(self):
+        """Delete the local journal file after successful DB sync."""
+        if os.path.exists(JOURNAL_PATH):
+            try:
+                os.remove(JOURNAL_PATH)
+            except Exception as e:
+                logger.error(f"Failed to delete journal: {e}")
+
+    async def _sync_journal_to_db(self, guild: discord.Guild):
+        """Replay a crashed session from JSON and commit to DB."""
+        if not os.path.exists(JOURNAL_PATH):
+            return
+
+        try:
+            with open(JOURNAL_PATH, 'r') as f:
+                data = json.load(f)
+            
+            logger.info("Found unfinished quiz journal — syncing to database...")
+            
+            # 1. Sync Answer Logs
+            if data.get("answer_logs"):
+                await db.executemany('''
+                    INSERT INTO quiz_answer_logs (user_id, question_id, question_text, time_taken, is_first)
+                    VALUES (%s, %s, %s, %s, %s)
+                ''', [tuple(x) for x in data["answer_logs"]])
+
+            # 2. Sync Question Stats
+            if data.get("question_stats"):
+                stat_params = []
+                for qid, s in data["question_stats"].items():
+                    stat_params.append((qid, s['text'], s['asked'], s['correct'], s['time']))
+                
+                await db.executemany('''
+                    INSERT INTO quiz_question_stats (question_id, question_text, times_asked, times_correct, total_time_taken)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE 
+                        times_asked = times_asked + VALUES(times_asked),
+                        times_correct = times_correct + VALUES(times_correct),
+                        total_time_taken = total_time_taken + VALUES(total_time_taken),
+                        question_text = VALUES(question_text)
+                ''', stat_params)
+
+            # 3. Sync User Streaks
+            if data.get("user_streaks"):
+                streak_params = []
+                for uid_str, s in data["user_streaks"].items():
+                    streak_params.append((int(uid_str), s['curr']))
+                
+                await db.executemany('''
+                    INSERT INTO quiz_user_streaks (user_id, current_streak, max_streak, last_correct_at)
+                    VALUES (%s, %s, 0, CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE 
+                        current_streak = VALUES(current_streak),
+                        max_streak = GREATEST(max_streak, VALUES(current_streak)),
+                        last_correct_at = IF(VALUES(current_streak) > 0, CURRENT_TIMESTAMP, last_correct_at)
+                ''', streak_params)
+
+            # 4. Sync Leaderboard & History
+            if data.get("leaderboard"):
+                history_params = [(int(uid), score) for uid, score in data["leaderboard"].items() if score > 0]
+                if history_params:
+                    await db.executemany(
+                        "INSERT INTO quiz_history (user_id, score) VALUES (%s, %s)",
+                        history_params
+                    )
+
+            logger.info("Quiz journal sync complete.")
+            self._clear_journal()
+
+        except Exception as e:
+            logger.error(f"Error syncing quiz journal: {e}", exc_info=True)
 
     # ─── SAFE CHANNEL SEND ──────────────────────────────────────────
 
@@ -264,8 +366,17 @@ class QuizCog(commands.Cog, name="quiz"):
         for q in session_questions:
             self._used_question_ids.add(q['id'])
 
+        # Buffer session data for bulk DB write at the end
+        self._session_data = {
+            "answer_logs": [],
+            "question_stats": {}, # qid -> {asked, correct, time, text}
+            "leaderboard": {}      # uid -> total_score
+        }
+        self._session_streaks = await self._fetch_active_streaks()
+
         # In-memory session leaderboard: {user_id: total_score}
-        leaderboard: dict[int, int] = {}
+        # (We use self._session_data['leaderboard'] instead of local 'leaderboard')
+        leaderboard = self._session_data['leaderboard']
 
         # ─── UNLOCK CHANNEL ─────────────────────────────────────────
         await self._lock_channel(channel, locked=False)
@@ -325,25 +436,20 @@ class QuizCog(commands.Cog, name="quiz"):
         Run a single round. The channel stays open for the full 20 seconds.
         EVERYONE who types the correct answer earns time-decay points.
         Each user can only score once per round.
-        
-        Edge cases handled:
-        - User answers correctly twice → scored_users set prevents double points
-        - Massive spam of incorrect answers → check function silently rejects them
-        - Channel deleted mid-round → _safe_send returns None, no crash  
-        - Score floored at 0 (never negative even with clock skew)
-        - Embed overflow → scorer list truncated with "...and N more"
         """
         correct_answer = question['answer'].strip().lower()
 
-        # Update global question stats (times asked)
-        try:
-            await db.execute('''
-                INSERT INTO quiz_question_stats (question_id, question_text, times_asked)
-                VALUES (%s, %s, 1)
-                ON DUPLICATE KEY UPDATE times_asked = times_asked + 1, question_text = VALUES(question_text)
-            ''', (question['id'], question['question']))
-        except Exception as e:
-            logger.error(f"Failed to update quiz_question_stats (asked): {e}")
+        # Buffer global question stats (times asked)
+        qid = question['id']
+        if qid not in self._session_data['question_stats']:
+            self._session_data['question_stats'][qid] = {
+                "text": question['question'],
+                "asked": 1,
+                "correct": 0,
+                "time": 0.0
+            }
+        else:
+            self._session_data['question_stats'][qid]['asked'] += 1
 
         # Post the question
         q_embed = discord.Embed(
@@ -363,36 +469,23 @@ class QuizCog(commands.Cog, name="quiz"):
         scored_users: set[int] = set()
 
         def on_message_check(msg: discord.Message) -> bool:
-            """Only match correct answers from non-bot, non-duplicate users in quiz channel."""
-            if msg.channel.id != channel.id:
+            if msg.channel.id != channel.id or msg.author.bot or msg.author.id in scored_users:
                 return False
-            if msg.author.bot:
-                return False
-            if msg.author.id in scored_users:
-                return False  # Already scored this round
-            # Case-insensitive exact match, stripped of whitespace
             return msg.content.strip().lower() == correct_answer
 
         async def collect_answers():
-            """Loop wait_for calls until the 20-second window expires."""
             loop = asyncio.get_running_loop()
             while True:
                 try:
                     elapsed = loop.time() - start_time
                     remaining = SECONDS_PER_ROUND - elapsed
-                    if remaining <= 0.1:  # Small buffer to avoid near-zero timeouts
+                    if remaining <= 0.1:
                         break
 
-                    msg = await self.bot.wait_for(
-                        'message',
-                        check=on_message_check,
-                        timeout=remaining
-                    )
+                    msg = await self.bot.wait_for('message', check=on_message_check, timeout=remaining)
 
-                    # Calculate time-decay score using Discord's server timestamp
                     answer_ts = msg.created_at.timestamp()
-                    time_taken = answer_ts - question_timestamp
-                    time_taken = max(0.0, min(time_taken, float(SECONDS_PER_ROUND)))
+                    time_taken = max(0.0, min(answer_ts - question_timestamp, float(SECONDS_PER_ROUND)))
                     score = max(0, round(1000 * (1 - time_taken / SECONDS_PER_ROUND)))
 
                     scored_users.add(msg.author.id)
@@ -407,8 +500,6 @@ class QuizCog(commands.Cog, name="quiz"):
 
                 except asyncio.TimeoutError:
                     break
-                except asyncio.CancelledError:
-                    break
                 except Exception as e:
                     logger.error(f"Error in collect_answers loop: {e}")
                     break
@@ -416,68 +507,43 @@ class QuizCog(commands.Cog, name="quiz"):
         start_time = asyncio.get_running_loop().time()
         await collect_answers()
 
-        # ─── ANNOUNCE RESULTS ────────────────────────────────────────
+        # ─── PROCESS RESULTS ─────────────────────────────────────────
         win_msg = None
         if round_scorers:
-            # Sort by time taken (fastest first)
             round_scorers.sort(key=lambda x: x['time_taken'])
 
-            # Log to DB & update streaks
-            try:
-                answer_log_params = []
-                question_stat_params = []
-                streak_params = []
-
-                for i, s in enumerate(round_scorers):
-                    is_first = (i == 0)
-                    answer_log_params.append((s['user_id'], question['id'], question['question'], s['time_taken'], is_first))
-                    question_stat_params.append((s['time_taken'], question['id']))
-                    streak_params.append((s['user_id'],))
-
-                # 1. Log Individual Answer
-                await db.executemany('''
-                    INSERT INTO quiz_answer_logs (user_id, question_id, question_text, time_taken, is_first)
-                    VALUES (%s, %s, %s, %s, %s)
-                ''', answer_log_params)
-
-                # 2. Update Question Stats (Correct/Time)
-                await db.executemany('''
-                    UPDATE quiz_question_stats 
-                    SET times_correct = times_correct + 1, total_time_taken = total_time_taken + %s
-                    WHERE question_id = %s
-                ''', question_stat_params)
-
-                # 3. Update User Streak (Increment)
-                await db.executemany('''
-                    INSERT INTO quiz_user_streaks (user_id, current_streak, max_streak, last_correct_at)
-                    VALUES (%s, 1, 1, CURRENT_TIMESTAMP)
-                    ON DUPLICATE KEY UPDATE 
-                        current_streak = current_streak + 1,
-                        max_streak = GREATEST(max_streak, current_streak + 1),
-                        last_correct_at = CURRENT_TIMESTAMP
-                ''', streak_params)
+            # Buffer logs, stats, and streaks
+            for i, s in enumerate(round_scorers):
+                is_first = (i == 0)
+                # 1. Answer Logs
+                self._session_data['answer_logs'].append((s['user_id'], qid, question['question'], s['time_taken'], is_first))
                 
-                # 4. Reset Streaks for anyone who missed
-                placeholders = ', '.join(['%s'] * len(scored_users))
-                await db.execute(f'''
-                    UPDATE quiz_user_streaks 
-                    SET current_streak = 0 
-                    WHERE user_id NOT IN ({placeholders}) AND current_streak > 0
-                ''', tuple(scored_users))
-                
-            except Exception as e:
-                logger.error(f"Failed to update quiz DB stats/streaks: {e}")
+                # 2. Question Stats
+                self._session_data['question_stats'][qid]['correct'] += 1
+                self._session_data['question_stats'][qid]['time'] += s['time_taken']
 
-            # Show only top 10 fastest
+                # 3. User Streaks (Increment)
+                uid = s['user_id']
+                if uid not in self._session_streaks:
+                    self._session_streaks[uid] = {"curr": 1}
+                else:
+                    self._session_streaks[uid]['curr'] += 1
+
+            # 4. Reset Streaks for anyone who missed
+            for uid, s_info in self._session_streaks.items():
+                if uid not in scored_users:
+                    s_info['curr'] = 0
+
+            # Write journal to disk for crash recovery
+            self._write_journal()
+
+            # Display round results
             display_limit = 10
             shown = round_scorers[:display_limit]
             extra = len(round_scorers) - display_limit
 
-            lines = []
-            for i, s in enumerate(shown):
-                prefix = "🏆" if i == 0 else "✅"
-                lines.append(f"{prefix} {s['mention']} — **+{s['score']} pts** ({s['time_taken']:.2f}s)")
-
+            lines = [f"{'🏆' if i == 0 else '✅'} {s['mention']} — **+{s['score']} pts** ({s['time_taken']:.2f}s)" 
+                    for i, s in enumerate(shown)]
             if extra > 0:
                 lines.append(f"*...and {extra} more also scored!*")
 
@@ -489,10 +555,10 @@ class QuizCog(commands.Cog, name="quiz"):
             win_msg = await self._safe_send(channel, embed=win_embed)
         else:
             # Everyone missed — reset ALL active streaks
-            try:
-                await db.execute('UPDATE quiz_user_streaks SET current_streak = 0 WHERE current_streak > 0')
-            except Exception as e:
-                logger.error(f"Failed to reset streaks on timeout: {e}")
+            for s_info in self._session_streaks.values():
+                s_info['curr'] = 0
+            
+            self._write_journal()
 
             timeout_embed = discord.Embed(
                 title=f"⏰ Round {round_num} — Time's Up!",
@@ -501,23 +567,14 @@ class QuizCog(commands.Cog, name="quiz"):
             )
             win_msg = await self._safe_send(channel, embed=timeout_embed)
 
-        # Send the exact answer separately
-        ans_msg = await self._safe_send(channel, content=f"🤫 **The correct answer was:** `{question['answer']}`")
+        await self._safe_send(channel, content=f"🤫 **The correct answer was:** `{question['answer']}`")
 
         # ─── ROUND CLEANUP (PURGE) ───────────────────────────────────
-        # Wait the standard delay so players can read the winner and answer before it vanishes
         await asyncio.sleep(DELAY_BETWEEN_ROUNDS)
-
         try:
-            # Delete q_msg, the users' guesses, and ans_msg. Keep only win_msg.
-            from datetime import timedelta
             after_time = q_msg.created_at - timedelta(seconds=1)
-            
             def check_purge(m: discord.Message) -> bool:
-                if win_msg and m.id == win_msg.id:
-                    return False
-                return True
-
+                return not (win_msg and m.id == win_msg.id)
             await channel.purge(limit=50, after=after_time, check=check_purge)
         except Exception as e:
             logger.error(f"Error purging round {round_num} messages: {e}")
@@ -618,12 +675,59 @@ class QuizCog(commands.Cog, name="quiz"):
 
     async def _process_payouts_background(self, guild: discord.Guild, user_payouts: dict, sorted_board: list, today_str: str):
         """
-        Background task: process EP updates and record quiz history.
-        Fire-and-forget — errors are logged per-user, never crash the bot.
-        Uses 0.5s sleep between EP updates.
+        Background task: commit session data, process EP updates, and record history.
         """
         loop = asyncio.get_running_loop()
         payout_start = loop.time()
+        
+        # ─── PHASE 1: Bulk Commit Session Data ─────────────────────
+        try:
+            # 1. Answer Logs
+            if self._session_data.get("answer_logs"):
+                await db.executemany('''
+                    INSERT INTO quiz_answer_logs (user_id, question_id, question_text, time_taken, is_first)
+                    VALUES (%s, %s, %s, %s, %s)
+                ''', self._session_data["answer_logs"])
+
+            # 2. Question Stats
+            if self._session_data.get("question_stats"):
+                stat_params = []
+                for qid, s in self._session_data["question_stats"].items():
+                    stat_params.append((qid, s['text'], s['asked'], s['correct'], s['time']))
+                
+                await db.executemany('''
+                    INSERT INTO quiz_question_stats (question_id, question_text, times_asked, times_correct, total_time_taken)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE 
+                        times_asked = times_asked + VALUES(times_asked),
+                        times_correct = times_correct + VALUES(times_correct),
+                        total_time_taken = total_time_taken + VALUES(total_time_taken),
+                        question_text = VALUES(question_text)
+                ''', stat_params)
+
+            # 3. User Streaks
+            if self._session_streaks:
+                streak_params = []
+                for uid, s in self._session_streaks.items():
+                    streak_params.append((uid, s['curr']))
+                
+                await db.executemany('''
+                    INSERT INTO quiz_user_streaks (user_id, current_streak, max_streak, last_correct_at)
+                    VALUES (%s, %s, 0, CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE 
+                        current_streak = VALUES(current_streak),
+                        max_streak = GREATEST(max_streak, VALUES(current_streak)),
+                        last_correct_at = IF(VALUES(current_streak) > 0, CURRENT_TIMESTAMP, last_correct_at)
+                ''', streak_params)
+
+            # 4. Success! Clear the journal
+            self._clear_journal()
+            logger.info("Quiz session data successfully committed to database.")
+
+        except Exception as e:
+            logger.error(f"Failed to commit quiz session data: {e}", exc_info=True)
+
+        # ─── PHASE 2: EP Updates ───────────────────────────────────
         success_count = 0
         error_count = 0
 
@@ -658,8 +762,8 @@ class QuizCog(commands.Cog, name="quiz"):
 
         elapsed = loop.time() - payout_start
         logger.info(
-            f"Quiz background payouts completed: {success_count} ok, "
-            f"{error_count} errors, {elapsed:.1f}s elapsed"
+            f"Quiz background processing completed: {success_count} EP ok, "
+            f"{error_count} EP errors, {elapsed:.1f}s total elapsed"
         )
 
     # ─── CHANNEL LOCK/UNLOCK ────────────────────────────────────────

@@ -796,8 +796,7 @@ class Database:
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                for params in params_list:
-                    await cur.execute(query, params)
+                await cur.executemany(query, params_list)
     
     async def insert_get_id(self, query: str, params: tuple = ()) -> int:
         """Execute an INSERT and return the AUTO_INCREMENT id."""
