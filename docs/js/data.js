@@ -993,8 +993,8 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/event kiosk (Legacy)",
-                "desc": "Spawn an ad-hoc Participation Check-In button (Unmanaged).",
+                "syntax": "/event kiosk",
+                "desc": "Spawn a Participation Button for a Native Discord Event.",
                 "access": "admin",
                 "params": [
                     {
@@ -1015,8 +1015,8 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/event cap-placement (Legacy)",
-                "desc": "Lock a strict budget limit on an event\u2019s placement payouts (Unmanaged).",
+                "syntax": "/event cap-placement",
+                "desc": "Lock a strict budget limit on an event's placement payouts.",
                 "access": "admin",
                 "params": [
                     {
@@ -1032,8 +1032,8 @@ const DB_DATA = [
                 ]
             },
             {
-                "syntax": "/event placement (Legacy)",
-                "desc": "Award an arbitrary winner\u2019s placement payout. Use `/event award` instead.",
+                "syntax": "/event placement",
+                "desc": "Award a Winner's Placement (Strict Check against Event Budgets).",
                 "access": "admin",
                 "params": [
                     {
@@ -1128,6 +1128,11 @@ const DB_DATA = [
                         "required": false
                     },
                     {
+                        "name": "end_time_utc8",
+                        "type": "string",
+                        "required": false
+                    },
+                    {
                         "name": "hosted_by",
                         "type": "@mention",
                         "required": false
@@ -1141,12 +1146,12 @@ const DB_DATA = [
                 "params": [
                     {
                         "name": "raffle_id",
-                        "type": "number",
+                        "type": "autocomplete",
                         "required": true
                     },
                     {
-                        "name": "duration_minutes",
-                        "type": "number",
+                        "name": "duration_or_time",
+                        "type": "string",
                         "required": true
                     }
                 ]
@@ -1158,7 +1163,7 @@ const DB_DATA = [
                 "params": [
                     {
                         "name": "raffle_id",
-                        "type": "number",
+                        "type": "autocomplete",
                         "required": true
                     }
                 ]
@@ -1170,7 +1175,12 @@ const DB_DATA = [
                 "params": [
                     {
                         "name": "raffle_id",
-                        "type": "number",
+                        "type": "autocomplete",
+                        "required": true
+                    },
+                    {
+                        "name": "reason",
+                        "type": "string",
                         "required": true
                     },
                     {
@@ -1187,7 +1197,7 @@ const DB_DATA = [
                 "params": [
                     {
                         "name": "raffle_id",
-                        "type": "number",
+                        "type": "autocomplete",
                         "required": true
                     }
                 ]
@@ -1235,7 +1245,7 @@ const DB_DATA = [
                 "params": [
                     {
                         "name": "raffle_id",
-                        "type": "number",
+                        "type": "autocomplete",
                         "required": true
                     }
                 ]
@@ -1244,13 +1254,7 @@ const DB_DATA = [
                 "syntax": "/event raffle sync_legacy (Maintenance)",
                 "desc": "Retroactively locate and cache message IDs for previously drawn raffle announcements.",
                 "access": "admin",
-                "params": [
-                    {
-                        "name": "raffle_id",
-                        "type": "number",
-                        "required": true
-                    }
-                ]
+                "params": []
             },
             {
                 "syntax": "/event raffle force_sync (Maintenance)",
@@ -1259,7 +1263,7 @@ const DB_DATA = [
                 "params": [
                     {
                         "name": "raffle_id",
-                        "type": "number",
+                        "type": "autocomplete",
                         "required": true
                     }
                 ]
