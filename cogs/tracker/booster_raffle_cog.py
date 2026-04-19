@@ -467,23 +467,36 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
 
     @app_commands.command(
         name="booster-raffle-export",
-        description="Export the latest booster raffle winners to CSVs (Admin only)"
+        description="Export the latest (or a specific) booster raffle winners to CSVs (Admin only)"
     )
+    @app_commands.describe(
+        target_raffle="Select a specific raffle draw to export, or paste a message link/ID. (Defaults to latest)"
+    )
+    @app_commands.autocomplete(target_raffle=target_raffle_autocomplete)
     @app_commands.default_permissions(administrator=True)
-    async def raffle_export(self, interaction: discord.Interaction):
+    async def raffle_export(self, interaction: discord.Interaction, target_raffle: str = None):
         """Build MSL and Non-MSL CSVs for the most recent booster raffle draw."""
         await interaction.response.defer(ephemeral=True)
         
-        # 1. Get the latest raffle execution date
-        latest_record = await db.fetch_one('''
-            SELECT MAX(DATE(won_at)) as latest_date 
-            FROM booster_raffle_history
-        ''')
-        
-        if not latest_record or not latest_record['latest_date']:
-            return await interaction.followup.send("❌ No booster raffle history found.", ephemeral=True)
+        target_date = None
+        if target_raffle:
+            target_time, _ = await self._resolve_target_time(target_raffle)
+            if target_time:
+                target_date = target_time.date()
+            else:
+                return await interaction.followup.send("❌ Error fetching target. Please use the autocomplete dropdown or a valid message link.")
+
+        # 1. Get the latest raffle execution date if no target provided
+        if not target_date:
+            latest_record = await db.fetch_one('''
+                SELECT MAX(DATE(won_at)) as latest_date 
+                FROM booster_raffle_history
+            ''')
             
-        latest_date = latest_record['latest_date']
+            if not latest_record or not latest_record['latest_date']:
+                return await interaction.followup.send("❌ No booster raffle history found.", ephemeral=True)
+                
+            target_date = latest_record['latest_date']
         
         # 2. Fetch all wins from that date
         wins_records = await db.fetch_all('''
@@ -491,10 +504,10 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
             FROM booster_raffle_history 
             WHERE DATE(won_at) = %s
             GROUP BY user_id
-        ''', (latest_date,))
+        ''', (target_date,))
         
         if not wins_records:
-            return await interaction.followup.send("❌ No winners found for the latest raffle.", ephemeral=True)
+            return await interaction.followup.send(f"❌ No winners found for the date {target_date}.", ephemeral=True)
             
         winner_ids = [r['user_id'] for r in wins_records]
         wins_map = {r['user_id']: r['total_wins'] for r in wins_records}
@@ -513,7 +526,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         msl_list = []
         non_msl_list = []
         
-        date_str = latest_date.strftime("%Y/%m/%d")
+        date_str = target_date.strftime("%Y/%m/%d")
         remarks_str = f"MSL Network Discord - Server Booster Raffle - ({date_str})"
         
         verified_winner_ids = [wid for wid in winner_ids if wid in verified_map]
@@ -606,22 +619,34 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
 
     @app_commands.command(
         name="booster-raffle-reroll-msl",
-        description="Retroactively exclude MSL members from the latest draw and reallocate slots (Admin only)"
+        description="Retroactively exclude MSL members from the latest (or specific) draw and reallocate slots (Admin only)"
     )
+    @app_commands.describe(
+        target_raffle="Select a specific raffle draw to reroll, or paste a message link/ID. (Defaults to latest)"
+    )
+    @app_commands.autocomplete(target_raffle=target_raffle_autocomplete)
     @app_commands.default_permissions(administrator=True)
-    async def reroll_msl(self, interaction: discord.Interaction):
+    async def reroll_msl(self, interaction: discord.Interaction, target_raffle: str = None):
         await interaction.response.defer(ephemeral=False)
 
-        # 1. Fetch latest draw timestamp
-        latest_record = await db.fetch_one('''
-            SELECT MAX(won_at) as latest_time 
-            FROM booster_raffle_history
-        ''')
-        
-        if not latest_record or not latest_record['latest_time']:
-            return await interaction.followup.send("❌ No booster raffle history found.")
+        latest_time = None
+        target_msg = None
+        if target_raffle:
+            latest_time, target_msg = await self._resolve_target_time(target_raffle)
+            if not latest_time:
+                return await interaction.followup.send("❌ Error fetching target. Please use the autocomplete dropdown or a valid message link.")
+
+        # 1. Fetch latest draw timestamp if no target provided
+        if not latest_time:
+            latest_record = await db.fetch_one('''
+                SELECT MAX(won_at) as latest_time 
+                FROM booster_raffle_history
+            ''')
             
-        latest_time = latest_record['latest_time']
+            if not latest_record or not latest_record['latest_time']:
+                return await interaction.followup.send("❌ No booster raffle history found.")
+                
+            latest_time = latest_record['latest_time']
         
         # 2. Fetch winners from that exact batch (within a 60 second window)
         wins_records = await db.fetch_all('''
@@ -632,7 +657,7 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         ''', (latest_time, latest_time))
         
         if not wins_records:
-            return await interaction.followup.send("❌ No winners found for the latest raffle.")
+            return await interaction.followup.send(f"❌ No winners found for the raffle at {latest_time}.")
             
         winner_ids = list({r['user_id'] for r in wins_records})
         
@@ -744,18 +769,18 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 
         winner_pings = " ".join([f"<@{uid}>" for uid, _ in sorted_winners])
                 
-        # 9. Find the original message
-        out_channel_id = await settings_service.get_int("boost_public_channel_id")
-        channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
-        target_msg = None
-        
-        if channel:
-            async for msg in channel.history(limit=100):
-                if msg.author.id == self.bot.user.id and msg.embeds:
-                    if msg.embeds[0].title and "Booster Raffle Winners!" in msg.embeds[0].title:
-                        if msg.created_at.astimezone(TZ_MANILA).date() == latest_time.date():
-                            target_msg = msg
-                            break
+        # 9. Find the original message (if not already provided)
+        if not target_msg:
+            out_channel_id = await settings_service.get_int("boost_public_channel_id")
+            channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+            
+            if channel:
+                async for msg in channel.history(limit=100):
+                    if msg.author.id == self.bot.user.id and msg.embeds:
+                        if msg.embeds[0].title and "Booster Raffle Winners!" in msg.embeds[0].title:
+                            if msg.created_at.astimezone(TZ_MANILA).date() == latest_time.date():
+                                target_msg = msg
+                                break
                             
         if target_msg:
             embed = target_msg.embeds[0]
@@ -1231,6 +1256,34 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                     embed.set_footer(text="No data was modified. This is a read-only diagnostic.")
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
+    async def _resolve_target_time(self, target_raffle: str) -> tuple[datetime.datetime | None, discord.Message | None]:
+        """Helper to resolve a target_raffle string (autocomplete timestamp or message link) into (datetime, message)."""
+        if not target_raffle:
+            return None, None
+            
+        try:
+            # Handle message link or ID
+            raw_val = target_raffle.strip().split("/")[-1]
+            val_int = int(raw_val)
+            
+            # Message IDs are snowflakes (huge integers, > 15 digits)
+            # Unix timestamps for current years are 10 digits
+            if len(str(val_int)) <= 12:
+                # It's an autocompleted timestamp
+                return datetime.datetime.fromtimestamp(val_int).replace(tzinfo=None), None
+            else:
+                # It's a message ID
+                msg_id_int = val_int
+                out_channel_id = await settings_service.get_int("boost_public_channel_id")
+                channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+                target_msg = await channel.fetch_message(msg_id_int)
+                # We normalize to Manila time, then strip TZ for DB compatibility
+                t_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+                return t_time, target_msg
+        except Exception as e:
+            logger.error(f"Error resolving target_raffle {target_raffle}: {e}")
+            return None, None
+
     async def target_raffle_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         recent_raffles = await db.fetch_all('''
             SELECT won_at, COUNT(*) as slots 
@@ -1268,31 +1321,9 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
     async def raffle_delete(self, interaction: discord.Interaction, target_raffle: str, delete_message: bool = False):
         await interaction.response.defer(ephemeral=False)
         
-        target_time = None
-        target_msg = None
-        
-        # Determine if it's a timestamp (autocomplete) or a message ID/link
-        try:
-            raw_val = target_raffle.strip().split("/")[-1]
-            val_int = int(raw_val)
-            
-            # Message IDs are snowflakes (huge integers, > 15 digits)
-            # Unix timestamps for current years are 10 digits
-            if len(str(val_int)) <= 12:
-                # It's an autocompleted timestamp
-                target_time = datetime.datetime.fromtimestamp(val_int).replace(tzinfo=None)
-            else:
-                # It's a message ID
-                msg_id_int = val_int
-                out_channel_id = await settings_service.get_int("boost_public_channel_id")
-                channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
-                target_msg = await channel.fetch_message(msg_id_int)
-                target_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
-        except Exception:
-            return await interaction.followup.send("❌ Error fetching target. Please use the autocomplete dropdown or a valid message link.")
-            
+        target_time, target_msg = await self._resolve_target_time(target_raffle)
         if not target_time:
-            return await interaction.followup.send("❌ Could not determine target time.")
+            return await interaction.followup.send("❌ Error fetching target. Please use the autocomplete dropdown or a valid message link.")
         
         # 2. Count records to verify
         records = await db.fetch_all('''
