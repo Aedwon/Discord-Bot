@@ -771,7 +771,7 @@ const DB_DATA = [
             {
                 "name": "Automated Workflows",
                 "type": "passive",
-                "desc": "Automate participation tracking via Voice/Stage (Minutes), Text channel (Messages), or Forum (Threads created) with automatic EP distribution upon event completion."
+                "desc": "Automate participation tracking via Voice/Stage (Minutes), Text channel (Messages), or Forum (Moderator validated entries) with automatic EP distribution upon event completion."
             },
             {
                 "name": "Restricted Kiosks",
@@ -797,7 +797,7 @@ const DB_DATA = [
         "commands": [
             {
                 "syntax": "/event setup-workflow",
-                "desc": "Configure automated tracking rules (minutes in voice, message count, threads created) for a scheduled event.",
+                "desc": "Configure automated tracking rules (minutes in voice, message count, moderator validated posts) for a scheduled event.",
                 "access": "admin",
                 "params": [
                     {

@@ -216,26 +216,48 @@ class EventCog(commands.Cog, name="Event"):
                 break
 
     @commands.Cog.listener()
-    async def on_thread_create(self, thread: discord.Thread):
-        # Forum posts are threads
-        if not thread.parent_id: return
-        
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        """Handle moderator validation for Forum/Asynchronous entries."""
+        if payload.user_id == self.bot.user.id: return
+
+        # Check if emoji is ✅
+        if str(payload.emoji) != "✅": return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        if not guild: return
+
+        member = guild.get_member(payload.user_id)
+        if not member or not member.guild_permissions.administrator: return
+
+        # Check if the channel is a thread (forum post)
+        channel = self.bot.get_channel(payload.channel_id)
+        if not isinstance(channel, discord.Thread) or not channel.parent_id: return
+
+        # Check if parent channel is linked to a forum workflow
         for eid, wf in self.active_workflows.items():
-            if wf['archetype'] == 'forum' and wf['target_channel_id'] == thread.parent_id:
-                # User who created the thread is the participant
-                user_id = thread.owner_id
-                if not user_id: return
-                
+            if wf['archetype'] == 'forum' and wf['target_channel_id'] == channel.parent_id:
+                # The user being validated is the thread owner
+                target_user_id = channel.owner_id
+                if not target_user_id: return
+
                 if eid not in self.tracking_metrics: self.tracking_metrics[eid] = {}
-                self.tracking_metrics[eid][user_id] = 1 # Forum is binary: 1 if created, 0 if not
-                
+
+                # If already validated, ignore
+                if self.tracking_metrics[eid].get(target_user_id, 0) >= 1: return
+
+                self.tracking_metrics[eid][target_user_id] = 1
                 await db.execute(
                     "INSERT INTO event_tracking_metrics (event_id, user_id, metric_value) VALUES (%s, %s, 1) ON DUPLICATE KEY UPDATE metric_value = 1",
-                    (eid, user_id)
+                    (eid, target_user_id)
                 )
+
+                try:
+                    await channel.send(f"✅ **Entry Validated:** {member.mention} has approved this entry for the event.")
+                except: pass
                 break
 
     async def _initialize_peak_tracking(self):
+
         """Builds the ultra-optimized RAM Cache mapping channel joins to events and loads workflows."""
         
         self.channel_to_events.clear()
@@ -512,7 +534,7 @@ class EventCog(commands.Cog, name="Event"):
     @app_commands.describe(
         event_id="The scheduled Discord event to track.",
         archetype="The type of activity to track (Audio, Text, Forum, or Kiosk).",
-        threshold="Goal for the reward (Minutes in VC, Message count, or Threads created).",
+        threshold="Goal for the reward (Minutes in VC, Message count, or Validated posts).",
         reward_ep="The amount of EP to award automatically once the threshold is met.",
         target_channel="The specific channel to monitor for activity.",
         require_registration="If True, only users who registered via /event register will earn points."
@@ -520,7 +542,7 @@ class EventCog(commands.Cog, name="Event"):
     @app_commands.choices(archetype=[
         app_commands.Choice(name="Audio/Stage (Minutes in Voice)", value="audio"),
         app_commands.Choice(name="Text Activity (Message Count)", value="text"),
-        app_commands.Choice(name="Forum/Asynchronous (Threads Created)", value="forum"),
+        app_commands.Choice(name="Forum/Asynchronous (Moderator Validated)", value="forum"),
         app_commands.Choice(name="Restricted Kiosk (Code Required)", value="kiosk")
     ])
     @app_commands.default_permissions(administrator=True)
