@@ -8,10 +8,13 @@ Cycle: 25 min work → 5 min break (×4), then 15 min long break.
 
 import asyncio
 import discord
+import json
 from dataclasses import dataclass, field
 from discord.ext import commands
 from discord import app_commands
 import logging
+
+from services.database import db
 
 logger = logging.getLogger("mlbb_bot.pomodoro")
 
@@ -45,6 +48,49 @@ class PomodoroCog(commands.Cog, name="Pomodoro"):
         self.bot = bot
         # Active sessions keyed by VC channel ID
         self._sessions: dict[int, PomodoroSession] = {}
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Restore sessions from DB on startup or handle orphaned ones."""
+        # Wait a bit for bot to fully connect to guilds
+        await asyncio.sleep(2)
+        
+        rows = await db.fetch_all("SELECT * FROM pomodoro_sessions")
+        if not rows:
+            return
+            
+        logger.info(f"Pomodoro: Found {len(rows)} potential sessions in DB.")
+        for row in rows:
+            vc_id = row['vc_id']
+            guild = self.bot.guilds[0] if self.bot.guilds else None
+            channel = guild.get_channel(vc_id) if guild else None
+            
+            # If channel no longer exists or is empty, clean up
+            if not channel or not isinstance(channel, discord.VoiceChannel) or not channel.members:
+                logger.info(f"Pomodoro: Cleaning up orphaned session in VC {vc_id}")
+                if channel:
+                    await self._rename_vc_safe(channel, row['original_name'])
+                await db.execute("DELETE FROM pomodoro_sessions WHERE vc_id = %s", (vc_id,))
+                continue
+                
+            # Restore session object
+            try:
+                participants_list = json.loads(row['participants'])
+                participants = set(participants_list)
+            except:
+                participants = {row['creator_id']}
+                
+            session = PomodoroSession(
+                vc_id=vc_id,
+                creator_id=row['creator_id'],
+                participants=participants,
+                pomodoro_count=row['pomodoro_count'],
+                original_vc_name=row['original_name']
+            )
+            self._sessions[vc_id] = session
+            # Start the background task to resume the cycle
+            session.task = asyncio.create_task(self._run_session(vc_id))
+            logger.info(f"Pomodoro: Restored active session in VC {vc_id}")
 
     def cog_unload(self):
         """Cancel all running sessions on cog unload."""
@@ -96,7 +142,7 @@ class PomodoroCog(commands.Cog, name="Pomodoro"):
             logger.warning(f"Pomodoro: Failed to send ping: {e}")
 
     async def _end_session(self, vc_id: int, reason: str = "Session ended."):
-        """End a pomodoro session: cancel task, restore VC name, notify."""
+        """End a pomodoro session: cancel task, restore VC name, notify, and clear DB."""
         session = self._sessions.pop(vc_id, None)
         if not session:
             return
@@ -104,6 +150,12 @@ class PomodoroCog(commands.Cog, name="Pomodoro"):
         # Cancel the background task
         if session.task and not session.task.done():
             session.task.cancel()
+
+        # Remove from DB
+        try:
+            await db.execute("DELETE FROM pomodoro_sessions WHERE vc_id = %s", (vc_id,))
+        except Exception as e:
+            logger.error(f"Pomodoro: Failed to remove session {vc_id} from DB: {e}")
 
         # Restore VC name
         guild = self.bot.guilds[0] if self.bot.guilds else None
@@ -164,6 +216,13 @@ class PomodoroCog(commands.Cog, name="Pomodoro"):
 
                 # ── BREAK PHASE ──
                 session.pomodoro_count += 1
+                # Persist progress to DB
+                try:
+                    await db.execute("UPDATE pomodoro_sessions SET pomodoro_count = %s WHERE vc_id = %s", 
+                                     (session.pomodoro_count, vc_id))
+                except Exception as e:
+                    logger.error(f"Pomodoro: Failed to update count for {vc_id} in DB: {e}")
+
                 is_long = (session.pomodoro_count % POMODOROS_BEFORE_LONG_BREAK) == 0
                 break_duration = LONG_BREAK if is_long else SHORT_BREAK
                 phase_label = "long_break" if is_long else "break"
@@ -277,6 +336,15 @@ class PomodoroCog(commands.Cog, name="Pomodoro"):
         )
         self._sessions[vc.id] = session
 
+        # Persist to DB
+        try:
+            await db.execute(
+                "INSERT INTO pomodoro_sessions (vc_id, creator_id, original_name, participants, pomodoro_count) VALUES (%s, %s, %s, %s, %s)",
+                (vc.id, interaction.user.id, vc.name, json.dumps(list(participants)), 0)
+            )
+        except Exception as e:
+            logger.error(f"Pomodoro: Failed to save session {vc.id} to DB: {e}")
+
         # Start the background task
         session.task = asyncio.create_task(self._run_session(vc.id))
 
@@ -327,6 +395,15 @@ class PomodoroCog(commands.Cog, name="Pomodoro"):
             )
 
         session.participants.add(user.id)
+        # Update DB
+        try:
+            await db.execute(
+                "UPDATE pomodoro_sessions SET participants = %s WHERE vc_id = %s",
+                (json.dumps(list(session.participants)), vc.id)
+            )
+        except Exception as e:
+            logger.error(f"Pomodoro: Failed to update participants for {vc.id} in DB: {e}")
+
         await interaction.response.send_message(
             f"✅ **{user.display_name}** has been added to the Pomodoro session.", ephemeral=True
         )
@@ -362,6 +439,15 @@ class PomodoroCog(commands.Cog, name="Pomodoro"):
             )
 
         session.participants.discard(interaction.user.id)
+        # Update DB
+        try:
+            await db.execute(
+                "UPDATE pomodoro_sessions SET participants = %s WHERE vc_id = %s",
+                (json.dumps(list(session.participants)), vc.id)
+            )
+        except Exception as e:
+            logger.error(f"Pomodoro: Failed to update participants for {vc.id} in DB: {e}")
+
         await interaction.response.send_message(
             "✅ You've left the Pomodoro session. You will no longer be pinged.",
             ephemeral=True,

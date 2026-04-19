@@ -527,12 +527,17 @@ async def main():
 async def shutdown():
     """Graceful shutdown - close bot and database."""
     logger.info('Shutting down gracefully...')
-    try:
-        await db.close()
-    except:
-        pass
+    
+    # Close bot first to trigger cog_unload (and their DB flushes)
     if not bot.is_closed():
         await bot.close()
+        
+    # Then close database connection
+    try:
+        await db.close()
+    except Exception as e:
+        logger.error(f"Error closing database: {e}")
+        
     logger.info('Bot stopped')
 
 

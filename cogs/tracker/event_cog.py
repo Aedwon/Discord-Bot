@@ -44,6 +44,15 @@ class PersistentEventView(discord.ui.View):
             event_id = kiosk['event_id']
             ep_amount = kiosk['ep_amount']
             
+            # Workflow Check: Restricted Kiosk
+            wf = await db.fetch_one("SELECT archetype, metadata FROM event_workflows WHERE event_id = %s", (event_id,))
+            if wf and wf['archetype'] == 'kiosk':
+                meta = json.loads(wf['metadata']) if wf['metadata'] else {}
+                if meta.get('require_registration'):
+                    reg = await db.fetch_one("SELECT 1 FROM event_registration_entries WHERE event_id = %s AND user_id = %s", (event_id, user_id))
+                    if not reg:
+                        return await interaction.followup.send("❌ **Access Denied:** You must be registered for this event to claim participation points.", ephemeral=True)
+
             history = await db.fetch_one("SELECT SUM(ep_awarded) as total FROM guild_event_rewards WHERE event_id = %s AND user_id = %s", (event_id, user_id))
             if history and history['total'] and history['total'] >= ep_amount:
                 return await interaction.followup.send("❌ You already received a high-tier Placement reward for this event! Participation points do not geometrically stack with placement victories.")
@@ -172,6 +181,11 @@ class EventCog(commands.Cog, name="Event"):
         self.event_peaks = {}       
         self.event_to_channels = {} 
         
+        # New Workflow Tracking Attributes
+        self.active_workflows = {}   # event_id -> {archetype, threshold, reward, target_channel_id, metadata}
+        self.user_join_times = {}    # user_id -> datetime (last join time for duration tracking)
+        self.tracking_metrics = {}   # event_id -> {user_id -> value (minutes/messages)}
+        
     async def cog_load(self):
         self.bot.add_view(PersistentEventView())
         self.bot.add_view(PersistentRegistrationView())
@@ -181,13 +195,71 @@ class EventCog(commands.Cog, name="Event"):
         import asyncio
         asyncio.create_task(self._initialize_peak_tracking())
 
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild: return
+        
+        # Check if this channel is linked to an active text workflow
+        for eid, wf in self.active_workflows.items():
+            if wf['archetype'] == 'text' and wf['target_channel_id'] == message.channel.id:
+                # Basic anti-spam: ignore messages < 5 chars
+                if len(message.content) < 5: return
+                
+                if eid not in self.tracking_metrics: self.tracking_metrics[eid] = {}
+                current = self.tracking_metrics[eid].get(message.author.id, 0)
+                self.tracking_metrics[eid][message.author.id] = current + 1
+                
+                await db.execute(
+                    "INSERT INTO event_tracking_metrics (event_id, user_id, metric_value) VALUES (%s, %s, 1) ON DUPLICATE KEY UPDATE metric_value = metric_value + 1",
+                    (eid, message.author.id)
+                )
+                break
+
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread: discord.Thread):
+        # Forum posts are threads
+        if not thread.parent_id: return
+        
+        for eid, wf in self.active_workflows.items():
+            if wf['archetype'] == 'forum' and wf['target_channel_id'] == thread.parent_id:
+                # User who created the thread is the participant
+                user_id = thread.owner_id
+                if not user_id: return
+                
+                if eid not in self.tracking_metrics: self.tracking_metrics[eid] = {}
+                self.tracking_metrics[eid][user_id] = 1 # Forum is binary: 1 if created, 0 if not
+                
+                await db.execute(
+                    "INSERT INTO event_tracking_metrics (event_id, user_id, metric_value) VALUES (%s, %s, 1) ON DUPLICATE KEY UPDATE metric_value = 1",
+                    (eid, user_id)
+                )
+                break
+
     async def _initialize_peak_tracking(self):
-        """Builds the ultra-optimized RAM Cache mapping channel joins to events."""
+        """Builds the ultra-optimized RAM Cache mapping channel joins to events and loads workflows."""
         
         self.channel_to_events.clear()
         self.event_peaks.clear()
         self.event_to_channels.clear()
+        self.active_workflows.clear()
         
+        # Load Workflow Mappings
+        workflows = await db.fetch_all("SELECT * FROM event_workflows WHERE status = 'active'")
+        for w in workflows:
+            self.active_workflows[w['event_id']] = {
+                'archetype': w['archetype'],
+                'target_channel_id': w['target_channel_id'],
+                'threshold': w['threshold_value'],
+                'reward': w['reward_ep'],
+                'metadata': json.loads(w['metadata']) if w['metadata'] else {}
+            }
+            if w['event_id'] not in self.tracking_metrics:
+                self.tracking_metrics[w['event_id']] = {}
+                # Pre-load existing metrics from DB
+                metrics = await db.fetch_all("SELECT user_id, metric_value FROM event_tracking_metrics WHERE event_id = %s", (w['event_id'],))
+                for m in metrics:
+                    self.tracking_metrics[w['event_id']][m['user_id']] = m['metric_value']
+            
         stats = await db.fetch_all("SELECT event_id, peak_concurrent FROM guild_event_stats")
         for s in stats:
             self.event_peaks[s['event_id']] = s['peak_concurrent']
@@ -209,6 +281,16 @@ class EventCog(commands.Cog, name="Event"):
                             self.channel_to_events[cid] = set()
                         self.channel_to_events[cid].add(event.id)
                         
+                    # Duration Tracking Initialization: If event is active, record current time for anyone already in VC
+                    if event.status == discord.EventStatus.active:
+                        now = datetime.now()
+                        for cid in channels:
+                            channel = guild.get_channel(cid)
+                            if channel and isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+                                for m in channel.members:
+                                    if not m.bot and m.id not in self.user_join_times:
+                                        self.user_join_times[m.id] = now
+
                     # Re-calculate absolute peak physically upon boot
                     await self._evaluate_peak(event.id, guild)
                     
@@ -244,8 +326,32 @@ class EventCog(commands.Cog, name="Event"):
         if after.channel and after.channel.id in self.channel_to_events:
             events_to_evaluate.update(self.channel_to_events[after.channel.id])
             
+        # Peak Evaluation (Existing)
         for eid in events_to_evaluate:
             await self._evaluate_peak(eid, member.guild)
+
+        # Duration Tracking (Workflow Overhaul)
+        # 1. If leaving a tracked event VC, calculate and record duration
+        if before.channel and before.channel.id in self.channel_to_events:
+            join_time = self.user_join_times.pop(member.id, None)
+            if join_time:
+                duration_mins = int((datetime.now() - join_time).total_seconds() / 60)
+                if duration_mins > 0:
+                    for eid in self.channel_to_events.get(before.channel.id, set()):
+                        wf = self.active_workflows.get(eid)
+                        if wf and wf['archetype'] == 'audio':
+                            if eid not in self.tracking_metrics: self.tracking_metrics[eid] = {}
+                            current = self.tracking_metrics[eid].get(member.id, 0)
+                            self.tracking_metrics[eid][member.id] = current + duration_mins
+                            # Sync to DB
+                            await db.execute(
+                                "INSERT INTO event_tracking_metrics (event_id, user_id, metric_value) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE metric_value = metric_value + %s",
+                                (eid, member.id, duration_mins, duration_mins)
+                            )
+            
+        # 2. If joining a tracked event VC, record the join time
+        if after.channel and after.channel.id in self.channel_to_events:
+            self.user_join_times[member.id] = datetime.now()
             
     @commands.Cog.listener()
     async def on_scheduled_event_update(self, before: discord.ScheduledEvent, after: discord.ScheduledEvent):
@@ -254,6 +360,9 @@ class EventCog(commands.Cog, name="Event"):
             await self._initialize_peak_tracking()
             
             if after.status == discord.EventStatus.completed:
+                # 1. Process Automated Workflow Payouts
+                await self._process_workflow_payout(after)
+
                 from services.badge_service import badge_service
                 
                 # Fetch participants of THIS event
@@ -276,6 +385,80 @@ class EventCog(commands.Cog, name="Event"):
                 for r in lost_badge_rows:
                     member = after.guild.get_member(int(r['user_id']))
                     if member: await badge_service.eval_convivialist(member, force_revocation=True)
+    async def _process_workflow_payout(self, event: discord.ScheduledEvent):
+        """Evaluates tracking metrics and disburses rewards for completed event workflows."""
+        wf = self.active_workflows.get(event.id)
+        if not wf: return
+        
+        # Mark workflow as completed in DB first to prevent double-runs
+        await db.execute("UPDATE event_workflows SET status = 'completed' WHERE event_id = %s", (event.id,))
+        
+        # Flush any remaining voice duration for users currently in VC
+        if wf['archetype'] == 'audio':
+            now = datetime.now()
+            for uid, join_time in list(self.user_join_times.items()):
+                # Only if they are in one of the tracked channels for THIS event
+                member = event.guild.get_member(uid)
+                if member and member.voice and member.voice.channel and member.voice.channel.id in self.event_to_channels.get(event.id, set()):
+                    duration_mins = int((now - join_time).total_seconds() / 60)
+                    if duration_mins > 0:
+                        if event.id not in self.tracking_metrics: self.tracking_metrics[event.id] = {}
+                        self.tracking_metrics[event.id][uid] = self.tracking_metrics[event.id].get(uid, 0) + duration_mins
+                        await db.execute(
+                            "INSERT INTO event_tracking_metrics (event_id, user_id, metric_value) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE metric_value = metric_value + %s",
+                            (event.id, uid, duration_mins, duration_mins)
+                        )
+                    self.user_join_times[uid] = now # Reset join time to 'now' for other potentially overlapping events
+
+        # Fetch all metrics for this event
+        metrics = await db.fetch_all("SELECT user_id, metric_value FROM event_tracking_metrics WHERE event_id = %s", (event.id,))
+        
+        eligible_users = []
+        for m in metrics:
+            if m['metric_value'] >= wf['threshold']:
+                eligible_users.append(m['user_id'])
+                
+        if not eligible_users:
+            logger.info(f"Workflow Payout: No users met threshold for event {event.id}")
+            return
+            
+        from services.ep_service import ep_service
+        from services.badge_service import badge_service
+        
+        reward_count = 0
+        for uid in eligible_users:
+            # Check for existing reward to prevent double-pay (e.g. if they already claimed a kiosk or placement)
+            existing = await db.fetch_one("SELECT 1 FROM guild_event_rewards WHERE event_id = %s AND user_id = %s", (event.id, uid))
+            if existing: continue
+            
+            await db.execute(
+                "INSERT IGNORE INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)",
+                (event.id, uid, f"auto_{wf['archetype']}", wf['reward'])
+            )
+            await ep_service.process_ep_update(event.guild, uid, wf['reward'])
+            
+            member = event.guild.get_member(uid)
+            if member: await badge_service.eval_battlefield(member)
+            reward_count += 1
+            
+        # Log Summary
+        log_channel_id = await settings_service.get_int("event_log_channel_id")
+        if log_channel_id:
+            channel = event.guild.get_channel(log_channel_id)
+            if channel:
+                embed = discord.Embed(
+                    title=f"📈 Workflow Summary: {event.name}",
+                    description=f"Automated `{wf['archetype']}` payout completed.",
+                    color=discord.Color.gold(),
+                    timestamp=discord.utils.utcnow()
+                )
+                embed.add_field(name="Eligible Users", value=f"`{len(eligible_users)}`", inline=True)
+                embed.add_field(name="Rewards Disbursed", value=f"`{reward_count}`", inline=True)
+                embed.add_field(name="Threshold", value=f"`{wf['threshold']}`", inline=True)
+                
+                try: await channel.send(embed=embed)
+                except: pass
+
     async def send_audit_log(self, interaction: discord.Interaction, title: str, description: str, color: discord.Color):
         if not interaction.guild: return
         log_channel_id = await settings_service.get_int("event_log_channel_id")
@@ -323,6 +506,85 @@ class EventCog(commands.Cog, name="Event"):
         return choices[:25]
 
     # --- CLI COMMANDS ---
+
+    @event_group.command(name="setup-workflow", description="Configure automated tracking rules for a scheduled event.")
+    @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.choices(archetype=[
+        app_commands.Choice(name="Audio/Stage (Presence Duration)", value="audio"),
+        app_commands.Choice(name="Text Activity (Message Count)", value="text"),
+        app_commands.Choice(name="Forum/Asynchronous (Thread Creation)", value="forum"),
+        app_commands.Choice(name="Restricted Kiosk (Code Required)", value="kiosk")
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def event_setup_workflow(self, interaction: discord.Interaction, event_id: str, archetype: str, threshold: int, reward_ep: int, target_channel: discord.abc.GuildChannel = None, require_registration: bool = False):
+        try: ev_id = int(event_id)
+        except: return await interaction.response.send_message("❌ Select an event from autocomplete.", ephemeral=True)
+        
+        discord_event = interaction.guild.get_scheduled_event(ev_id)
+        if not discord_event: return await interaction.response.send_message("❌ Discord event not found.", ephemeral=True)
+        
+        # Validation
+        if archetype in ['audio', 'text', 'forum'] and not target_channel:
+            return await interaction.response.send_message(f"❌ Archetype `{archetype}` requires a `target_channel`.", ephemeral=True)
+
+        metadata = {'require_registration': require_registration}
+        
+        await db.execute("""
+            INSERT INTO event_workflows (event_id, archetype, target_channel_id, threshold_value, reward_ep, metadata, status)
+            VALUES (%s, %s, %s, %s, %s, %s, 'active')
+            ON DUPLICATE KEY UPDATE archetype=VALUES(archetype), target_channel_id=VALUES(target_channel_id), 
+                                    threshold_value=VALUES(threshold_value), reward_ep=VALUES(reward_ep),
+                                    metadata=VALUES(metadata), status='active'
+        """, (ev_id, archetype, target_channel.id if target_channel else None, threshold, reward_ep, json.dumps(metadata)))
+        
+        await self._initialize_peak_tracking() # Refresh RAM cache
+        
+        embed = discord.Embed(
+            title="✅ Workflow Initialized",
+            description=f"Automated tracking is now active for **{discord_event.name}**.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Archetype", value=archetype.capitalize(), inline=True)
+        embed.add_field(name="Threshold", value=f"{threshold} (mins/msgs/posts)", inline=True)
+        embed.add_field(name="Reward", value=f"{reward_ep} EP", inline=True)
+        if target_channel: embed.add_field(name="Target Channel", value=target_channel.mention, inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+        await self.send_audit_log(interaction, "Workflow Setup", f"**Event:** `{discord_event.name}`\n**Type:** `{archetype}`\n**Reward:** `{reward_ep} EP`", discord.Color.green())
+
+    @event_group.command(name="status-monitor", description="Check real-time tracking progress for an active event workflow.")
+    @app_commands.autocomplete(event_id=event_autocomplete)
+    @app_commands.default_permissions(administrator=True)
+    async def event_status_monitor(self, interaction: discord.Interaction, event_id: str):
+        try: ev_id = int(event_id)
+        except: return await interaction.response.send_message("❌ Select an event from autocomplete.", ephemeral=True)
+        
+        discord_event = interaction.guild.get_scheduled_event(ev_id)
+        if not discord_event: return await interaction.response.send_message("❌ Event not found.", ephemeral=True)
+        
+        wf = self.active_workflows.get(ev_id)
+        if not wf: return await interaction.response.send_message("❌ No active workflow found for this event.", ephemeral=True)
+        
+        metrics = self.tracking_metrics.get(ev_id, {})
+        eligible_count = sum(1 for v in metrics.values() if v >= wf['threshold'])
+        
+        embed = discord.Embed(
+            title=f"📊 Monitor: {discord_event.name}",
+            description=f"Tracking `{wf['archetype']}` metrics in real-time.",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Archetype", value=wf['archetype'].capitalize(), inline=True)
+        embed.add_field(name="Threshold", value=f"`{wf['threshold']}`", inline=True)
+        embed.add_field(name="Tracked Users", value=f"`{len(metrics)}`", inline=True)
+        embed.add_field(name="Eligible So Far", value=f"✅ `{eligible_count}`", inline=True)
+        
+        if metrics:
+            # Show top 5 participants
+            sorted_m = sorted(metrics.items(), key=lambda x: x[1], reverse=True)[:5]
+            lines = [f"<@{uid}>: `{val}`" for uid, val in sorted_m]
+            embed.add_field(name="Top Progress", value="\n".join(lines), inline=False)
+            
+        await interaction.response.send_message(embed=embed)
 
     @event_group.command(name="setup-rewards", description="Define the exact prize pool structure before an event starts.")
     @app_commands.autocomplete(event_id=event_autocomplete)

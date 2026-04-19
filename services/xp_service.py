@@ -168,25 +168,43 @@ class XpService:
     async def batch_update(self, pending_xp: dict) -> dict:
         """
         Batch update XP for multiple users (with multipliers applied).
-        Returns dictionary of user_id -> {'old_xp': int, 'new_xp': int} for role assignment UI hook.
+        Uses a transaction and optimizes lookups to reduce DB load.
         """
+        if not pending_xp:
+            return {}
+            
+        user_ids = list(pending_xp.keys())
+        # aiomysql doesn't support list parameters in IN clause easily, so we build it
+        format_strings = ','.join(['%s'] * len(user_ids))
+        
+        # 1. Fetch current stats for all users in the batch to avoid per-user SELECTs
+        rows = await db.fetch_all(
+            f"SELECT user_id, xp, xp_multiplier FROM users WHERE user_id IN ({format_strings})",
+            tuple(user_ids)
+        )
+        user_stats = {row['user_id']: row for row in rows}
+        
         results = {}
-        for user_id, xp in pending_xp.items():
-            old_xp = await self.get_xp(user_id)
-            multiplier = await self.get_multiplier(user_id)
-            final_xp = int(xp * multiplier)
-            
-            await db.execute('''
-                INSERT INTO users (user_id, xp, consecutive_active_days, last_active_date) 
-                VALUES (%s, %s, 1, CURDATE())
-                ON DUPLICATE KEY UPDATE 
-                    xp = users.xp + %s,
-                    consecutive_active_days = IF(users.last_active_date = CURDATE(), users.consecutive_active_days, IF(users.last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), users.consecutive_active_days + 1, 1)),
-                    last_active_date = CURDATE()
-            ''', (user_id, final_xp, final_xp))
-            
-            new_xp = await self.get_xp(user_id)
-            results[user_id] = {"old_xp": old_xp, "new_xp": new_xp}
+        
+        # 2. Perform updates in a single transaction
+        async with db.transaction() as cur:
+            for user_id, gain in pending_xp.items():
+                stats = user_stats.get(user_id, {'xp': 0, 'xp_multiplier': 1.0})
+                old_xp = stats['xp']
+                multiplier = stats['xp_multiplier'] if stats.get('xp_multiplier') is not None else 1.0
+                final_gain = int(gain * multiplier)
+                
+                await cur.execute('''
+                    INSERT INTO users (user_id, xp, consecutive_active_days, last_active_date) 
+                    VALUES (%s, %s, 1, CURDATE())
+                    ON DUPLICATE KEY UPDATE 
+                        xp = users.xp + %s,
+                        consecutive_active_days = IF(users.last_active_date = CURDATE(), users.consecutive_active_days, IF(users.last_active_date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), users.consecutive_active_days + 1, 1)),
+                        last_active_date = CURDATE()
+                ''', (user_id, final_gain, final_gain))
+                
+                results[user_id] = {"old_xp": old_xp, "new_xp": old_xp + final_gain}
+        
         return results
     
     async def get_rank(self, user_id: int) -> tuple:

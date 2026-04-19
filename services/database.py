@@ -6,6 +6,7 @@ Provides a centralized database pool for all services.
 
 import aiomysql
 import logging
+import contextlib
 from config import DB_CONFIG
 
 logger = logging.getLogger('mlbb_bot')
@@ -202,6 +203,18 @@ class Database:
         await self.execute('''
             CREATE TABLE IF NOT EXISTS autocreate_active_vcs (
                 channel_id BIGINT PRIMARY KEY
+            )
+        ''')
+
+        # Track active Pomodoro sessions to restore state on restart.
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+                vc_id BIGINT PRIMARY KEY,
+                creator_id BIGINT NOT NULL,
+                original_name VARCHAR(255) NOT NULL,
+                participants TEXT NOT NULL, -- JSON list of user IDs
+                pomodoro_count INT DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
@@ -680,6 +693,31 @@ class Database:
             )
         ''')
 
+        # Advanced Event Workflows (Presence, Activity, Forum Tracking)
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_workflows (
+                event_id BIGINT PRIMARY KEY,
+                archetype VARCHAR(20) NOT NULL, -- 'audio', 'text', 'forum', 'kiosk'
+                target_channel_id BIGINT,
+                threshold_value INT NOT NULL,
+                reward_ep INT NOT NULL,
+                metadata TEXT, -- JSON for extra requirements (password, tags, etc.)
+                status VARCHAR(20) DEFAULT 'active',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        await self.execute('''
+            CREATE TABLE IF NOT EXISTS event_tracking_metrics (
+                event_id BIGINT,
+                user_id BIGINT,
+                metric_value INT DEFAULT 0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (event_id, user_id),
+                INDEX idx_etm_event (event_id)
+            )
+        ''')
+
         # ─── ANALYTICS IDENTITY CACHE ────────────────────────────────
         # Stores resolved Discord display names so the Vercel dashboard
         # (which has no bot connection) can show human-readable names.
@@ -790,6 +828,20 @@ class Database:
                             await cur.execute(f"CREATE INDEX IF NOT EXISTS {index} ON {table} ({column})")
         except Exception as e:
             logger.debug(f"Index existence check/creation failed for {index} on {table}: {e}")
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        """Context manager for database transactions."""
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await conn.begin()
+                try:
+                    yield cur
+                    await conn.commit()
+                except Exception:
+                    await conn.rollback()
+                    raise
 
     async def execute(self, query: str, params: tuple = ()):
         """Execute a query and return cursor (or lastrowid for inserts)."""

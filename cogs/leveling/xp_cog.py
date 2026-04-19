@@ -19,6 +19,7 @@ from services.quest_service import quest_service
 from utils.embeds import create_leaderboard_embed, create_rank_embed
 from utils.checks import require_admin_auth
 
+logger = logging.getLogger('mlbb_bot.xp_cog')
 
 class XpCog(commands.Cog, name="Leveling"):
     """XP and Leveling system for the server."""
@@ -48,8 +49,18 @@ class XpCog(commands.Cog, name="Leveling"):
         if not self.batch_update_db.is_running():
             self.batch_update_db.start()
     
-    def cog_unload(self):
+    async def cog_unload(self):
+        """Final flush of pending XP on unload."""
         self.batch_update_db.cancel()
+        if self.pending_xp:
+            logger.info(f"Leveling: Flushing {len(self.pending_xp)} pending XP entries on unload...")
+            try:
+                # Use a snapshot and clear the main dict to avoid any new XP being added
+                snapshot = self.pending_xp.copy()
+                self.pending_xp.clear()
+                await xp_service.batch_update(snapshot)
+            except Exception as e:
+                logger.error(f"Leveling: Failed to flush XP on unload: {e}")
     
     # ─────────────────────────────────────────────────────────────────────
     # Background Task - Batch XP Updates
@@ -72,36 +83,44 @@ class XpCog(commands.Cog, name="Leveling"):
         try:
             await self._process_voice_xp()
         except Exception as e:
-            print(f"[XP Loop] Voice processing error: {e}")
+            logger.error(f"[XP Loop] Voice processing error: {e}")
         
         if self.pending_xp:
             # Snapshot which channels users were chatting in for level-up messages
-            user_channels = dict(self._last_message_channel) if hasattr(self, '_last_message_channel') else {}
+            user_channels = dict(self._last_message_channel)
+            
+            # Use a snapshot to avoid losing data added during the await
+            snapshot = self.pending_xp.copy()
             
             try:
-                updates = await xp_service.batch_update(self.pending_xp.copy())
-            except Exception as e:
-                print(f"[XP Loop] Database batch_update error: {e}")
-                updates = {}
+                updates = await xp_service.batch_update(snapshot)
                 
-            self.pending_xp.clear()
-            
-            # Process level changes, role assignments, and notifications
-            guild = self.bot.guilds[0] if self.bot.guilds else None
-            if guild:
-                from services.badge_service import badge_service
-                for user_id, data in updates.items():
-                    member = guild.get_member(user_id)
-                    if member:
-                        await badge_service.eval_twilight(member)
-                    
-                    channel_id = user_channels.get(user_id)
-                    notify_channel = guild.get_channel(channel_id) if channel_id else None
-                    
-                    await self._handle_level_change(
-                        guild, user_id, data["old_xp"], data["new_xp"],
-                        notify_channel=notify_channel
-                    )
+                # Only remove the amount we successfully updated
+                # This way, if more XP was added during the await, it's preserved
+                for user_id, amount in snapshot.items():
+                    if user_id in self.pending_xp:
+                        self.pending_xp[user_id] -= amount
+                        if self.pending_xp[user_id] <= 0:
+                            self.pending_xp.pop(user_id)
+                
+                # Process level changes, role assignments, and notifications
+                guild = self.bot.guilds[0] if self.bot.guilds else None
+                if guild:
+                    from services.badge_service import badge_service
+                    for user_id, data in updates.items():
+                        member = guild.get_member(user_id)
+                        if member:
+                            await badge_service.eval_twilight(member)
+                        
+                        channel_id = user_channels.get(user_id)
+                        notify_channel = guild.get_channel(channel_id) if channel_id else None
+                        
+                        await self._handle_level_change(
+                            guild, user_id, data["old_xp"], data["new_xp"],
+                            notify_channel=notify_channel
+                        )
+            except Exception as e:
+                logger.error(f"[XP Loop] Database batch_update error: {e}")
 
     async def _get_all_tier_roles(self, guild: discord.Guild) -> dict[str, discord.Role]:
         """Build a lookup of all configured XP tier names → Role objects.

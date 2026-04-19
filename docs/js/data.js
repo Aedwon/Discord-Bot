@@ -769,6 +769,16 @@ const DB_DATA = [
         "id": "tournaments",
         "features": [
             {
+                "name": "Automated Workflows",
+                "type": "passive",
+                "desc": "Automate participation tracking via Voice/Stage presence duration, Text channel activity, or Forum thread creation with automatic EP distribution upon event completion."
+            },
+            {
+                "name": "Restricted Kiosks",
+                "type": "passive",
+                "desc": "Event kiosks can now enforce strict pre-registration requirements to prevent unauthorized reward claims."
+            },
+            {
                 "name": "Rigid Prize Pools",
                 "type": "passive",
                 "desc": "Event payouts enforce pre-configured prize tiers via UI modals, mathematically preventing unauthorized bonus EP limits."
@@ -785,6 +795,55 @@ const DB_DATA = [
             }
         ],
         "commands": [
+            {
+                "syntax": "/event setup-workflow",
+                "desc": "Configure automated tracking rules (audio, text, forum, kiosk) for a scheduled event.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "event_id",
+                        "type": "autocomplete",
+                        "required": true
+                    },
+                    {
+                        "name": "archetype",
+                        "type": "choice",
+                        "required": true
+                    },
+                    {
+                        "name": "threshold",
+                        "type": "number",
+                        "required": true
+                    },
+                    {
+                        "name": "reward_ep",
+                        "type": "number",
+                        "required": true
+                    },
+                    {
+                        "name": "target_channel",
+                        "type": "#channel",
+                        "required": false
+                    },
+                    {
+                        "name": "require_registration",
+                        "type": "bool",
+                        "required": false
+                    }
+                ]
+            },
+            {
+                "syntax": "/event status-monitor",
+                "desc": "Check real-time tracking progress for an active event workflow.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "event_id",
+                        "type": "autocomplete",
+                        "required": true
+                    }
+                ]
+            },
             {
                 "syntax": "Step 1: /event setup-rewards",
                 "desc": "Define the exact prize pool structure manually using the UI modal prior to deployment.",

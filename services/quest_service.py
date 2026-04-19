@@ -259,8 +259,8 @@ class QuestService:
         Increment progress for all of the user's active (incomplete) quests
         that match the given task_type.
         
-        Returns a list of quests that were JUST completed by this increment
-        (for XP reward granting). Empty list if nothing completed.
+        Uses a transaction to ensure all progress updates are atomic.
+        Returns a list of quests that were JUST completed by this increment.
         """
         today = date.today()
 
@@ -281,34 +281,35 @@ class QuestService:
 
         newly_completed = []
 
-        for row in rows:
-            new_progress = min(row["progress"] + amount, row["target_goal"])
-            just_completed = new_progress >= row["target_goal"]
+        async with db.transaction() as cur:
+            for row in rows:
+                new_progress = min(row["progress"] + amount, row["target_goal"])
+                just_completed = new_progress >= row["target_goal"]
 
-            if just_completed:
-                await db.execute('''
-                    UPDATE quest_progress 
-                    SET progress = %s, completed = TRUE, completed_at = %s
-                    WHERE id = %s AND completed = FALSE
-                ''', (new_progress, datetime.now(timezone.utc), row["progress_id"]))
+                if just_completed:
+                    await cur.execute('''
+                        UPDATE quest_progress 
+                        SET progress = %s, completed = TRUE, completed_at = %s
+                        WHERE id = %s AND completed = FALSE
+                    ''', (new_progress, datetime.now(timezone.utc), row["progress_id"]))
 
-                newly_completed.append({
-                    "quest_id": row["quest_id"],
-                    "name": row["name"],
-                    "tier": row["tier"],
-                    "task_type": row["task_type"],
-                    "target_goal": row["target_goal"],
-                    "reward_xp": TIER_REWARDS.get(row["tier"], 0),
-                })
-                logger.info(
-                    f"Quest completed: user={user_id}, quest='{row['name']}' "
-                    f"(+{TIER_REWARDS.get(row['tier'], 0)} XP)"
-                )
-            else:
-                await db.execute(
-                    "UPDATE quest_progress SET progress = %s WHERE id = %s",
-                    (new_progress, row["progress_id"])
-                )
+                    newly_completed.append({
+                        "quest_id": row["quest_id"],
+                        "name": row["name"],
+                        "tier": row["tier"],
+                        "task_type": row["task_type"],
+                        "target_goal": row["target_goal"],
+                        "reward_xp": TIER_REWARDS.get(row["tier"], 0),
+                    })
+                    logger.info(
+                        f"Quest completed: user={user_id}, quest='{row['name']}' "
+                        f"(+{TIER_REWARDS.get(row['tier'], 0)} XP)"
+                    )
+                else:
+                    await cur.execute(
+                        "UPDATE quest_progress SET progress = %s WHERE id = %s",
+                        (new_progress, row["progress_id"])
+                    )
 
         return newly_completed
 
