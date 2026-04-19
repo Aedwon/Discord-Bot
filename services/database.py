@@ -268,8 +268,8 @@ class Database:
             )
         ''')
         # Create indices for the Universal Leaderboard engine to optimize memory
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_users_xp ON users (xp)')
-        await self.execute('CREATE INDEX IF NOT EXISTS idx_users_ep ON users (event_points)')
+        await self._create_index_if_not_exists('users', 'idx_users_xp', 'xp')
+        await self._create_index_if_not_exists('users', 'idx_users_ep', 'event_points')
         
         # ─── DUAL LEADERBOARD ENGINE TABLES ─────────────────────────────
         
@@ -773,6 +773,24 @@ class Database:
             await self._pool.wait_closed()
             self._pool = None
     
+    async def _create_index_if_not_exists(self, table: str, index: str, column: str):
+        """Helper to create an index only if it doesn't already exist to avoid noisy warnings."""
+        try:
+            pool = await self.get_pool()
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(f"SHOW INDEX FROM {table} WHERE Key_name = %s", (index,))
+                    if not await cur.fetchone():
+                        # Try with standard CREATE INDEX since we already checked for existence
+                        try:
+                            await cur.execute(f"CREATE INDEX {index} ON {table} ({column})")
+                        except Exception:
+                            # Fallback to IF NOT EXISTS just in case there's a race condition
+                            # though we prefer avoiding it to prevent the warning.
+                            await cur.execute(f"CREATE INDEX IF NOT EXISTS {index} ON {table} ({column})")
+        except Exception as e:
+            logger.debug(f"Index existence check/creation failed for {index} on {table}: {e}")
+
     async def execute(self, query: str, params: tuple = ()):
         """Execute a query and return cursor (or lastrowid for inserts)."""
         pool = await self.get_pool()
