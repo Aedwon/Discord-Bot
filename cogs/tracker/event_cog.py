@@ -512,15 +512,15 @@ class EventCog(commands.Cog, name="Event"):
     @app_commands.describe(
         event_id="The scheduled Discord event to track.",
         archetype="The type of activity to track (Audio, Text, Forum, or Kiosk).",
-        threshold="Goal for the reward (e.g., minutes in VC, total messages, or threads created).",
+        threshold="Goal for the reward (Minutes in VC, Message count, or Threads created).",
         reward_ep="The amount of EP to award automatically once the threshold is met.",
         target_channel="The specific channel to monitor for activity.",
         require_registration="If True, only users who registered via /event register will earn points."
     )
     @app_commands.choices(archetype=[
-        app_commands.Choice(name="Audio/Stage (Presence Duration)", value="audio"),
+        app_commands.Choice(name="Audio/Stage (Minutes in Voice)", value="audio"),
         app_commands.Choice(name="Text Activity (Message Count)", value="text"),
-        app_commands.Choice(name="Forum/Asynchronous (Thread Creation)", value="forum"),
+        app_commands.Choice(name="Forum/Asynchronous (Threads Created)", value="forum"),
         app_commands.Choice(name="Restricted Kiosk (Code Required)", value="kiosk")
     ])
     @app_commands.default_permissions(administrator=True)
