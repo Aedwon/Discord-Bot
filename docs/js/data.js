@@ -846,7 +846,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "Step 1: /event setup-rewards",
-                "desc": "Define the exact prize pool structure manually using the UI modal prior to deployment.",
+                "desc": "Define the exact prize pool structure (EP and Diamonds) manually using the UI modal prior to deployment.",
                 "access": "admin",
                 "params": [
                     {
@@ -890,7 +890,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "Step 3: /event award",
-                "desc": "(Post-Event) Natively open the dropdown UI menuboard to securely award the predefined prize pools to the correct winners.",
+                "desc": "(Post-Event) Natively open the dropdown UI menuboard to securely award the predefined prize pools (EP and Diamonds) to the correct winners.",
                 "access": "admin",
                 "params": [
                     {
@@ -1033,7 +1033,7 @@ const DB_DATA = [
             },
             {
                 "syntax": "/event placement",
-                "desc": "Award a Winner's Placement (Strict Check against Event Budgets).",
+                "desc": "Award a Winner's Placement (Strict Check against Event Budgets). Supports both EP and Diamonds.",
                 "access": "admin",
                 "params": [
                     {
@@ -1055,6 +1055,11 @@ const DB_DATA = [
                         "name": "total_ep_value",
                         "type": "number",
                         "required": true
+                    },
+                    {
+                        "name": "diamonds",
+                        "type": "number",
+                        "required": false
                     }
                 ]
             }

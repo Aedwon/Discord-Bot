@@ -804,6 +804,14 @@ class Database:
                 INDEX idx_asi_action (action_type)
             )
         ''')
+
+        # ─── MIGRATIONS: DIAMONDS SUPPORT ──────────────────────────────
+        try:
+            await self.execute("ALTER TABLE event_prize_pools ADD COLUMN diamond_reward INT DEFAULT 0")
+        except: pass
+        try:
+            await self.execute("ALTER TABLE guild_event_rewards ADD COLUMN diamonds_awarded INT DEFAULT 0")
+        except: pass
     async def close(self):
         """Close the database connection."""
         if self._pool:

@@ -51,7 +51,11 @@ class EventAwardView(discord.ui.View):
             cnt = c['c'] if c else 0
             avail = p['max_winners'] - cnt
             if avail > 0:
-                options.append(discord.SelectOption(label=p['placement_name'][:25], description=f"{p['ep_reward']} EP ({avail} remaining)", value=str(p['id'])))
+                desc = f"{p['ep_reward']} EP"
+                if p['diamond_reward'] > 0:
+                    desc += f" | {p['diamond_reward']} 💎"
+                desc += f" ({avail} remaining)"
+                options.append(discord.SelectOption(label=p['placement_name'][:25], description=desc, value=str(p['id'])))
 
         if not options:
             return await interaction.response.send_message("❌ All prizes have been exhausted for this event.", ephemeral=True)
@@ -77,11 +81,16 @@ class EventAwardView(discord.ui.View):
             if claimed: return await i.followup.send("❌ User already received this tier!")
 
             try:
-                await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", 
-                    (self.ev_id, self.user.id, prize['placement_name'], prize['ep_reward']))
+                await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded, diamonds_awarded) VALUES (%s, %s, %s, %s, %s)", 
+                    (self.ev_id, self.user.id, prize['placement_name'], prize['ep_reward'], prize['diamond_reward']))
                 from services.ep_service import ep_service
                 await ep_service.process_ep_update(i.guild, self.user.id, prize['ep_reward'], bypass_verification=True, is_placement=True)
-                await i.followup.send(f"✅ Securely awarded **{self.user.mention}** with **{prize['placement_name']}** ({prize['ep_reward']} EP).")
+                
+                msg = f"✅ Securely awarded **{self.user.mention}** with **{prize['placement_name']}** ({prize['ep_reward']} EP"
+                if prize['diamond_reward'] > 0:
+                    msg += f" | {prize['diamond_reward']} 💎"
+                msg += ")."
+                await i.followup.send(msg)
             except Exception as e:
                 logger.error(f"Prize DB err: {e}")
                 await i.followup.send("❌ Database error awarding prize.")
@@ -699,7 +708,7 @@ class EventCog(commands.Cog, name="Event"):
             prizes = discord.ui.TextInput(
                 label="Prize Structure",
                 style=discord.TextStyle.long,
-                placeholder="Name | EP | Max winners\n1st Place | 5000 | 1\nRunner Up | 1000 | 2\nParticipation | 50 | 100",
+                placeholder="Name | EP | Diamonds | Max winners\n1st Place | 5000 | 500 | 1\nRunner Up | 1000 | 250 | 2\nParticipation | 50 | 0 | 100",
                 required=True,
                 max_length=1500,
             )
@@ -711,28 +720,33 @@ class EventCog(commands.Cog, name="Event"):
             async def on_submit(self, interaction: discord.Interaction):
                 await interaction.response.defer(ephemeral=True, thinking=True)
                 lines = self.prizes.value.strip().split("\n")
-                
+
                 pools = []
                 for line in lines:
                     if not line.strip(): continue
                     parts = [p.strip() for p in line.split("|")]
-                    if len(parts) != 3:
-                        return await interaction.followup.send(f"❌ Invalid format on line: `{line}`\nExpected exactly 3 parts separated by `|`.", ephemeral=True)
-                    
+                    if len(parts) not in [3, 4]:
+                        return await interaction.followup.send(f"❌ Invalid format on line: `{line}`\nExpected `Name | EP | Max` or `Name | EP | Diamonds | Max`.", ephemeral=True)
+
                     name = parts[0]
                     try:
                         ep = int(parts[1])
-                        max_w = int(parts[2])
+                        if len(parts) == 3:
+                            diamonds = 0
+                            max_w = int(parts[2])
+                        else:
+                            diamonds = int(parts[2])
+                            max_w = int(parts[3])
                     except ValueError:
-                        return await interaction.followup.send(f"❌ Invalid numbers on line: `{line}`\nEP and Max Winners must be valid numbers.", ephemeral=True)
-                    
-                    pools.append((self.ev_id, name, ep, max_w))
-                    
+                        return await interaction.followup.send(f"❌ Invalid numbers on line: `{line}`\nEP, Diamonds, and Max Winners must be valid numbers.", ephemeral=True)
+
+                    pools.append((self.ev_id, name, ep, diamonds, max_w))
+
                 try:
                     await db.execute("DELETE FROM event_prize_pools WHERE event_id = %s", (self.ev_id,))
                     for p in pools:
                         await db.execute(
-                            "INSERT INTO event_prize_pools (event_id, placement_name, ep_reward, max_winners) VALUES (%s, %s, %s, %s)",
+                            "INSERT INTO event_prize_pools (event_id, placement_name, ep_reward, diamond_reward, max_winners) VALUES (%s, %s, %s, %s, %s)",
                             p
                         )
                     await interaction.followup.send(f"✅ Successfully set up **{len(pools)}** prize tiers for this event!")
@@ -743,9 +757,8 @@ class EventCog(commands.Cog, name="Event"):
         existing = await db.fetch_all("SELECT * FROM event_prize_pools WHERE event_id = %s", (event_id_int,))
         modal = EventPrizeSetupModal(event_id_int)
         if existing:
-            prefill = "\n".join([f"{r['placement_name']} | {r['ep_reward']} | {r['max_winners']}" for r in existing])
+            prefill = "\n".join([f"{r['placement_name']} | {r['ep_reward']} | {r['diamond_reward']} | {r['max_winners']}" for r in existing])
             modal.prizes.default = prefill
-            
         await interaction.response.send_modal(modal)
 
     @event_group.command(name="register", description="Deploy a Registration Embed for a Native Discord Event.")
@@ -919,17 +932,18 @@ class EventCog(commands.Cog, name="Event"):
         
         # Payout Participation if requested
         if payout_participation:
-            part_prize = await db.fetch_one("SELECT ep_reward FROM event_prize_pools WHERE event_id=%s AND LOWER(placement_name)='participation'", (ev_id,))
+            part_prize = await db.fetch_one("SELECT ep_reward, diamond_reward FROM event_prize_pools WHERE event_id=%s AND LOWER(placement_name)='participation'", (ev_id,))
             if part_prize:
                 entries = await db.fetch_all("SELECT user_id FROM event_registration_entries WHERE event_id=%s", (ev_id,))
                 ep = part_prize['ep_reward']
+                diamonds = part_prize['diamond_reward']
                 if entries:
-                    batch = [(ev_id, r['user_id'], 'Participation', ep) for r in entries]
+                    batch = [(ev_id, r['user_id'], 'Participation', ep, diamonds) for r in entries]
                     try:
-                        await db.executemany("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE event_id=VALUES(event_id)", batch)
+                        await db.executemany("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded, diamonds_awarded) VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE event_id=VALUES(event_id)", batch)
                     except Exception as e:
                         logger.error(f"Batch payout fail: {e}")
-                        
+
         # Evolve the embed natively
         try:
             channel = interaction.guild.get_channel(reg['channel_id']) or await interaction.guild.fetch_channel(reg['channel_id'])
@@ -937,19 +951,22 @@ class EventCog(commands.Cog, name="Event"):
                 msg = await channel.fetch_message(reg['announcement_msg_id'])
                 embed = msg.embeds[0]
                 view = discord.ui.View() # removes buttons
-                
+
                 # Fetch winners
-                placements = await db.fetch_all("SELECT user_id, reward_type, ep_awarded FROM guild_event_rewards WHERE event_id=%s AND LOWER(reward_type)!='participation' ORDER BY ep_awarded DESC", (ev_id,))
-                
+                placements = await db.fetch_all("SELECT user_id, reward_type, ep_awarded, diamonds_awarded FROM guild_event_rewards WHERE event_id=%s AND LOWER(reward_type)!='participation' ORDER BY ep_awarded DESC, diamonds_awarded DESC", (ev_id,))
+
                 if placements:
                     res = []
                     for i, p in enumerate(placements):
                         emoji = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else "🌟"
-                        res.append(f"{emoji} **{p['reward_type']}** — <@{p['user_id']}> ({p['ep_awarded']} EP)")
+                        reward_text = f"({p['ep_awarded']} EP"
+                        if p['diamonds_awarded'] > 0:
+                            reward_text += f" | {p['diamonds_awarded']} 💎"
+                        reward_text += ")"
+                        res.append(f"{emoji} **{p['reward_type']}** — <@{p['user_id']}> {reward_text}")
                     embed.add_field(name="🏆 Official Results", value="\n".join(res), inline=False)
                 else:
                     embed.add_field(name="🏆 Official Results", value="Event Concluded natively.", inline=False)
-                    
                 count = await db.fetch_one("SELECT COUNT(*) as c FROM event_registration_entries WHERE event_id = %s", (ev_id,))
                 embed.set_footer(text=f"🔒 Automatically Closed · {count['c'] if count else 0} Participants")
                 embed.color = discord.Color.gold()
@@ -966,13 +983,15 @@ class EventCog(commands.Cog, name="Event"):
         event_id="The event to award a placement for.",
         user="The member who earned the placement.",
         placement="The name of the placement (e.g., '1st Place', 'MVP').",
-        total_ep_value="The total EP amount this placement should receive (adjusts for previous rewards)."
+        total_ep_value="The total EP amount this placement should receive (adjusts for previous rewards).",
+        diamonds="Optional: The amount of Diamonds to award for this placement."
     )
     @app_commands.default_permissions(administrator=True)
-    async def event_placement(self, interaction: discord.Interaction, event_id: str, user: discord.Member, placement: str, total_ep_value: int):
+    async def event_placement(self, interaction: discord.Interaction, event_id: str, user: discord.Member, placement: str, total_ep_value: int, diamonds: int = 0):
         try: event_id_int = int(event_id)
         except ValueError: return await interaction.response.send_message("❌ Select from autocomplete.", ephemeral=True)
         if not (1 <= total_ep_value <= 100000): return await interaction.response.send_message("❌ EP Bounds Violation (Must be 1 - 100,000).", ephemeral=True)
+        if not (0 <= diamonds <= 50000): return await interaction.response.send_message("❌ Diamond Bounds Violation (Must be 0 - 50,000).", ephemeral=True)
         if len(placement) > 100: return await interaction.response.send_message("❌ Placement name too long (Max 100 characters).", ephemeral=True)
             
         await interaction.response.defer() 
@@ -987,10 +1006,10 @@ class EventCog(commands.Cog, name="Event"):
             
         history = await db.fetch_one("SELECT SUM(ep_awarded) as total FROM guild_event_rewards WHERE event_id = %s AND user_id = %s", (event_id_int, user.id))
         already_earned = history['total'] if history and history['total'] else 0
-        bonus_to_award = total_ep_value - already_earned
+        bonus_to_award = max(0, total_ep_value - already_earned)
         
-        if bonus_to_award <= 0:
-            return await interaction.followup.send(f"❌ User already earned `{already_earned} EP` which cleanly exceeds/secures the global `{total_ep_value} EP` value of this placement.", ephemeral=True)
+        if bonus_to_award <= 0 and diamonds <= 0:
+            return await interaction.followup.send(f"❌ User already earned `{already_earned} EP` which cleanly exceeds/secures the global `{total_ep_value} EP` value of this placement, and no diamonds were provided.", ephemeral=True)
             
         cap = await db.fetch_one("SELECT total_budget FROM guild_event_caps WHERE event_id = %s", (event_id_int,))
         if cap:
@@ -1003,22 +1022,28 @@ class EventCog(commands.Cog, name="Event"):
         if claimed: return await interaction.followup.send(f"❌ User already received explicitly `{placement}`!", ephemeral=True)
 
         try:
-            await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", (event_id_int, user.id, placement, bonus_to_award))
+            await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded, diamonds_awarded) VALUES (%s, %s, %s, %s, %s)", 
+                (event_id_int, user.id, placement, bonus_to_award, diamonds))
             from services.ep_service import ep_service
-            await ep_service.process_ep_update(interaction.guild, user.id, bonus_to_award, bypass_verification=True, is_placement=True)
+            if bonus_to_award > 0:
+                await ep_service.process_ep_update(interaction.guild, user.id, bonus_to_award, bypass_verification=True, is_placement=True)
             
             discord_event = interaction.guild.get_scheduled_event(event_id_int)
             event_name = discord_event.name if discord_event else f"Event Profile {event_id}"
             
+            award_value = f"**{total_ep_value} Total EP**"
+            if diamonds > 0:
+                award_value += f" and **{diamonds} 💎**"
+
             embed = discord.Embed(
                 title="🏆 Event Winner Announced!",
-                description=f"Congratulations to {user.mention} for miraculously securing **{placement}** in **{event_name}**!\n\nThey have been awarded **{total_ep_value} Total EP** for their incredible victory! 🎉",
+                description=f"Congratulations to {user.mention} for miraculously securing **{placement}** in **{event_name}**!\n\nThey have been awarded {award_value} for their incredible victory! 🎉",
                 color=discord.Color.gold(),
                 timestamp=discord.utils.utcnow()
             )
             embed.set_thumbnail(url=user.display_avatar.url)
             await interaction.followup.send(content=user.mention, embed=embed)
-            await self.send_audit_log(interaction, "Placement Disbursed", f"**Mod:** {interaction.user.mention}\n**Victor:** {user.mention}\n**Bonus Paid:** `{bonus_to_award} EP`", discord.Color.purple())
+            await self.send_audit_log(interaction, "Placement Disbursed", f"**Mod:** {interaction.user.mention}\n**Victor:** {user.mention}\n**Paid:** `{bonus_to_award} EP` | `{diamonds} 💎`", discord.Color.purple())
         except Exception as e:
             logger.error(f"Failed to award placement: {e}")
             await interaction.followup.send("❌ **Fatal DB Error**.", ephemeral=True)
@@ -1562,7 +1587,7 @@ class EventCog(commands.Cog, name="Event"):
         date_str = draw_date.strftime("%Y/%m/%d")
 
         rewards = await db.fetch_all(
-            "SELECT user_id, reward_type FROM guild_event_rewards WHERE event_id = %s ORDER BY awarded_at",
+            "SELECT user_id, reward_type, diamonds_awarded FROM guild_event_rewards WHERE event_id = %s ORDER BY awarded_at",
             (event_id_int,)
         )
         if not rewards:
@@ -1592,7 +1617,7 @@ class EventCog(commands.Cog, name="Event"):
                     v['full_name'],
                     v['mlbb_uid'],
                     v['mlbb_server'],
-                    "",
+                    row['diamonds_awarded'] if row['diamonds_awarded'] > 0 else "",
                     f"MSL Network Discord - {event_name} - {placement} - ({date_str})"
                 ])
         
@@ -1606,7 +1631,7 @@ class EventCog(commands.Cog, name="Event"):
                     f"UNVERIFIED — {display}",
                     "N/A",
                     "N/A",
-                    "",
+                    row['diamonds_awarded'] if row['diamonds_awarded'] > 0 else "",
                     f"MSL Network Discord - {event_name} - {placement} - ({date_str})"
                 ])
 
