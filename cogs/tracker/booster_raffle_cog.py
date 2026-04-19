@@ -465,6 +465,58 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    async def _resolve_target_time(self, target_raffle: str) -> tuple[datetime.datetime | None, discord.Message | None]:
+        """Helper to resolve a target_raffle string (autocomplete timestamp or message link) into (datetime, message)."""
+        if not target_raffle:
+            return None, None
+            
+        try:
+            # Handle message link or ID
+            raw_val = target_raffle.strip().split("/")[-1]
+            val_int = int(raw_val)
+            
+            # Message IDs are snowflakes (huge integers, > 15 digits)
+            # Unix timestamps for current years are 10 digits
+            if len(str(val_int)) <= 12:
+                # It's an autocompleted timestamp
+                return datetime.datetime.fromtimestamp(val_int).replace(tzinfo=None), None
+            else:
+                # It's a message ID
+                msg_id_int = val_int
+                out_channel_id = await settings_service.get_int("boost_public_channel_id")
+                channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
+                target_msg = await channel.fetch_message(msg_id_int)
+                # We normalize to Manila time, then strip TZ for DB compatibility
+                t_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
+                return t_time, target_msg
+        except Exception as e:
+            logger.error(f"Error resolving target_raffle {target_raffle}: {e}")
+            return None, None
+
+    async def target_raffle_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        recent_raffles = await db.fetch_all('''
+            SELECT won_at, COUNT(*) as slots 
+            FROM booster_raffle_history 
+            GROUP BY won_at 
+            ORDER BY won_at DESC 
+            LIMIT 25
+        ''')
+        
+        choices = []
+        for r in recent_raffles:
+            dt = r['won_at']
+            if dt.tzinfo is None:
+                dt = pytz.utc.localize(dt).astimezone(TZ_MANILA)
+            else:
+                dt = dt.astimezone(TZ_MANILA)
+                
+            label = f"{dt.strftime('%b %d, %Y %I:%M %p')} ({r['slots']} slots)"
+            val = str(int(dt.timestamp()))
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label, value=val))
+                
+        return choices[:25]
+
     @app_commands.command(
         name="booster-raffle-export",
         description="Export the latest (or a specific) booster raffle winners to CSVs (Admin only)"
@@ -1255,58 +1307,6 @@ class BoosterRaffleCog(commands.Cog, name="Booster Raffle"):
                 if i == len(chunks) - 1:
                     embed.set_footer(text="No data was modified. This is a read-only diagnostic.")
                 await interaction.followup.send(embed=embed, ephemeral=True)
-
-    async def _resolve_target_time(self, target_raffle: str) -> tuple[datetime.datetime | None, discord.Message | None]:
-        """Helper to resolve a target_raffle string (autocomplete timestamp or message link) into (datetime, message)."""
-        if not target_raffle:
-            return None, None
-            
-        try:
-            # Handle message link or ID
-            raw_val = target_raffle.strip().split("/")[-1]
-            val_int = int(raw_val)
-            
-            # Message IDs are snowflakes (huge integers, > 15 digits)
-            # Unix timestamps for current years are 10 digits
-            if len(str(val_int)) <= 12:
-                # It's an autocompleted timestamp
-                return datetime.datetime.fromtimestamp(val_int).replace(tzinfo=None), None
-            else:
-                # It's a message ID
-                msg_id_int = val_int
-                out_channel_id = await settings_service.get_int("boost_public_channel_id")
-                channel = self.bot.get_channel(out_channel_id) or await self.bot.fetch_channel(out_channel_id)
-                target_msg = await channel.fetch_message(msg_id_int)
-                # We normalize to Manila time, then strip TZ for DB compatibility
-                t_time = target_msg.created_at.astimezone(TZ_MANILA).replace(tzinfo=None)
-                return t_time, target_msg
-        except Exception as e:
-            logger.error(f"Error resolving target_raffle {target_raffle}: {e}")
-            return None, None
-
-    async def target_raffle_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        recent_raffles = await db.fetch_all('''
-            SELECT won_at, COUNT(*) as slots 
-            FROM booster_raffle_history 
-            GROUP BY won_at 
-            ORDER BY won_at DESC 
-            LIMIT 25
-        ''')
-        
-        choices = []
-        for r in recent_raffles:
-            dt = r['won_at']
-            if dt.tzinfo is None:
-                dt = pytz.utc.localize(dt).astimezone(TZ_MANILA)
-            else:
-                dt = dt.astimezone(TZ_MANILA)
-                
-            label = f"{dt.strftime('%b %d, %Y %I:%M %p')} ({r['slots']} slots)"
-            val = str(int(dt.timestamp()))
-            if current.lower() in label.lower():
-                choices.append(app_commands.Choice(name=label, value=val))
-                
-        return choices[:25]
 
     @app_commands.command(
         name="booster-raffle-delete",
