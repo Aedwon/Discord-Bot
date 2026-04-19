@@ -26,6 +26,70 @@ from utils.checks import require_admin_auth
 
 logger = logging.getLogger("mlbb_bot.event_cog")
 
+class EventAwardView(discord.ui.View):
+    def __init__(self, ev_id: int):
+        super().__init__(timeout=180)
+        self.ev_id = ev_id
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select User to Award")
+    async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        self.user = select.values[0]
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Next: Select Prize", style=discord.ButtonStyle.primary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not hasattr(self, 'user'):
+            return await interaction.response.send_message("❌ Select a user first.", ephemeral=True)
+
+        pools = await db.fetch_all("SELECT * FROM event_prize_pools WHERE event_id = %s AND LOWER(placement_name) != 'participation'", (self.ev_id,))
+        if not pools:
+            return await interaction.response.send_message("❌ No prize pools defined for this event.", ephemeral=True)
+
+        options = []
+        for p in pools:
+            c = await db.fetch_one("SELECT COUNT(*) as c FROM guild_event_rewards WHERE event_id=%s AND reward_type=%s", (self.ev_id, p['placement_name']))
+            cnt = c['c'] if c else 0
+            avail = p['max_winners'] - cnt
+            if avail > 0:
+                options.append(discord.SelectOption(label=p['placement_name'][:25], description=f"{p['ep_reward']} EP ({avail} remaining)", value=str(p['id'])))
+
+        if not options:
+            return await interaction.response.send_message("❌ All prizes have been exhausted for this event.", ephemeral=True)
+
+        view = discord.ui.View(timeout=180)
+        select = discord.ui.Select(placeholder="Select Prize Tier", options=options[:25])
+
+        async def prize_callback(i: discord.Interaction):
+            await i.response.defer(ephemeral=True)
+            pid = int(select.values[0])
+            prize = await db.fetch_one("SELECT * FROM event_prize_pools WHERE id=%s", (pid,))
+
+            c = await db.fetch_one("SELECT COUNT(*) as c FROM guild_event_rewards WHERE event_id=%s AND reward_type=%s", (self.ev_id, prize['placement_name']))
+            if c and c['c'] >= prize['max_winners']:
+                return await i.followup.send("❌ This prize tier is now fully exhausted.", ephemeral=True)
+
+            from services.verification_service import verification_service
+            v_info = await verification_service.get_user_info(self.user.id)
+            if v_info and verification_service.is_msl(v_info['mlbb_uid'], v_info['mlbb_server']):
+                return await i.followup.send("❌ **Blocked:** MSL team members cannot receive event placements.")
+
+            claimed = await db.fetch_one("SELECT * FROM guild_event_rewards WHERE event_id = %s AND user_id = %s AND reward_type = %s", (self.ev_id, self.user.id, prize['placement_name']))
+            if claimed: return await i.followup.send("❌ User already received this tier!")
+
+            try:
+                await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", 
+                    (self.ev_id, self.user.id, prize['placement_name'], prize['ep_reward']))
+                from services.ep_service import ep_service
+                await ep_service.process_ep_update(i.guild, self.user.id, prize['ep_reward'], bypass_verification=True, is_placement=True)
+                await i.followup.send(f"✅ Securely awarded **{self.user.mention}** with **{prize['placement_name']}** ({prize['ep_reward']} EP).")
+            except Exception as e:
+                logger.error(f"Prize DB err: {e}")
+                await i.followup.send("❌ Database error awarding prize.")
+
+        select.callback = prize_callback
+        view.add_item(select)
+        await interaction.response.edit_message(content=f"Selected **{self.user.mention}**. Now choose prize:", view=view)
+
 class PersistentEventView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -825,69 +889,6 @@ class EventCog(commands.Cog, name="Event"):
         
         await self.send_audit_log(interaction, "Placement Budget Locked", f"**Event ID:** `{event_id}`\n**Total Budget Set:** `{total_budget} EP`", discord.Color.teal())
         await interaction.response.send_message(f"🔒 **Event Budget Locked:** Budget capped at **{total_budget} EP**.", ephemeral=True)
-    class EventAwardView(discord.ui.View):
-        def __init__(self, ev_id: int):
-            super().__init__(timeout=180)
-            self.ev_id = ev_id
-
-        @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select User to Award")
-        async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
-            self.user = select.values[0]
-            await interaction.response.defer()
-
-        @discord.ui.button(label="Next: Select Prize", style=discord.ButtonStyle.primary)
-        async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-            if not hasattr(self, 'user'):
-                return await interaction.response.send_message("❌ Select a user first.", ephemeral=True)
-
-            pools = await db.fetch_all("SELECT * FROM event_prize_pools WHERE event_id = %s AND LOWER(placement_name) != 'participation'", (self.ev_id,))
-            if not pools:
-                return await interaction.response.send_message("❌ No prize pools defined for this event.", ephemeral=True)
-
-            options = []
-            for p in pools:
-                c = await db.fetch_one("SELECT COUNT(*) as c FROM guild_event_rewards WHERE event_id=%s AND reward_type=%s", (self.ev_id, p['placement_name']))
-                cnt = c['c'] if c else 0
-                avail = p['max_winners'] - cnt
-                if avail > 0:
-                    options.append(discord.SelectOption(label=p['placement_name'][:25], description=f"{p['ep_reward']} EP ({avail} remaining)", value=str(p['id'])))
-
-            if not options:
-                return await interaction.response.send_message("❌ All prizes have been exhausted for this event.", ephemeral=True)
-
-            view = discord.ui.View(timeout=180)
-            select = discord.ui.Select(placeholder="Select Prize Tier", options=options[:25])
-
-            async def prize_callback(i: discord.Interaction):
-                await i.response.defer(ephemeral=True)
-                pid = int(select.values[0])
-                prize = await db.fetch_one("SELECT * FROM event_prize_pools WHERE id=%s", (pid,))
-
-                c = await db.fetch_one("SELECT COUNT(*) as c FROM guild_event_rewards WHERE event_id=%s AND reward_type=%s", (self.ev_id, prize['placement_name']))
-                if c and c['c'] >= prize['max_winners']:
-                    return await i.followup.send("❌ This prize tier is now fully exhausted.", ephemeral=True)
-
-                from services.verification_service import verification_service
-                v_info = await verification_service.get_user_info(self.user.id)
-                if v_info and verification_service.is_msl(v_info['mlbb_uid'], v_info['mlbb_server']):
-                    return await i.followup.send("❌ **Blocked:** MSL team members cannot receive event placements.")
-
-                claimed = await db.fetch_one("SELECT * FROM guild_event_rewards WHERE event_id = %s AND user_id = %s AND reward_type = %s", (self.ev_id, self.user.id, prize['placement_name']))
-                if claimed: return await i.followup.send("❌ User already received this tier!")
-
-                try:
-                    await db.execute("INSERT INTO guild_event_rewards (event_id, user_id, reward_type, ep_awarded) VALUES (%s, %s, %s, %s)", 
-                        (self.ev_id, self.user.id, prize['placement_name'], prize['ep_reward']))
-                    from services.ep_service import ep_service
-                    await ep_service.process_ep_update(i.guild, self.user.id, prize['ep_reward'], bypass_verification=True, is_placement=True)
-                    await i.followup.send(f"✅ Securely awarded **{self.user.mention}** with **{prize['placement_name']}** ({prize['ep_reward']} EP).")
-                except Exception as e:
-                    logger.error(f"Prize DB err: {e}")
-                    await i.followup.send("❌ Database error awarding prize.")
-
-            select.callback = prize_callback
-            view.add_item(select)
-            await interaction.response.edit_message(content=f"Selected **{self.user.mention}**. Now choose prize:", view=view)
 
     @event_group.command(name="award", description="Award a predefined prize to an event winner.")
     @app_commands.autocomplete(event_id=event_autocomplete)
