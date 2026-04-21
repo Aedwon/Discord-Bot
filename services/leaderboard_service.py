@@ -573,9 +573,12 @@ class LeaderboardService:
         # Referral
         if "referral" not in existing_cats:
             now_pht = datetime.now(TZ_PHT)
-            expected_prev_week_id = (now_pht - timedelta(days=7)).strftime("%Y-W%W")
+            # prev_week_referrals holds data for the most recent reset week.
+            # The archive labels that week with the current strftime("%Y-W%W").
+            # Data is valid until the next Monday reset overwrites it.
+            current_week_id = now_pht.strftime("%Y-W%W")
             
-            if week_id == expected_prev_week_id:
+            if week_id == current_week_id:
                 params = []
                 excl = self._build_exclusion_clause(exclude_ids, params)
                 params.append(10)

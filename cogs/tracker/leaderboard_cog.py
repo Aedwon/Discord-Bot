@@ -1220,14 +1220,14 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         prizes_cats_str = await settings_service.get(f"lb_prizes_cats_{week_id}")
         if prizes_cats_str:
             already_cats = set(prizes_cats_str.split(","))
-            archived_cats = {row["category"] for row in data}
-            missing_prize_cats = leaderboard_service.PRIZE_CATEGORIES - archived_cats
+            # Check if all prize-eligible categories have been awarded
+            unawarded_prize_cats = leaderboard_service.PRIZE_CATEGORIES - already_cats
 
-            if missing_prize_cats:
+            if unawarded_prize_cats:
                 return await interaction.followup.send(
-                    f"⚠️ Prizes were already distributed for week `{week_id}`, "
-                    f"but categories **{', '.join(sorted(missing_prize_cats))}** are missing from the archive.\n\n"
-                    f"Use `/leaderboard backfill {week_id}` to safely add missing data and distribute only the delta EP.",
+                    f"⚠️ Some prizes were already distributed for week `{week_id}`, "
+                    f"but categories **{', '.join(sorted(unawarded_prize_cats))}** have not been awarded yet.\n\n"
+                    f"Use `/leaderboard backfill {week_id}` to safely distribute only the delta EP.",
                     ephemeral=True
                 )
             else:
@@ -1302,9 +1302,31 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         all_expected = {"xp", "ep", "quiz", "referral", "voice", "messages", "counting"}
         missing_cats = all_expected - archived_cats
 
-        if not missing_cats:
+        # 4. Determine already-awarded prize categories
+        prizes_cats_str = await settings_service.get(f"lb_prizes_cats_{week_id}")
+        already_awarded_cats = set(prizes_cats_str.split(",")) if prizes_cats_str else set()
+
+        # Backward compatibility: if tracking flag wasn't set (code deployed after reset),
+        # infer from the reset guard. XP and counting are snapshot-based and always archived
+        # correctly, so their prizes were distributed. Quiz (timestamp bug) and referral
+        # (race condition) were not in the original archive.
+        if not already_awarded_cats:
+            last_reset = await settings_service.get("leaderboard_last_reset_week")
+            if last_reset:
+                # Only snapshot-based prize categories were reliably in the original archive
+                already_awarded_cats = {"xp", "counting"}
+                await settings_service.set(
+                    f"lb_prizes_cats_{week_id}",
+                    ",".join(sorted(already_awarded_cats))
+                )
+                logger.info(f"Backfill: inferred already-awarded categories for {week_id}: {already_awarded_cats}")
+
+        unawarded_prize_cats = leaderboard_service.PRIZE_CATEGORIES - already_awarded_cats
+
+        # If all data is present AND all prizes already awarded — nothing to do
+        if not missing_cats and not unawarded_prize_cats:
             return await interaction.followup.send(
-                f"✅ Week `{week_id}` already has all {len(all_expected)} categories archived. Nothing to backfill.",
+                f"✅ Week `{week_id}` already has all {len(all_expected)} categories archived and all prizes distributed. Nothing to do.",
                 ephemeral=True
             )
 
@@ -1339,37 +1361,24 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                 ephemeral=True
             )
 
-        # 4. Determine already-awarded prize categories
-        prizes_cats_str = await settings_service.get(f"lb_prizes_cats_{week_id}")
-        already_awarded_cats = set(prizes_cats_str.split(",")) if prizes_cats_str else set()
-
-        # 5. Dry-run the backfill to preview what would be inserted
+        # 5. Backfill missing data (if any categories are missing)
         msl_ids = await leaderboard_service.get_msl_user_ids()
+        backfill_results = {}
 
-        # Build preview: query the data without inserting
-        preview_lines = []
-        backfillable_cats = missing_cats - {"counting"}  # Counting snapshot is lost
-        for cat in sorted(backfillable_cats):
-            preview_lines.append(f"• **{cat}** — will query from raw data")
+        if missing_cats:
+            backfill_results = await leaderboard_service.backfill_archived_week(
+                week_id, week_start_utc, week_end_utc, msl_ids
+            )
 
-        if "counting" in missing_cats:
-            preview_lines.append(f"• **counting** — ⚠️ cannot recover (snapshot lost at reset)")
+        # 6. Calculate prize delta (even if no new data was backfilled — prizes may be pending)
+        prize_delta = await leaderboard_service.calculate_prize_delta(week_id, already_awarded_cats)
 
-        # 6. Calculate prize delta preview
-        # First do the actual backfill to get data, then compute delta
-        backfill_results = await leaderboard_service.backfill_archived_week(
-            week_id, week_start_utc, week_end_utc, msl_ids
-        )
-
-        if not backfill_results:
+        if not backfill_results and not prize_delta:
             return await interaction.followup.send(
-                f"ℹ️ Week `{week_id}` is missing categories: **{', '.join(sorted(missing_cats))}**\n"
-                f"However, no data was found in the source tables for these categories. Nothing to backfill.",
+                f"ℹ️ Week `{week_id}` has no recoverable missing data and no pending prize corrections.",
                 ephemeral=True
             )
 
-        # Calculate delta prizes from newly-inserted categories
-        prize_delta = await leaderboard_service.calculate_prize_delta(week_id, already_awarded_cats)
 
         # Build the preview embed
         embed = discord.Embed(
