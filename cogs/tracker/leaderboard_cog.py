@@ -1393,7 +1393,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if "counting" in missing_cats:
             backfill_summary += "\n⚠️ **counting** — cannot recover (snapshot lost)"
 
-        skipped = backfillable_cats - set(backfill_results.keys())
+        skipped = (missing_cats - {"counting"}) - set(backfill_results.keys())
         for cat in sorted(skipped):
             backfill_summary += f"\nℹ️ **{cat}** — no data found in source tables"
 
