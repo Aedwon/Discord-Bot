@@ -29,6 +29,7 @@ from services.leaderboard_service import leaderboard_service, TZ_PHT
 from services.verification_service import verification_service
 from services.xp_service import xp_service
 from services.ep_service import ep_service
+from services.referral_service import referral_service as ref_svc
 
 logger = logging.getLogger("mlbb_bot.leaderboard")
 
@@ -185,6 +186,15 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         # Step 3: Reset snapshots for next week (locks EP baseline)
         count = await leaderboard_service.run_weekly_reset()
+
+        # Step 3b: Reset referral weekly counts (guaranteed AFTER archive captured them)
+        try:
+            await ref_svc.weekly_reset()
+            await settings_service.set("referral_last_reset_week", iso_week)
+            logger.info(f"Referral weekly reset executed for week {iso_week}")
+        except Exception as e:
+            logger.error(f"Referral weekly reset failed: {e}", exc_info=True)
+
         await settings_service.set("leaderboard_last_reset_week", iso_week)
         logger.info(f"Weekly leaderboard reset: {count} users snapshotted (week {iso_week})")
 
@@ -201,6 +211,20 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
                         await self._post_weekly_prizes_log(guild, week_id, prizes)
                     except Exception as e:
                         logger.error(f"Failed to post weekly prizes log: {e}")
+
+                # Track which prize-eligible categories were in the archive at distribution time
+                try:
+                    archived_data = await leaderboard_service.get_archived_week_data(week_id)
+                    archived_prize_cats = {
+                        row["category"] for row in archived_data
+                        if row["category"] in leaderboard_service.PRIZE_CATEGORIES
+                    }
+                    await settings_service.set(
+                        f"lb_prizes_cats_{week_id}",
+                        ",".join(sorted(archived_prize_cats))
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to track prize categories for {week_id}: {e}")
             else:
                 logger.info("No weekly prizes to distribute (no qualifying placements)")
         except Exception as e:
@@ -1192,27 +1216,56 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         if not data:
             return await interaction.followup.send(f"❌ No archived data found for week `{week_id}`.", ephemeral=True)
 
-        # 2. Re-post the archive log (summary)
+        # 2. Check for double-payment risk
+        prizes_cats_str = await settings_service.get(f"lb_prizes_cats_{week_id}")
+        if prizes_cats_str:
+            already_cats = set(prizes_cats_str.split(","))
+            archived_cats = {row["category"] for row in data}
+            missing_prize_cats = leaderboard_service.PRIZE_CATEGORIES - archived_cats
+
+            if missing_prize_cats:
+                return await interaction.followup.send(
+                    f"⚠️ Prizes were already distributed for week `{week_id}`, "
+                    f"but categories **{', '.join(sorted(missing_prize_cats))}** are missing from the archive.\n\n"
+                    f"Use `/leaderboard backfill {week_id}` to safely add missing data and distribute only the delta EP.",
+                    ephemeral=True
+                )
+            else:
+                return await interaction.followup.send(
+                    f"⚠️ All prizes for week `{week_id}` have already been distributed.\n"
+                    f"Running this command again would cause **double-payment**.",
+                    ephemeral=True
+                )
+
+        # 3. Re-post the archive log (summary)
         try:
             await self._post_weekly_archive_log(interaction.guild, week_id)
         except Exception as e:
             logger.error(f"Failed to re-post archive log for {week_id}: {e}")
 
-        # 3. Re-calculate and distribute prizes
+        # 4. Re-calculate and distribute prizes
         try:
             prizes = await leaderboard_service.calculate_weekly_prizes(week_id)
             if prizes:
                 awarded = await self._distribute_weekly_prizes(interaction.guild, prizes)
-                # 4. Post rewards summary
+                # 5. Post rewards summary
                 await self._post_weekly_prizes_log(interaction.guild, week_id, prizes)
-                
+
+                # Track distributed categories
+                archived_prize_cats = {
+                    row["category"] for row in data
+                    if row["category"] in leaderboard_service.PRIZE_CATEGORIES
+                }
+                await settings_service.set(
+                    f"lb_prizes_cats_{week_id}",
+                    ",".join(sorted(archived_prize_cats))
+                )
+
                 await interaction.followup.send(
                     f"✅ Retroactive processing complete for week **{week_id}**.\n"
                     f"• Re-posted archive summary log.\n"
                     f"• Distributed prizes to **{awarded}** users.\n"
-                    f"• Posted prizes summary log.\n\n"
-                    f"⚠️ **Note:** This command re-awards prizes regardless of previous attempts. "
-                    f"Ensure users weren't already credited to avoid double-payment.",
+                    f"• Posted prizes summary log.",
                     ephemeral=True
                 )
             else:
@@ -1224,6 +1277,263 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         except Exception as e:
             logger.error(f"Retroactive prize processing failed for {week_id}: {e}")
             await interaction.followup.send(f"❌ Failed to process prizes for week `{week_id}`: {e}", ephemeral=True)
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  BACKFILL COMMAND — Reconstruct missing archive data + prize delta
+    # ═══════════════════════════════════════════════════════════════════
+
+    @lb_group.command(name="backfill", description="Backfill missing archive data and distribute correction prizes for a past week")
+    @app_commands.describe(week_id="Week ID to backfill (e.g. 2026-W16)")
+    @app_commands.autocomplete(week_id=week_id_autocomplete)
+    async def lb_backfill(self, interaction: discord.Interaction, week_id: str):
+        """Backfill missing categories into a past week's archive and distribute prize corrections."""
+        await interaction.response.defer(ephemeral=True)
+
+        # 1. Validate the week exists in some form
+        data = await leaderboard_service.get_archived_week_data(week_id)
+        if not data:
+            return await interaction.followup.send(
+                f"❌ No archived data found for week `{week_id}`. Cannot backfill a week with no existing archive.",
+                ephemeral=True
+            )
+
+        # 2. Identify missing categories
+        archived_cats = {row["category"] for row in data}
+        all_expected = {"xp", "ep", "quiz", "referral", "voice", "messages", "counting"}
+        missing_cats = all_expected - archived_cats
+
+        if not missing_cats:
+            return await interaction.followup.send(
+                f"✅ Week `{week_id}` already has all {len(all_expected)} categories archived. Nothing to backfill.",
+                ephemeral=True
+            )
+
+        # 3. Compute week boundaries from week_id for timestamp queries
+        try:
+            # Parse week_id like "2026-W16" → year=2026, week_num=16
+            parts = week_id.split("-W")
+            year = int(parts[0])
+            week_num = int(parts[1])
+
+            # Find the Monday for this week number
+            from datetime import date
+            jan1 = date(year, 1, 1)
+            # %W counts weeks starting Monday; week 0 starts Jan 1 if it's Monday
+            # First Monday of the year
+            days_to_first_monday = (7 - jan1.weekday()) % 7
+            first_monday = jan1 + timedelta(days=days_to_first_monday)
+            # Week 1 starts at first_monday; week 0 is before that
+            if week_num == 0:
+                target_monday = jan1
+            else:
+                target_monday = first_monday + timedelta(weeks=week_num - 1)
+
+            week_start_utc = datetime(
+                target_monday.year, target_monday.month, target_monday.day,
+                0, 0, 0, tzinfo=TZ_PHT
+            ).astimezone(timezone.utc)
+            week_end_utc = week_start_utc + timedelta(days=7)
+        except (ValueError, IndexError):
+            return await interaction.followup.send(
+                f"❌ Could not parse week boundaries from `{week_id}`. Expected format: `YYYY-WNN`.",
+                ephemeral=True
+            )
+
+        # 4. Determine already-awarded prize categories
+        prizes_cats_str = await settings_service.get(f"lb_prizes_cats_{week_id}")
+        already_awarded_cats = set(prizes_cats_str.split(",")) if prizes_cats_str else set()
+
+        # 5. Dry-run the backfill to preview what would be inserted
+        msl_ids = await leaderboard_service.get_msl_user_ids()
+
+        # Build preview: query the data without inserting
+        preview_lines = []
+        backfillable_cats = missing_cats - {"counting"}  # Counting snapshot is lost
+        for cat in sorted(backfillable_cats):
+            preview_lines.append(f"• **{cat}** — will query from raw data")
+
+        if "counting" in missing_cats:
+            preview_lines.append(f"• **counting** — ⚠️ cannot recover (snapshot lost at reset)")
+
+        # 6. Calculate prize delta preview
+        # First do the actual backfill to get data, then compute delta
+        backfill_results = await leaderboard_service.backfill_archived_week(
+            week_id, week_start_utc, week_end_utc, msl_ids
+        )
+
+        if not backfill_results:
+            return await interaction.followup.send(
+                f"ℹ️ Week `{week_id}` is missing categories: **{', '.join(sorted(missing_cats))}**\n"
+                f"However, no data was found in the source tables for these categories. Nothing to backfill.",
+                ephemeral=True
+            )
+
+        # Calculate delta prizes from newly-inserted categories
+        prize_delta = await leaderboard_service.calculate_prize_delta(week_id, already_awarded_cats)
+
+        # Build the preview embed
+        embed = discord.Embed(
+            title=f"🔧 Backfill Preview — {week_id}",
+            description=f"The following categories have been reconstructed from raw data:",
+            color=discord.Color.orange(),
+        )
+
+        backfill_summary = "\n".join(
+            f"✅ **{cat}** — {count} entries added" for cat, count in backfill_results.items()
+        )
+        if "counting" in missing_cats:
+            backfill_summary += "\n⚠️ **counting** — cannot recover (snapshot lost)"
+
+        skipped = backfillable_cats - set(backfill_results.keys())
+        for cat in sorted(skipped):
+            backfill_summary += f"\nℹ️ **{cat}** — no data found in source tables"
+
+        embed.add_field(name="📦 Data Backfilled", value=backfill_summary, inline=False)
+
+        if prize_delta:
+            prize_lines = []
+            total_delta_ep = 0
+            for entry in prize_delta[:15]:  # Cap display at 15
+                breakdown = ", ".join(f"{cat}: {ep} EP" for cat, ep in entry["breakdown"].items())
+                prize_lines.append(f"<@{entry['user_id']}> — **+{entry['total_ep']} EP** ({breakdown})")
+                total_delta_ep += entry["total_ep"]
+            prize_text = "\n".join(prize_lines)
+            if len(prize_delta) > 15:
+                prize_text += f"\n*... and {len(prize_delta) - 15} more users*"
+            prize_text += f"\n\n**Total correction:** {total_delta_ep} EP across {len(prize_delta)} users"
+            embed.add_field(name="💰 Prize Corrections", value=prize_text, inline=False)
+        else:
+            embed.add_field(
+                name="💰 Prize Corrections",
+                value="No additional prize-eligible entries found (or all prize categories were already awarded).",
+                inline=False
+            )
+
+        embed.set_footer(text="Click Confirm to distribute correction prizes and re-post the archive log.")
+
+        view = BackfillConfirmView(
+            cog=self,
+            interaction=interaction,
+            week_id=week_id,
+            prize_delta=prize_delta,
+            already_awarded_cats=already_awarded_cats,
+            backfill_results=backfill_results,
+        )
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+class BackfillConfirmView(discord.ui.View):
+    """Confirmation UI for the backfill command — distributes delta prizes on confirm."""
+
+    def __init__(self, cog, interaction, week_id, prize_delta, already_awarded_cats, backfill_results):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.original_interaction = interaction
+        self.week_id = week_id
+        self.prize_delta = prize_delta
+        self.already_awarded_cats = already_awarded_cats
+        self.backfill_results = backfill_results
+        self.executed = False
+
+    @discord.ui.button(label="✅ Confirm & Distribute", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.executed:
+            return await interaction.response.send_message("Already executed.", ephemeral=True)
+        self.executed = True
+
+        # Disable buttons immediately
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+        status_lines = [f"**Backfill execution for {self.week_id}:**\n"]
+
+        # Data was already inserted during preview — log what was added
+        for cat, count in self.backfill_results.items():
+            status_lines.append(f"✅ **{cat}**: {count} entries inserted")
+
+        # Distribute delta prizes
+        if self.prize_delta:
+            awarded = 0
+            for entry in self.prize_delta:
+                try:
+                    new_ep = await ep_service.process_ep_update(
+                        interaction.guild,
+                        entry["user_id"],
+                        entry["total_ep"],
+                        bypass_verification=True,
+                        is_placement=False,
+                    )
+                    if new_ep > 0:
+                        awarded += 1
+                    await asyncio.sleep(0.5)  # Rate limit safety
+                except Exception as e:
+                    logger.error(f"Backfill prize failed for {entry['user_id']}: {e}")
+                    continue
+
+            status_lines.append(f"\n💰 Distributed correction EP to **{awarded}** users")
+
+            # Update prize tracking to include newly-awarded categories
+            new_cats = self.already_awarded_cats | set(self.backfill_results.keys())
+            # Only track prize-eligible categories
+            tracked = new_cats & leaderboard_service.PRIZE_CATEGORIES
+            # Also include previously tracked non-backfilled categories
+            tracked |= self.already_awarded_cats
+            await settings_service.set(
+                f"lb_prizes_cats_{self.week_id}",
+                ",".join(sorted(tracked))
+            )
+        else:
+            status_lines.append("\nℹ️ No prize corrections needed")
+
+        # Re-post the complete archive log
+        try:
+            await self.cog._post_weekly_archive_log(interaction.guild, self.week_id)
+            status_lines.append("📋 Re-posted archive summary to log channel")
+        except Exception as e:
+            logger.error(f"Failed to re-post archive log after backfill: {e}")
+            status_lines.append(f"⚠️ Failed to re-post archive log: {e}")
+
+        # Post prize correction log if prizes were distributed
+        if self.prize_delta:
+            try:
+                await self.cog._post_weekly_prizes_log(
+                    interaction.guild, self.week_id, self.prize_delta
+                )
+                status_lines.append("📋 Posted prize correction summary to log channel")
+            except Exception as e:
+                logger.error(f"Failed to post prize correction log: {e}")
+
+        await interaction.followup.send("\n".join(status_lines), ephemeral=True)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.grey)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.executed:
+            return await interaction.response.send_message("Already executed.", ephemeral=True)
+        self.executed = True
+
+        for item in self.children:
+            item.disabled = True
+
+        # Note: Data was already inserted during the preview query.
+        # Cancelling does NOT undo the data insertion — only skips prize distribution.
+        await interaction.response.edit_message(
+            content="❌ Prize distribution cancelled. Note: backfilled data remains in the archive.",
+            view=self
+        )
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        try:
+            await self.original_interaction.edit_original_response(
+                content="⏰ Backfill confirmation timed out. Backfilled data remains in the archive. "
+                        "Run the command again to distribute prizes.",
+                view=self
+            )
+        except Exception:
+            pass
 
 
 async def setup(bot: commands.Bot):

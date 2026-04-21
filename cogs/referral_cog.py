@@ -1,22 +1,19 @@
 """
-Referral Cog — /referral subcommands and weekly reset cron.
+Referral Cog — /referral subcommands.
+Weekly reset is handled by the leaderboard cog to prevent race conditions.
 """
 
 import discord
 import datetime
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
 import logging
 
 from services.referral_service import referral_service
-from services.settings_service import settings_service
 
 logger = logging.getLogger("mlbb_bot.referral_cog")
 
-# Manila timezone (UTC+8) — reset happens Monday midnight PHT (aligned with leaderboard)
-TZ_MANILA = datetime.timezone(datetime.timedelta(hours=8))
-# Monday midnight PHT = Sunday 16:00 UTC
-MONDAY_MIDNIGHT_PHT_UTC = datetime.time(hour=16, minute=0, tzinfo=datetime.timezone.utc)
+
 
 # Error messages for link_referral results
 LINK_ERRORS = {
@@ -35,45 +32,7 @@ class ReferralCog(commands.Cog, name="Referrals"):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        if not self.weekly_reset_loop.is_running():
-            self.weekly_reset_loop.start()
         logger.info("Referral system ready")
-
-    def cog_unload(self):
-        self.weekly_reset_loop.cancel()
-
-    # ─── WEEKLY RESET CRON ──────────────────────────────────────────
-
-    @tasks.loop(time=MONDAY_MIDNIGHT_PHT_UTC)
-    async def weekly_reset_loop(self):
-        """
-        Runs every day at Sunday 16:00 UTC (Monday midnight PHT).
-        Only executes the reset if today is actually Monday in PHT.
-        Uses a settings flag to prevent double-runs.
-        60s start delay ensures leaderboard archive completes first.
-        """
-        now_pht = datetime.datetime.now(TZ_MANILA)
-
-        # Only run on Monday (weekday 0) — aligned with leaderboard reset
-        if now_pht.weekday() != 0:
-            return
-
-        # Check if we already ran this week
-        iso_week = now_pht.strftime("%Y-W%W")
-        last_reset = await settings_service.get("referral_last_reset_week")
-        if last_reset == iso_week:
-            return
-
-        await referral_service.weekly_reset()
-        await settings_service.set("referral_last_reset_week", iso_week)
-        logger.info(f"Referral weekly reset executed for week {iso_week}")
-
-    @weekly_reset_loop.before_loop
-    async def before_weekly_reset(self):
-        await self.bot.wait_until_ready()
-        # 60s delay ensures leaderboard archive captures referral data first
-        import asyncio
-        await asyncio.sleep(60)
 
     # ─── COMMAND GROUP ──────────────────────────────────────────────
 

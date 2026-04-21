@@ -238,9 +238,9 @@ class LeaderboardService:
             tuple(params),
         )
 
-    async def get_weekly_quiz(self, limit: int = 10, exclude_ids: set[int] | None = None) -> list[dict]:
+    async def get_weekly_quiz(self, limit: int = 10, exclude_ids: set[int] | None = None, *, week_start: datetime | None = None) -> list[dict]:
         """Top quiz scorers since the start of the current week."""
-        week_start = self.get_week_start()
+        week_start = week_start or self.get_week_start()
         params: list = [week_start]
         excl = self._build_exclusion_clause(exclude_ids or set(), params)
         params.append(limit)
@@ -279,9 +279,9 @@ class LeaderboardService:
             "weekly_contributors": weekly_contrib or [],
         }
 
-    async def get_weekly_voice(self, limit: int = 10, exclude_ids: set[int] | None = None) -> list[dict]:
+    async def get_weekly_voice(self, limit: int = 10, exclude_ids: set[int] | None = None, *, week_start: datetime | None = None) -> list[dict]:
         """Top users by voice minutes this week."""
-        week_start = self.get_week_start()
+        week_start = week_start or self.get_week_start()
         params: list = [week_start]
         excl = self._build_exclusion_clause(exclude_ids or set(), params)
         params.append(limit)
@@ -296,9 +296,9 @@ class LeaderboardService:
             tuple(params),
         )
 
-    async def get_weekly_messages(self, limit: int = 10, exclude_ids: set[int] | None = None) -> list[dict]:
+    async def get_weekly_messages(self, limit: int = 10, exclude_ids: set[int] | None = None, *, week_start: datetime | None = None) -> list[dict]:
         """Top users by message count this week (3+ words, not deleted)."""
-        week_start = self.get_week_start()
+        week_start = week_start or self.get_week_start()
         params: list = [week_start]
         excl = self._build_exclusion_clause_alias("m", exclude_ids or set(), params, column="author_id")
         params.append(limit)
@@ -356,14 +356,14 @@ class LeaderboardService:
     #  WEEKLY ARCHIVE (history logging)
     # ═══════════════════════════════════════════════════════════════════
 
-    # Category definitions: (key, query_method_name, value_field_key)
+    # Category definitions: (key, query_method_name, value_field_key, uses_week_start)
     WEEKLY_CATEGORIES = [
-        ("xp", "get_weekly_xp", "weekly_xp"),
-        ("ep", "get_weekly_ep", "weekly_ep"),
-        ("quiz", "get_weekly_quiz", "total_score"),
-        ("referral", "get_weekly_referrals", "curr_week_referrals"),
-        ("voice", "get_weekly_voice", "total_minutes"),
-        ("messages", "get_weekly_messages", "total_messages"),
+        ("xp", "get_weekly_xp", "weekly_xp", False),
+        ("ep", "get_weekly_ep", "weekly_ep", False),
+        ("quiz", "get_weekly_quiz", "total_score", True),
+        ("referral", "get_weekly_referrals", "curr_week_referrals", False),
+        ("voice", "get_weekly_voice", "total_minutes", True),
+        ("messages", "get_weekly_messages", "total_messages", True),
     ]
 
     async def archive_weekly_standings(self, exclude_ids: set[int]) -> tuple[str, int]:
@@ -375,6 +375,11 @@ class LeaderboardService:
         """
         now_pht = datetime.now(TZ_PHT)
         week_id = now_pht.strftime("%Y-W%W")
+
+        # Previous week's Monday 00:00 PHT -> UTC (for timestamp-based queries)
+        prev_week_start = (now_pht - timedelta(days=7)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).astimezone(timezone.utc)
 
         # Idempotency check
         existing = await db.fetch_one(
@@ -389,10 +394,13 @@ class LeaderboardService:
         snapshot_time = now_pht.strftime("%Y-%m-%d %H:%M:%S")
 
         # Archive standard categories (XP, EP, Quiz, Referral, Voice, Messages)
-        for cat_key, method_name, value_key in self.WEEKLY_CATEGORIES:
+        for cat_key, method_name, value_key, uses_week_start in self.WEEKLY_CATEGORIES:
             try:
                 method = getattr(self, method_name)
-                rows = await method(10, exclude_ids)
+                if uses_week_start:
+                    rows = await method(10, exclude_ids, week_start=prev_week_start)
+                else:
+                    rows = await method(10, exclude_ids)
                 if not rows:
                     continue
 
@@ -513,6 +521,144 @@ class LeaderboardService:
             user_prizes[user_id]["breakdown"][cat] = ep_award
 
         # Sort by total EP descending for display
+        result = sorted(user_prizes.values(), key=lambda x: x["total_ep"], reverse=True)
+        return result
+
+    async def backfill_archived_week(
+        self,
+        week_id: str,
+        week_start_utc: datetime,
+        week_end_utc: datetime,
+        exclude_ids: set[int]
+    ) -> dict[str, int]:
+        """
+        Backfill missing categories into an existing archived week.
+        Returns dict mapping category -> number of rows inserted.
+        """
+        existing = await self.get_archived_week_data(week_id)
+        existing_cats = {row["category"] for row in existing}
+        
+        inserted: dict[str, int] = {}
+        now_str = datetime.now(TZ_PHT).strftime("%Y-%m-%d %H:%M:%S")
+
+        async def _insert_rows(cat, rows, val_key):
+            count = 0
+            for rank, r in enumerate(rows, 1):
+                val = r.get(val_key, 0) or 0
+                await db.execute(
+                    """INSERT INTO weekly_leaderboard_history
+                       (week_id, category, rank_position, user_id, value, extra_info, snapshot_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (week_id, cat, rank, r["user_id"], int(val), None, now_str)
+                )
+                count += 1
+            if count > 0:
+                inserted[cat] = count
+                
+        # Quiz
+        if "quiz" not in existing_cats:
+            params = [week_start_utc, week_end_utc]
+            excl = self._build_exclusion_clause(exclude_ids, params)
+            params.append(10)
+            rows = await db.fetch_all(
+                f"""SELECT user_id, SUM(score) as total_score
+                    FROM quiz_history
+                    WHERE earned_at >= %s AND earned_at < %s{excl}
+                    GROUP BY user_id
+                    ORDER BY total_score DESC LIMIT %s""",
+                tuple(params)
+            )
+            await _insert_rows("quiz", rows, "total_score")
+            
+        # Referral
+        if "referral" not in existing_cats:
+            now_pht = datetime.now(TZ_PHT)
+            expected_prev_week_id = (now_pht - timedelta(days=7)).strftime("%Y-W%W")
+            
+            if week_id == expected_prev_week_id:
+                params = []
+                excl = self._build_exclusion_clause(exclude_ids, params)
+                params.append(10)
+                rows = await db.fetch_all(
+                    f"""SELECT user_id, prev_week_referrals as curr_week_referrals
+                        FROM referrals
+                        WHERE prev_week_referrals > 0{excl}
+                        ORDER BY prev_week_referrals DESC LIMIT %s""",
+                    tuple(params)
+                )
+                await _insert_rows("referral", rows, "curr_week_referrals")
+            else:
+                logger.warning(f"Skipping referral backfill for {week_id}: prev_week_referrals data is stale.")
+
+        # Voice
+        if "voice" not in existing_cats:
+            params = [week_start_utc, week_end_utc]
+            excl = self._build_exclusion_clause(exclude_ids, params)
+            params.append(10)
+            rows = await db.fetch_all(
+                f"""SELECT user_id,
+                           ROUND(SUM(TIMESTAMPDIFF(SECOND, joined_at, COALESCE(left_at, NOW()))) / 60) as total_minutes
+                    FROM analytics_voice_sessions
+                    WHERE joined_at >= %s AND joined_at < %s{excl}
+                    GROUP BY user_id
+                    HAVING total_minutes > 0
+                    ORDER BY total_minutes DESC LIMIT %s""",
+                tuple(params)
+            )
+            await _insert_rows("voice", rows, "total_minutes")
+
+        # Messages
+        if "messages" not in existing_cats:
+            params = [week_start_utc, week_end_utc]
+            excl = self._build_exclusion_clause_alias("m", exclude_ids, params, column="author_id")
+            params.append(10)
+            rows = await db.fetch_all(
+                f"""SELECT m.author_id as user_id, COUNT(*) as total_messages
+                    FROM analytics_messages m
+                    WHERE m.created_at >= %s AND m.created_at < %s AND m.word_count >= 3 AND m.is_deleted = FALSE{excl}
+                    GROUP BY m.author_id
+                    ORDER BY total_messages DESC LIMIT %s""",
+                tuple(params)
+            )
+            await _insert_rows("messages", rows, "total_messages")
+            
+        return inserted
+
+    async def calculate_prize_delta(
+        self,
+        week_id: str,
+        already_awarded_categories: set[str],
+    ) -> list[dict]:
+        """Calculate EP owed for newly-backfilled prize-eligible categories."""
+        rows = await db.fetch_all(
+            """SELECT category, rank_position, user_id, value
+               FROM weekly_leaderboard_history
+               WHERE week_id = %s AND rank_position <= 10
+               ORDER BY category, rank_position""",
+            (week_id,),
+        )
+
+        if not rows:
+            return []
+
+        user_prizes: dict[int, dict] = {}
+        for row in rows:
+            cat = row["category"]
+            if cat not in self.PRIZE_CATEGORIES:
+                continue
+            if cat in already_awarded_categories:
+                continue
+
+            rank = row["rank_position"]
+            user_id = row["user_id"]
+            ep_award = self.PRIZE_EP.get(rank, self.PRIZE_EP_DEFAULT)
+
+            if user_id not in user_prizes:
+                user_prizes[user_id] = {"user_id": user_id, "total_ep": 0, "breakdown": {}}
+
+            user_prizes[user_id]["total_ep"] += ep_award
+            user_prizes[user_id]["breakdown"][cat] = ep_award
+
         result = sorted(user_prizes.values(), key=lambda x: x["total_ep"], reverse=True)
         return result
 
