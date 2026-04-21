@@ -1401,15 +1401,17 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
         if prize_delta:
             prize_lines = []
-            total_delta_ep = 0
-            for entry in prize_delta[:15]:  # Cap display at 15
-                breakdown = ", ".join(f"{cat}: {ep} EP" for cat, ep in entry["breakdown"].items())
+            total_delta_ep = sum(e["total_ep"] for e in prize_delta)
+            for entry in prize_delta[:10]:  # Cap display
+                breakdown = ", ".join(f"{cat}: {ep}" for cat, ep in entry["breakdown"].items())
                 prize_lines.append(f"<@{entry['user_id']}> — **+{entry['total_ep']} EP** ({breakdown})")
-                total_delta_ep += entry["total_ep"]
             prize_text = "\n".join(prize_lines)
-            if len(prize_delta) > 15:
-                prize_text += f"\n*... and {len(prize_delta) - 15} more users*"
+            if len(prize_delta) > 10:
+                prize_text += f"\n*... and {len(prize_delta) - 10} more users*"
             prize_text += f"\n\n**Total correction:** {total_delta_ep} EP across {len(prize_delta)} users"
+            # Discord embed field limit: 1024 chars
+            if len(prize_text) > 1024:
+                prize_text = f"**{len(prize_delta)} users** will receive correction EP.\n**Total:** {total_delta_ep} EP"
             embed.add_field(name="💰 Prize Corrections", value=prize_text, inline=False)
         else:
             embed.add_field(
