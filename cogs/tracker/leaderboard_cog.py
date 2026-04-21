@@ -245,7 +245,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
     # ═══════════════════════════════════════════════════════════════════
 
     PRIZE_CAT_LABELS = {
-        "xp": "🌟 XP",
+        "xp": "📊 XP",
         "quiz": "🧠 Quiz",
         "counting": "🔢 Counting",
         "referral": "🔗 Referrals",
@@ -301,8 +301,8 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
     # ═══════════════════════════════════════════════════════════════════
 
     CATEGORY_LABELS = {
-        "xp": ("🌟", "XP", "XP"),
-        "ep": ("🏆", "EP", "EP"),
+        "xp": ("📊", "XP", "XP"),
+        "ep": ("🏅", "EP", "EP"),
         "quiz": ("🧠", "Quiz", "pts"),
         "counting": ("🔢", "Counting", "counts"),
         "referral": ("🔗", "Referrals", "referrals"),
@@ -336,13 +336,19 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             timestamp=discord.utils.utcnow(),
         )
 
-        for cat_key, rows in categories.items():
+        # Fixed order as requested by user: XP, EP, Quiz, Counting, Referrals
+        summary_categories = ["xp", "ep", "quiz", "counting", "referral"]
+
+        for cat_key in summary_categories:
+            rows = categories.get(cat_key, [])
             emoji, label, unit = self.CATEGORY_LABELS.get(cat_key, ("📋", cat_key, ""))
+            
             lines = []
             for row in rows[:5]:  # Show top 5 in the summary
                 rank = row["rank_position"]
                 medal = MEDALS[rank - 1] if rank <= 3 else f"`{rank}.`"
                 lines.append(f"{medal} <@{row['user_id']}> — **{row['value']:,}** {unit}")
+                
             embed.add_field(
                 name=f"{emoji} {label}",
                 value="\n".join(lines) if lines else "*No data*",
@@ -591,7 +597,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         xp_key = "weekly_xp" if is_weekly else "xp"
 
         embed = discord.Embed(
-            title=f"🌟 XP Leaderboard — {label}",
+            title=f"📊 XP Leaderboard — {label}",
             color=CLR_XP,
             timestamp=discord.utils.utcnow(),
         )
@@ -644,7 +650,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         ep_key = "weekly_ep" if is_weekly else "event_points"
 
         embed = discord.Embed(
-            title=f"🏆 EP Leaderboard — {label}",
+            title=f"🏅 EP Leaderboard — {label}",
             color=CLR_EP,
             timestamp=discord.utils.utcnow(),
         )
@@ -967,6 +973,33 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         return embed
 
     # ═══════════════════════════════════════════════════════════════════
+    #  AUTOCOMPLETE HELPERS
+    # ═══════════════════════════════════════════════════════════════════
+
+    async def week_id_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Intuitively suggest archived week IDs with dates."""
+        try:
+            weeks = await leaderboard_service.get_archived_weeks(25)
+            choices = []
+            for w in weeks:
+                week_id = w["week_id"]
+                archived_at = w["archived_at"]
+                
+                # Format a nice label: "2026-W15 (Archived Apr 20)"
+                date_str = archived_at.strftime("%b %d") if archived_at else "N/A"
+                label = f"{week_id} (Archived {date_str})"
+                
+                if current.lower() in label.lower() or current.lower() in week_id.lower():
+                    choices.append(app_commands.Choice(name=label, value=week_id))
+            
+            return choices[:25]
+        except Exception as e:
+            logger.error(f"Error in week_id_autocomplete: {e}")
+            return []
+
+    # ═══════════════════════════════════════════════════════════════════
     #  ADMIN COMMANDS
     # ═══════════════════════════════════════════════════════════════════
 
@@ -978,6 +1011,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
     @lb_group.command(name="history", description="View archived weekly leaderboard standings")
     @app_commands.describe(week_id="Optional week ID (e.g. 2026-W15). Leave blank to list available weeks.")
+    @app_commands.autocomplete(week_id=week_id_autocomplete)
     async def lb_history(self, interaction: discord.Interaction, week_id: str | None = None):
         await interaction.response.defer(ephemeral=True)
 
@@ -1017,13 +1051,21 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
             timestamp=discord.utils.utcnow(),
         )
 
-        for cat_key, rows in categories.items():
+        # Display in fixed order for consistency
+        display_categories = ["xp", "ep", "quiz", "counting", "referral", "voice", "messages"]
+
+        for cat_key in display_categories:
+            rows = categories.get(cat_key, [])
+            if not rows and cat_key in ["voice", "messages"]:
+                continue # Skip extra categories if empty
+                
             emoji, label, unit = self.CATEGORY_LABELS.get(cat_key, ("📋", cat_key, ""))
             lines = []
             for row in rows:
                 rank = row["rank_position"]
                 medal = MEDALS[rank - 1] if rank <= 3 else f"`{rank}.`"
                 lines.append(f"{medal} <@{row['user_id']}> — **{row['value']:,}** {unit}")
+            
             embed.add_field(
                 name=f"{emoji} {label}",
                 value="\n".join(lines) if lines else "*No data*",
@@ -1035,6 +1077,7 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
 
     @lb_group.command(name="export", description="Export weekly leaderboard archive as CSV for reward processing")
     @app_commands.describe(week_id="Week ID to export (e.g. 2026-W15)")
+    @app_commands.autocomplete(week_id=week_id_autocomplete)
     async def lb_export(self, interaction: discord.Interaction, week_id: str):
         """Generate CSV files matching the raffle export format:
         Non-MSL: Full Name, UID, Server, Amount, Remarks
@@ -1136,6 +1179,51 @@ class LeaderboardCog(commands.Cog, name="leaderboards"):
         else:
             await interaction.followup.send(msg, files=files[:10], ephemeral=True)
             await interaction.followup.send("*(continued)*", files=files[10:], ephemeral=True)
+
+    @lb_group.command(name="retro_process", description="Retroactively fix previous output and crediting for a past week")
+    @app_commands.describe(week_id="Week ID to process (e.g. 2026-W15)")
+    @app_commands.autocomplete(week_id=week_id_autocomplete)
+    async def lb_retro_process(self, interaction: discord.Interaction, week_id: str):
+        """Re-posts the archive summary and re-calculates/distributes prizes for a past week."""
+        await interaction.response.defer(ephemeral=True)
+
+        # 1. Check if data exists
+        data = await leaderboard_service.get_archived_week_data(week_id)
+        if not data:
+            return await interaction.followup.send(f"❌ No archived data found for week `{week_id}`.", ephemeral=True)
+
+        # 2. Re-post the archive log (summary)
+        try:
+            await self._post_weekly_archive_log(interaction.guild, week_id)
+        except Exception as e:
+            logger.error(f"Failed to re-post archive log for {week_id}: {e}")
+
+        # 3. Re-calculate and distribute prizes
+        try:
+            prizes = await leaderboard_service.calculate_weekly_prizes(week_id)
+            if prizes:
+                awarded = await self._distribute_weekly_prizes(interaction.guild, prizes)
+                # 4. Post rewards summary
+                await self._post_weekly_prizes_log(interaction.guild, week_id, prizes)
+                
+                await interaction.followup.send(
+                    f"✅ Retroactive processing complete for week **{week_id}**.\n"
+                    f"• Re-posted archive summary log.\n"
+                    f"• Distributed prizes to **{awarded}** users.\n"
+                    f"• Posted prizes summary log.\n\n"
+                    f"⚠️ **Note:** This command re-awards prizes regardless of previous attempts. "
+                    f"Ensure users weren't already credited to avoid double-payment.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    f"✅ Re-posted archive summary for week **{week_id}**.\n"
+                    f"⚠️ No prize-eligible entries found for this week to credit.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Retroactive prize processing failed for {week_id}: {e}")
+            await interaction.followup.send(f"❌ Failed to process prizes for week `{week_id}`: {e}", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
