@@ -32,7 +32,7 @@ intents.reactions = True
 intents.presences = True
 
 # Create bot instance
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
 
 # Target guild object (created after bot connects)
 TARGET_GUILD = None

@@ -251,7 +251,8 @@ class VerificationCog(commands.Cog, name="verification"):
         self.bot.add_view(VerifyView())
         await verification_service.load_cache()
         await verification_service.load_msl_cache()
-        self.msl_refresh_loop.start()
+        if not self.msl_refresh_loop.is_running():
+            self.msl_refresh_loop.start()
         logger.info("Verification system ready")
 
     @tasks.loop(hours=6)

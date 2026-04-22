@@ -35,6 +35,7 @@ MAX_REUPLOAD_SIZE = 25 * 1024 * 1024   # 25 MB (Discord non-Nitro upload cap)
 CACHE_TTL_DAYS = 30                      # How long to keep messages in cache
 FLUSH_INTERVAL_SECONDS = 60              # How often to write cache to disk
 BULK_ATTACHMENT_BATCH = 5                # Max concurrent attachment downloads in bulk
+MAX_CACHE_ENTRIES = 150_000              # Hard cap on cached messages (~45 MB RAM)
 
 
 def snowflake_to_timestamp(snowflake_id: int) -> float:
@@ -64,9 +65,9 @@ class LogCog(commands.Cog, name="Logging"):
 
     def cog_unload(self):
         self._flush_and_prune.cancel()
-        # Final save on unload
+        # Final save on unload (sync is fine here — cog_unload is synchronous)
         if self._dirty:
-            self._save_cache()
+            self._sync_save_cache()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -94,15 +95,29 @@ class LogCog(commands.Cog, name="Logging"):
             self._cache = {}
             logger.info(f"No message cache file found at {path}, starting fresh.")
 
-    def _save_cache(self):
-        """Atomically persist the message cache to disk."""
+    def _sync_save_cache(self):
+        """Atomically persist the message cache to disk (synchronous).
+        Use only in sync contexts like cog_unload. For async contexts,
+        use _save_cache_async() instead."""
+        self._sync_save_to_disk(self._cache)
+        self._dirty = False
+
+    async def _save_cache_async(self):
+        """Persist cache to disk without blocking the event loop."""
+        # Shallow-copy to avoid 'dictionary changed size during iteration'
+        # if on_message mutates _cache while the thread is serializing.
+        snapshot = dict(self._cache)
+        await asyncio.to_thread(self._sync_save_to_disk, snapshot)
+        self._dirty = False
+
+    def _sync_save_to_disk(self, data: dict):
+        """Thread-safe atomic disk write. Runs in executor thread via asyncio.to_thread."""
         path = str(STORAGE_FILE)
+        temp_file = path + ".tmp"
         try:
-            temp_file = path + ".tmp"
             with open(temp_file, 'w') as f:
-                json.dump(self._cache, f, separators=(',', ':'))  # Compact JSON
+                json.dump(data, f, separators=(',', ':'))  # Compact JSON
             os.replace(temp_file, path)
-            self._dirty = False
         except OSError as e:
             logger.error(f"Failed to save message cache to {path}: {e}")
 
@@ -126,8 +141,18 @@ class LogCog(commands.Cog, name="Logging"):
             self._dirty = True
             logger.info(f"Message cache pruned: removed {len(to_remove)} entries older than {cutoff} days")
 
+        # Enforce hard cap — evict oldest snowflakes first
+        if len(self._cache) > MAX_CACHE_ENTRIES:
+            excess = len(self._cache) - MAX_CACHE_ENTRIES
+            # Snowflake IDs are chronological, so sorting numerically gives oldest-first
+            sorted_keys = sorted(self._cache.keys(), key=lambda k: int(k))
+            for key in sorted_keys[:excess]:
+                self._cache.pop(key, None)
+            self._dirty = True
+            logger.info(f"Message cache capped: evicted {excess} oldest entries (limit: {MAX_CACHE_ENTRIES})")
+
         if self._dirty:
-            self._save_cache()
+            await self._save_cache_async()
 
     @_flush_and_prune.before_loop
     async def _before_flush(self):

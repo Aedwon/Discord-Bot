@@ -839,7 +839,8 @@ class TicketCog(commands.Cog, name="Tickets"):
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.check_reminders.start()
+        if not self.check_reminders.is_running():
+            self.check_reminders.start()
 
     def cog_unload(self):
         self.check_reminders.cancel()

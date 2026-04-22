@@ -569,7 +569,8 @@ class AdoptionView(discord.ui.View):
 class SocialCog(commands.GroupCog, name="social"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.weekly_contributor_loop.start()
+        if not self.weekly_contributor_loop.is_running():
+            self.weekly_contributor_loop.start()
 
     def cog_unload(self):
         self.weekly_contributor_loop.cancel()

@@ -29,7 +29,8 @@ class PromoCog(commands.Cog):
 
     async def cog_load(self):
         """Start background tasks when cog loads."""
-        self._sync_task.start()
+        if not self._sync_task.is_running():
+            self._sync_task.start()
 
     async def cog_unload(self):
         """Cancel background tasks when cog unloads."""

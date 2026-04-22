@@ -238,16 +238,26 @@ class LeaderboardService:
             tuple(params),
         )
 
-    async def get_weekly_quiz(self, limit: int = 10, exclude_ids: set[int] | None = None, *, week_start: datetime | None = None) -> list[dict]:
-        """Top quiz scorers since the start of the current week."""
-        week_start = week_start or self.get_week_start()
-        params: list = [week_start]
+    async def get_weekly_quiz(
+        self, limit: int = 10, exclude_ids: set[int] | None = None,
+        since: datetime | None = None, until: datetime | None = None
+    ) -> list[dict]:
+        """Top quiz scorers within a time window (defaults to current week)."""
+        start = since or self.get_week_start()
+        params: list = [start]
+        time_clause = "earned_at >= %s"
+
+        if until:
+            params.append(until)
+            time_clause = "earned_at BETWEEN %s AND %s"
+
         excl = self._build_exclusion_clause(exclude_ids or set(), params)
         params.append(limit)
+
         return await db.fetch_all(
             f"""SELECT user_id, SUM(score) as total_score, COUNT(*) as sessions
                 FROM quiz_history
-                WHERE earned_at >= %s{excl}
+                WHERE {time_clause}{excl}
                 GROUP BY user_id
                 ORDER BY total_score DESC LIMIT %s""",
             tuple(params),
@@ -279,33 +289,51 @@ class LeaderboardService:
             "weekly_contributors": weekly_contrib or [],
         }
 
-    async def get_weekly_voice(self, limit: int = 10, exclude_ids: set[int] | None = None, *, week_start: datetime | None = None) -> list[dict]:
-        """Top users by voice minutes this week."""
-        week_start = week_start or self.get_week_start()
-        params: list = [week_start]
+    async def get_weekly_voice(
+        self, limit: int = 10, exclude_ids: set[int] | None = None,
+        since: datetime | None = None, until: datetime | None = None
+    ) -> list[dict]:
+        """Top users by voice minutes within a time window (defaults to current week)."""
+        start = since or self.get_week_start()
+        params: list = [start]
+        time_clause = "joined_at >= %s"
+
+        if until:
+            params.append(until)
+            time_clause = "joined_at BETWEEN %s AND %s"
+
         excl = self._build_exclusion_clause(exclude_ids or set(), params)
         params.append(limit)
         return await db.fetch_all(
             f"""SELECT user_id,
                        ROUND(SUM(TIMESTAMPDIFF(SECOND, joined_at, COALESCE(left_at, NOW()))) / 60) as total_minutes
                 FROM analytics_voice_sessions
-                WHERE joined_at >= %s{excl}
+                WHERE {time_clause}{excl}
                 GROUP BY user_id
                 HAVING total_minutes > 0
                 ORDER BY total_minutes DESC LIMIT %s""",
             tuple(params),
         )
 
-    async def get_weekly_messages(self, limit: int = 10, exclude_ids: set[int] | None = None, *, week_start: datetime | None = None) -> list[dict]:
-        """Top users by message count this week (3+ words, not deleted)."""
-        week_start = week_start or self.get_week_start()
-        params: list = [week_start]
+    async def get_weekly_messages(
+        self, limit: int = 10, exclude_ids: set[int] | None = None,
+        since: datetime | None = None, until: datetime | None = None
+    ) -> list[dict]:
+        """Top users by message count within a time window (defaults to current week, 3+ words, not deleted)."""
+        start = since or self.get_week_start()
+        params: list = [start]
+        time_clause = "m.created_at >= %s"
+
+        if until:
+            params.append(until)
+            time_clause = "m.created_at BETWEEN %s AND %s"
+
         excl = self._build_exclusion_clause_alias("m", exclude_ids or set(), params, column="author_id")
         params.append(limit)
         return await db.fetch_all(
             f"""SELECT m.author_id as user_id, COUNT(*) as total_messages
                 FROM analytics_messages m
-                WHERE m.created_at >= %s AND m.word_count >= 3 AND m.is_deleted = FALSE{excl}
+                WHERE {time_clause} AND m.word_count >= 3 AND m.is_deleted = FALSE{excl}
                 GROUP BY m.author_id
                 ORDER BY total_messages DESC LIMIT %s""",
             tuple(params),
@@ -398,7 +426,7 @@ class LeaderboardService:
             try:
                 method = getattr(self, method_name)
                 if uses_week_start:
-                    rows = await method(10, exclude_ids, week_start=prev_week_start)
+                    rows = await method(10, exclude_ids, since=prev_week_start)
                 else:
                     rows = await method(10, exclude_ids)
                 if not rows:

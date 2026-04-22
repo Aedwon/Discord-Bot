@@ -200,7 +200,8 @@ class ConfessionsCog(commands.Cog, name="Confessions"):
     async def cog_load(self):
         """Register the persistent view so buttons survive restarts."""
         self.bot.add_view(ConfessButtonView())
-        self.sync_queue_worker.start()
+        if not self.sync_queue_worker.is_running():
+            self.sync_queue_worker.start()
         logger.info("Confessions: Persistent view registered and sync worker started.")
 
     def cog_unload(self):

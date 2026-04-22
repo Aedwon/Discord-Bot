@@ -124,12 +124,23 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             self.scheduled_data = {}
             logger.info(f"No scheduled embeds file found at {self.storage_file}, starting fresh.")
             
-    def _save_data(self):
-        """Atomically persist the scheduled data to disk."""
+    def _sync_save_data(self):
+        """Atomically persist the scheduled data to disk (synchronous).
+        Use only in sync contexts or when data is tiny (e.g. command handlers).
+        For background tasks, use _save_data_async() instead."""
+        self._sync_save_to_disk(self.scheduled_data)
+
+    async def _save_data_async(self):
+        """Persist scheduled data to disk without blocking the event loop."""
+        snapshot = dict(self.scheduled_data)
+        await asyncio.to_thread(self._sync_save_to_disk, snapshot)
+
+    def _sync_save_to_disk(self, data: dict):
+        """Thread-safe atomic disk write. Runs in executor thread via asyncio.to_thread."""
         try:
             temp_file = self.storage_file + ".tmp"
             with open(temp_file, 'w') as f:
-                json.dump(self.scheduled_data, f, indent=2)
+                json.dump(data, f, indent=2)
             os.replace(temp_file, self.storage_file)
         except OSError as e:
             logger.error(f"Failed to save scheduled embeds to {self.storage_file}: {e}")
@@ -145,7 +156,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                 data['status'] = 'pending'
                 changed = True
         if changed:
-            self._save_data()
+            self._sync_save_data()
         
         logger.info(f"EmbedsCog loaded. {len(self.scheduled_data)} scheduled embed(s) in queue. Storage: {self.storage_file}")
     
@@ -188,7 +199,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     
                 row = self.scheduled_data[identifier]
                 row['status'] = 'processing'
-                self._save_data()
+                await self._save_data_async()
                 
                 target_channel = None
                 log_embed_color = discord.Color.red()
@@ -223,7 +234,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     
                     # Remove from JSON store completely
                     self.scheduled_data.pop(identifier, None)
-                    self._save_data()
+                    await self._save_data_async()
                     
                     log_title = "✅ Scheduled Embed Sent"
                     log_embed_color = 0x00FF00
@@ -233,24 +244,24 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     logger.error(f"Timeout sending scheduled embed {identifier}")
                     if identifier in self.scheduled_data:
                         self.scheduled_data[identifier]['status'] = 'pending'
-                        self._save_data()
+                        await self._save_data_async()
                     continue  # Retry next tick
                 except discord.HTTPException as e:
                     logger.error(f"HTTPException sending scheduled embed {identifier}: {e.status} - {e.text}")
                     if e.status >= 500 or e.status == 429:
                         if identifier in self.scheduled_data:
                             self.scheduled_data[identifier]['status'] = 'pending'
-                            self._save_data()
+                            await self._save_data_async()
                         continue  # Transient error, retry next tick
                     else:
                         self.scheduled_data.pop(identifier, None)
-                        self._save_data()
+                        await self._save_data_async()
                         log_title += f" (HTTP {e.status})"
                 except Exception as e:
                     logger.error(f"Failed to send scheduled embed {identifier}: {e}")
                     logger.error(traceback.format_exc())
                     self.scheduled_data.pop(identifier, None)
-                    self._save_data()
+                    await self._save_data_async()
                     log_title += " (Internal Error)"
                 
                 # Try to send a log notification
@@ -470,7 +481,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
                     failed_count += 1
                         
         if schedule_for and success_ids:
-            self._save_data()
+            self._sync_save_data()
             batch_id_str = ', '.join([f'`{id_str}`' for id_str in success_ids])
             await interaction.followup.send(
                 f"⏰ **{len(success_ids)} Embed(s)** scheduled for {scheduled_time.strftime('%d/%m/%Y %H:%M')} in {channel.mention}.\n**IDs:** {batch_id_str}",
@@ -691,7 +702,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
         self._load_data()
         if identifier in self.scheduled_data:
             self.scheduled_data.pop(identifier, None)
-            self._save_data()
+            self._sync_save_data()
             await interaction.response.edit_message(content=f"🗑️ Cancelled and deleted scheduled embed `{identifier}`.", embeds=[], view=None)
         else:
             await interaction.response.edit_message(content="❌ Could not find that embed.", embeds=[], view=None)
@@ -721,7 +732,7 @@ class EmbedsCog(commands.Cog, name="Embeds"):
             sent_msg = await channel.send(content=safe_content, embeds=embeds, view=view)
             
             self.scheduled_data.pop(identifier, None)
-            self._save_data()
+            self._sync_save_data()
             
             await interaction.response.edit_message(
                 content=f"✅ **Sent instantly!** Scheduled embed `{identifier}` has been published to {channel.mention}.",

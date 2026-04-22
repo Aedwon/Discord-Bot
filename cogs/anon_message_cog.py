@@ -312,8 +312,10 @@ class AnonMessageCog(commands.Cog, name="AnonMessages"):
         stored = await settings_service.get_int("anon_panel_message_id")
         self._panel_message_id = stored if stored else None
 
-        self.sticky_repost.start()
-        self.sync_anon_queue_worker.start()
+        if not self.sticky_repost.is_running():
+            self.sticky_repost.start()
+        if not self.sync_anon_queue_worker.is_running():
+            self.sync_anon_queue_worker.start()
         logger.info("AnonMessages: Persistent views registered, tasks started.")
 
     def cog_unload(self):
