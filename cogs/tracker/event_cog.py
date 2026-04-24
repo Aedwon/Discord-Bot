@@ -708,7 +708,7 @@ class EventCog(commands.Cog, name="Event"):
             prizes = discord.ui.TextInput(
                 label="Prize Structure",
                 style=discord.TextStyle.long,
-                placeholder="Name | EP | Diamonds | Max winners\n1st Place | 5000 | 500 | 1\nRunner Up | 1000 | 250 | 2\nParticipation | 50 | 0 | 100",
+                placeholder="Name | EP | Diamonds | Max\n1st Place | 5000 | 500 | 1\nRunner Up | 1000 | 250 | 2",
                 required=True,
                 max_length=1500,
             )
