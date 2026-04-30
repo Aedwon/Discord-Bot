@@ -333,6 +333,53 @@ class SetupCog(commands.Cog, name="Setup"):
         await inter.followup.send(embed=embed)
 
     # ─────────────────────────────────────────────────────────────────────
+    # Giveaway Milestones Setup
+    # ─────────────────────────────────────────────────────────────────────
+
+    @setup_group.command(name="giveaway_milestones", description="Map the 5 giveaway host milestone roles.")
+    @require_admin_auth()
+    @app_commands.describe(
+        role_5="Role for 5+ hosted giveaways",
+        role_10="Role for 10+ hosted giveaways",
+        role_20="Role for 20+ hosted giveaways",
+        role_50="Role for 50+ hosted giveaways",
+        role_100="Role for 100+ hosted giveaways"
+    )
+    async def setup_giveaway_milestones(
+        self, inter: discord.Interaction, 
+        role_5: discord.Role, role_10: discord.Role, 
+        role_20: discord.Role, role_50: discord.Role, role_100: discord.Role
+    ):
+        await inter.response.defer(ephemeral=True)
+
+        roles = [role_5, role_10, role_20, role_50, role_100]
+        role_ids = [r.id for r in roles]
+        
+        # Validate no duplicates
+        if len(set(role_ids)) != len(role_ids):
+            return await inter.followup.send("❌ You must select 5 distinct roles.", ephemeral=True)
+
+        # Store in settings
+        await settings_service.set("giveaway_milestone_5", str(role_5.id))
+        await settings_service.set("giveaway_milestone_10", str(role_10.id))
+        await settings_service.set("giveaway_milestone_20", str(role_20.id))
+        await settings_service.set("giveaway_milestone_50", str(role_50.id))
+        await settings_service.set("giveaway_milestone_100", str(role_100.id))
+
+        embed = discord.Embed(
+            title="⚙️ Giveaway Milestone Roles Mapped",
+            description=(
+                f"✅ **5+ Hosted:** {role_5.mention}\n"
+                f"✅ **10+ Hosted:** {role_10.mention}\n"
+                f"✅ **20+ Hosted:** {role_20.mention}\n"
+                f"✅ **50+ Hosted:** {role_50.mention}\n"
+                f"✅ **100+ Hosted:** {role_100.mention}"
+            ),
+            color=discord.Color.green()
+        )
+        await inter.followup.send(embed=embed)
+
+    # ─────────────────────────────────────────────────────────────────────
     # End of Season Trigger
     # ─────────────────────────────────────────────────────────────────────
 

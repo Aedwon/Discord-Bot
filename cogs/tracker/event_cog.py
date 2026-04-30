@@ -1288,6 +1288,14 @@ class EventCog(commands.Cog, name="Event"):
 
         await db.execute("UPDATE event_raffles SET status = 'cancelled' WHERE id = %s", (raffle_id_int,))
 
+        # Evaluate giveaway milestones for the host since their count decreased
+        from services.giveaway_milestone_service import giveaway_milestone_service
+        effective_host_id = raffle.get('hosted_by') or raffle['host_id']
+        try:
+            await giveaway_milestone_service.evaluate_milestones(interaction.guild, effective_host_id)
+        except Exception as e:
+            logger.warning(f"Milestone eval on cancel failed: {e}")
+
         try:
             channel = interaction.guild.get_channel(raffle['channel_id'])
             if channel:
@@ -1363,6 +1371,26 @@ class EventCog(commands.Cog, name="Event"):
             synced += 1
             
         await interaction.followup.send(f"✅ Successfully retro-synchronized {synced} legacy raffle(s)!")
+
+    @raffle_group.command(name="backfill_milestones", description="Retroactively assign giveaway milestone roles to all qualifying hosts.")
+    @require_admin_auth()
+    @app_commands.default_permissions(administrator=True)
+    async def raffle_backfill_milestones(self, interaction: discord.Interaction):
+        await interaction.response.send_message("⏳ Scanning historical raffles and assigning milestone roles... This may take a moment due to rate limits.", ephemeral=True)
+        
+        from services.giveaway_milestone_service import giveaway_milestone_service
+        stats = await giveaway_milestone_service.backfill_all(interaction.guild)
+        
+        embed = discord.Embed(
+            title="✅ Milestone Backfill Complete",
+            description=(
+                f"**Users Updated:** {stats['updated']}\n"
+                f"**Users Skipped:** {stats['skipped']} (not found in server)\n"
+                f"**Errors:** {stats['errors']}"
+            ),
+            color=discord.Color.green()
+        )
+        await interaction.edit_original_response(content=None, embed=embed)
 
     @raffle_group.command(name="force_sync", description="Surgically overwrite the text of legacy announcement messages to match current DB winners.")
     @require_admin_auth()
@@ -1927,6 +1955,14 @@ async def deploy_raffle(interaction: discord.Interaction, config: dict, bot):
         title, prize, requirements, winners,
         msg.id, channel.id, proof_thread_id, ends_at
     ))
+
+    # Evaluate giveaway milestones for the host
+    from services.giveaway_milestone_service import giveaway_milestone_service
+    effective_host_id = hosted_by_id or creator_id
+    try:
+        await giveaway_milestone_service.evaluate_milestones(guild, effective_host_id)
+    except Exception as e:
+        logger.warning(f"Milestone eval on deploy failed: {e}")
 
     await interaction.followup.send(
         f"✅ Raffle **{title}** deployed in {channel.mention}!", ephemeral=True
