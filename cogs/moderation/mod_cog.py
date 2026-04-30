@@ -1244,5 +1244,39 @@ class ModCog(commands.Cog, name="Moderation"):
             await inter.followup.send(f"❌ Failed to purge messages. Note: Discord prevents bulk-deleting messages older than 14 days.\nError: `{e}`", ephemeral=True)
 
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Staff Ping Protection
+    # ─────────────────────────────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """Warn users who ping members with administrator permissions."""
+        # Ignore bots, DMs, and messages with no mentions
+        if message.author.bot or not message.guild or not message.mentions:
+            return
+
+        # Don't warn admins pinging other admins
+        if message.author.guild_permissions.administrator:
+            return
+
+        # Check if any mentioned user has administrator permissions
+        pinged_admins = [
+            m for m in message.mentions
+            if m.guild_permissions.administrator and m.id != message.author.id
+        ]
+
+        if not pinged_admins:
+            return
+
+        embed = discord.Embed(
+            description="⚠️ Please don't ping staff. If you need help, open a ticket or wait for a response.",
+            color=discord.Color.orange()
+        )
+        try:
+            await message.reply(embed=embed, mention_author=False)
+        except discord.Forbidden:
+            pass  # Missing permissions to reply
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(ModCog(bot))
