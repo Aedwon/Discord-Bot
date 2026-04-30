@@ -175,6 +175,38 @@ const DB_DATA = [
                 "params": []
             },
             {
+                "syntax": "/setup giveaway_milestones",
+                "desc": "Map the 5 giveaway host milestone roles (5+, 10+, 20+, 50+, 100+ hosted raffles). Only the highest milestone role is kept.",
+                "access": "admin",
+                "params": [
+                    {
+                        "name": "role_5",
+                        "type": "@role",
+                        "required": true
+                    },
+                    {
+                        "name": "role_10",
+                        "type": "@role",
+                        "required": true
+                    },
+                    {
+                        "name": "role_20",
+                        "type": "@role",
+                        "required": true
+                    },
+                    {
+                        "name": "role_50",
+                        "type": "@role",
+                        "required": true
+                    },
+                    {
+                        "name": "role_100",
+                        "type": "@role",
+                        "required": true
+                    }
+                ]
+            },
+            {
                 "syntax": "/setup trigger_eos",
                 "desc": "Force trigger End-of-Season: assign Peak Ranks, strip EP roles, reset EP, advance season.",
                 "access": "admin",
@@ -1099,6 +1131,11 @@ const DB_DATA = [
                 "name": "Smart Reroll Engine",
                 "type": "passive",
                 "desc": "Reroll mechanics support full-raffle redrawing or single-user replacements, ensuring existing winners are mathematically excluded from snatching the replaced slot."
+            },
+            {
+                "name": "Host Milestone Roles",
+                "type": "passive",
+                "desc": "Automatically awards escalating Discord roles at 5, 10, 20, 50, and 100 hosted giveaways. Only the highest milestone role is kept (replacement strategy). Community hosts (hosted_by) are prioritized; the raffle creator is credited when no community host is specified. Cancelled raffles do not count. Milestones are re-evaluated on every raffle deploy and cancel."
             }
         ],
         "commands": [
@@ -1272,6 +1309,12 @@ const DB_DATA = [
                         "required": true
                     }
                 ]
+            },
+            {
+                "syntax": "/event raffle backfill_milestones (Maintenance)",
+                "desc": "Retroactively scan all historical raffles and assign milestone roles to qualifying hosts. Rate-limited to 1 member/second.",
+                "access": "admin",
+                "params": []
             },
             {
                 "syntax": "/booster-raffle-surgeon (Maintenance)",
