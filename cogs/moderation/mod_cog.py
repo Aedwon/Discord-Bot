@@ -1250,7 +1250,11 @@ class ModCog(commands.Cog, name="Moderation"):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Warn users who ping members with administrator permissions."""
+        """Warn users who ping members with administrator permissions.
+        
+        Replies to admin messages are exempt — only direct @-mentions
+        in the message body trigger the warning.
+        """
         # Ignore bots, DMs, and messages with no mentions
         if message.author.bot or not message.guild or not message.mentions:
             return
@@ -1259,10 +1263,37 @@ class ModCog(commands.Cog, name="Moderation"):
         if message.author.guild_permissions.administrator:
             return
 
-        # Check if any mentioned user has administrator permissions
+        # ── Determine the replied-to user (if this is a reply) ──────
+        replied_to_user_id = None
+        if message.reference and message.reference.message_id:
+            try:
+                # Prefer the pre-resolved message (zero-cost cache hit)
+                ref_msg = message.reference.resolved
+                if isinstance(ref_msg, discord.Message):
+                    replied_to_user_id = ref_msg.author.id
+                else:
+                    # Fallback: discord.py internal cache
+                    ref_msg = message.reference.cached_message
+                    if ref_msg:
+                        replied_to_user_id = ref_msg.author.id
+                    else:
+                        # Last resort: single API call (rare — deleted/old messages)
+                        try:
+                            ref_msg = await message.channel.fetch_message(
+                                message.reference.message_id
+                            )
+                            replied_to_user_id = ref_msg.author.id
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                            pass  # Message deleted or inaccessible — treat as direct ping
+            except Exception:
+                pass  # Safety net — never break the listener on unexpected errors
+
+        # ── Filter: only admins who were *directly* @-mentioned ─────
         pinged_admins = [
             m for m in message.mentions
-            if m.guild_permissions.administrator and m.id != message.author.id
+            if m.guild_permissions.administrator
+            and m.id != message.author.id
+            and m.id != replied_to_user_id  # Exempt the replied-to admin
         ]
 
         if not pinged_admins:
